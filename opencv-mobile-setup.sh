@@ -1,16 +1,13 @@
 #!/bin/bash
 
-# 使用 'set -e' 来确保脚本在任何命令失败时立即退出，这是一种好的编程习惯
 set -e
 
 # --- 配置 ---
-# 定义要下载的文件的 URL 和本地文件名
 FILE_URL="https://github.com/nihui/opencv-mobile/releases/download/v31/opencv-mobile-4.10.0-luckfox-pico.zip"
 ZIP_FILE="opencv-mobile-4.10.0-luckfox-pico.zip"
-# 定义解压后你期望的文件夹名称
+# 定义解压后期望的文件夹名称
 EXTRACTED_DIR="opencv-mobile-4.10.0-luckfox-pico"
 
-# --- 脚本逻辑 ---
 
 # 1. 检查依赖文件夹是否已存在，如果存在则无需重复执行
 if [ -d "$EXTRACTED_DIR" ]; then

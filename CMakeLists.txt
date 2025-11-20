@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 # opencv-mobile
-set(OpenCV_DIR "../opencv-mobile-4.10.0-luckfox-pico/lib/cmake/opencv4")
+set(OpenCV_DIR "./opencv-mobile-4.10.0-luckfox-pico/lib/cmake/opencv4")
 find_package(OpenCV REQUIRED)
 message(STATUS "Debug OpenCV_LIBS = ${OpenCV_LIBS}")
 
