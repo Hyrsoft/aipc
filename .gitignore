@@ -10,3 +10,5 @@ build/
 
 # opencv-mobile
 opencv-mobile-*/
+
+bin/
