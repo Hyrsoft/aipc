@@ -23,8 +23,10 @@ set(LUCKFOX_RKMPI_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/luckfox_pi
 set(LUCKFOX_RKMPI_UCLIBC_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example/lib/uclibc")
 
 # libdatachannel(webrtc)
+# 配置 libdatachannel 选项 - 关键步骤，避免编译不必要的测试和示例
 set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
 set(NO_TESTS ON CACHE BOOL "" FORCE)
+set(NO_BENCHMARKS ON CACHE BOOL "" FORCE)
 # 根据 RV1106 开启/关闭相应选项
 set(USE_NICE OFF CACHE BOOL "" FORCE) 
 set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)
@@ -33,10 +35,9 @@ add_subdirectory(thirdparty/libdatachannel)
 
 # Collect source files
 file(GLOB_RECURSE SOURCES 
-    "main.cpp"
-    "src/engine/*.cpp"
-    "src/comm/*.cpp"
-    "src/utils/*.cpp"
+    "src/*.c"
+    "src/*.cpp"
+    "src/*.cc"
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
@@ -53,6 +54,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
         ${CMAKE_CURRENT_SOURCE_DIR}/src/comm
         ${CMAKE_CURRENT_SOURCE_DIR}/src/utils
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/rkmpi
+
+        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libdatachannel/include
 
         ${LUCKFOX_RKMPI_INCLUDE_DIR}
         ${LUCKFOX_RKMPI_INCLUDE_DIR}/rknn

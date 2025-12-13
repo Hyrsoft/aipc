@@ -16,6 +16,10 @@
 #include <netinet/in.h>
 #include <thread>
 #include <iostream>
+#include <memory>
+#include <chrono>
+
+#include <rtc/rtc.hpp>
 
 #include "rtsp_demo.h"
 #include "luckfox_mpi.h"
@@ -79,6 +83,40 @@ void CommandListenerThread() {
 }
 
 int main(int argc, char *argv[]) {
+    // ===== WebRTC 集成测试开始 =====
+    std::cout << "[Nexus] Starting EdgeAI IPC with WebRTC Integration Check..." << std::endl;
+
+    try {
+        // 1. 配置 RTC 选项
+        rtc::Configuration config;
+        // 添加一个公用的 STUN 服务器用于测试 (Google 的 STUN 服务器)
+        config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+
+        // 2. 实例化 PeerConnection
+        std::cout << "[Nexus] Creating PeerConnection..." << std::endl;
+        auto pc = std::make_shared<rtc::PeerConnection>(config);
+
+        // 3. 设置状态回调 (简单的 Lambda 表达式)
+        pc->onStateChange([](rtc::PeerConnection::State state) {
+            std::cout << "[Nexus] WebRTC State changed" << std::endl;
+        });
+
+        // 4. 创建一个 DataChannel (数据通道)
+        std::cout << "[Nexus] Creating DataChannel 'test-channel'..." << std::endl;
+        auto dc = pc->createDataChannel("test-channel");
+        
+        dc->onOpen([]() {
+            std::cout << "[Nexus] DataChannel is OPEN!" << std::endl;
+        });
+
+        std::cout << "[Nexus] WebRTC Library initialized successfully! (Build Passed)" << std::endl;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[Nexus] WebRTC Error: " << e.what() << std::endl;
+        return -1;
+    }
+    // ===== WebRTC 集成测试结束 =====
+
     // Stop existing rkipc or other processes if needed
     // 清理默认的ipc进程
     system("RkLunch-stop.sh");
