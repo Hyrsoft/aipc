@@ -1,6 +1,6 @@
-[submodule "thirdparty/thirdparty/luckfox_pico_rkmpi_example"]
-	path = thirdparty/thirdparty/luckfox_pico_rkmpi_example
-	url = https://github.com/LuckfoxTECH/luckfox_pico_rkmpi_example.git
 [submodule "thirdparty/luckfox_pico_rkmpi_example"]
 	path = thirdparty/luckfox_pico_rkmpi_example
 	url = https://github.com/LuckfoxTECH/luckfox_pico_rkmpi_example.git
+[submodule "thirdparty/libdatachannel"]
+	path = thirdparty/libdatachannel
+	url = https://github.com/paullouisageneau/libdatachannel.git
