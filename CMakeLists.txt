@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 # opencv-mobile
-set(OpenCV_DIR "./thirdparty/opencv-mobile-4.10.0-luckfox-pico/lib/cmake/opencv4")
+set(OpenCV_DIR "./thirdparty/luckfox_pico_rkmpi_example/lib/uclibc/lib/cmake/opencv4")
 find_package(OpenCV REQUIRED)
 message(STATUS "Debug OpenCV_LIBS = ${OpenCV_LIBS}")
 
@@ -21,6 +21,15 @@ set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 # luckfox rkmpi
 set(LUCKFOX_RKMPI_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example/include")
 set(LUCKFOX_RKMPI_UCLIBC_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example/lib/uclibc")
+
+# libdatachannel(webrtc)
+set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
+set(NO_TESTS ON CACHE BOOL "" FORCE)
+# 根据 RV1106 开启/关闭相应选项
+set(USE_NICE OFF CACHE BOOL "" FORCE) 
+set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(thirdparty/libdatachannel)
 
 # Collect source files
 file(GLOB_RECURSE SOURCES 
@@ -75,6 +84,7 @@ target_link_libraries(${PROJECT_NAME}
         pthread
         rtsp
         rga
+        datachannel
 )
 
 # Install
