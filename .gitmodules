@@ -1,0 +1,3 @@
+[submodule "thirdparty/luckfox_pico_rkmpi_example"]
+	path = thirdparty/luckfox_pico_rkmpi_example
+	url = https://github.com/LuckfoxTECH/luckfox_pico_rkmpi_example.git

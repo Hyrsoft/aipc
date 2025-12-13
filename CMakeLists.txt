@@ -3,11 +3,10 @@ project(RV1106_Edge_Smart_Network_Camera)
 add_definitions(-DRV1106_1103)
 set(CMAKE_CXX_STANDARD 17)
 
-# Enable compile command to ease indexing with e.g. clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 # opencv-mobile
-set(OpenCV_DIR "./opencv-mobile-4.10.0-luckfox-pico/lib/cmake/opencv4")
+set(OpenCV_DIR "./thirdparty/opencv-mobile-4.10.0-luckfox-pico/lib/cmake/opencv4")
 find_package(OpenCV REQUIRED)
 message(STATUS "Debug OpenCV_LIBS = ${OpenCV_LIBS}")
 
@@ -18,6 +17,10 @@ find_package(Threads REQUIRED)
 # 设置 RPATH
 set(CMAKE_INSTALL_RPATH "/oem/usr/lib")
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+
+# luckfox rkmpi
+set(LUCKFOX_RKMPI_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example/include")
+set(LUCKFOX_RKMPI_UCLIBC_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example/lib/uclibc")
 
 # Collect source files
 file(GLOB_RECURSE SOURCES 
@@ -37,25 +40,27 @@ add_compile_options(-g -Wall
 
 target_include_directories(${PROJECT_NAME} PRIVATE
         ${OpenCV_INCLUDE_DIRS}
+
         ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
         ${CMAKE_CURRENT_SOURCE_DIR}/src/comm
         ${CMAKE_CURRENT_SOURCE_DIR}/src/utils
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include/rknn
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include/librga
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include/rkaiq
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include/rkaiq/uAPI2
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include/rkaiq/common
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include/rkaiq/xcore
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include/rkaiq/algos
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include/rkaiq/iq_parser
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include/rkaiq/iq_parser_v2
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/include/rkaiq/smartIr
+
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rknn
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}/librga
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/uAPI2
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/common
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/xcore
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/algos
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/iq_parser
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/iq_parser_v2
+        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/smartIr
 )
 
 target_link_directories(${PROJECT_NAME} PRIVATE
         ${OpenCV_LIB_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/../common/lib/uclibc/
+        ${LUCKFOX_RKMPI_UCLIBC_LIB_DIR}
 )
 
 target_link_libraries(${PROJECT_NAME}
