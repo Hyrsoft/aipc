@@ -31,7 +31,10 @@
 
 #include "comm/CommandListener.hpp"
 #include "webrtc/SelfTest.hpp"
+#include "webrtc/WebRTCStreamer.hpp"
 #include "rtsp/RtspStreamer.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include "ai/AIManager.hpp"
 
@@ -121,6 +124,14 @@ int main(int argc, char *argv[]) {
     }
     SPDLOG_INFO("{}", webrtc_test.message);
 
+    // Initialize WebRTC Streamer
+    auto &webrtc_streamer = aipc::webrtc::WebRTCStreamer::getInstance();
+    if (!webrtc_streamer.init()) {
+        SPDLOG_ERROR("Failed to initialize WebRTC Streamer");
+        return -1;
+    }
+    SPDLOG_INFO("WebRTC Streamer initialized");
+
     // Stop existing rkipc or other processes if needed
     // 清理默认的ipc进程
     system("RkLunch-stop.sh");
@@ -131,15 +142,140 @@ int main(int argc, char *argv[]) {
     aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::YOLOV5, cfg.default_model_path);
 
     // 启动命令监听（UDP:9000）
-    aipc::comm::CommandListener command_listener(cfg.command_port, [](const std::string& cmd) {
-        SPDLOG_INFO("Received command: {}", cmd);
+    // Now supports JSON format: {"type": "webrtc_offer", "payload": "v=0\r\no=- ..."}
+    aipc::comm::CommandListener command_listener(cfg.command_port, [&](const aipc::comm::CommandMessage &msg) -> std::string {
+        SPDLOG_INFO("Received command type: '{}', payload size: {}", msg.type, msg.payload.size());
 
-        if (cmd.find("YOLOV5") != std::string::npos || cmd.find("yolov5") != std::string::npos) {
-            aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::YOLOV5, "./model/yolov5.rknn");
-        } else if (cmd.find("RETINAFACE") != std::string::npos || cmd.find("retinaface") != std::string::npos) {
-            aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::RETINAFACE, "./model/retinaface.rknn");
-        } else if (cmd.find("NONE") != std::string::npos || cmd.find("none") != std::string::npos) {
-            aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::NONE);
+        // Validate command
+        if (msg.type.empty()) {
+            SPDLOG_WARN("Empty command type received");
+            nlohmann::json error_response;
+            error_response["type"] = "error";
+            error_response["message"] = "Empty command type";
+            return error_response.dump();
+        }
+
+        if (msg.type == "webrtc_offer") {
+            // Validate payload
+            if (msg.payload.empty()) {
+                SPDLOG_ERROR("WebRTC offer received with empty payload");
+                nlohmann::json error_response;
+                error_response["type"] = "error";
+                error_response["message"] = "Empty SDP payload";
+                return error_response.dump();
+            }
+
+            SPDLOG_INFO("Processing WebRTC Offer (payload size: {})", msg.payload.size());
+            std::string answer = webrtc_streamer.handleOffer(msg.payload);
+            
+            if (answer.empty()) {
+                SPDLOG_ERROR("Failed to generate WebRTC Answer");
+                // Return error response
+                nlohmann::json error_response;
+                error_response["type"] = "error";
+                error_response["message"] = "Failed to generate Answer";
+                return error_response.dump();
+            }
+
+            // Return Answer wrapped in JSON
+            nlohmann::json response;
+            response["type"] = "webrtc_answer";
+            response["payload"] = answer;
+            
+            SPDLOG_INFO("WebRTC Answer generated successfully");
+            
+            // Request IDR frame when new connection is established
+            webrtc_streamer.requestIDR();
+            
+            return response.dump();
+        }
+        // [新增] 处理 ICE Candidate 交换
+        else if (msg.type == "webrtc_candidate") {
+            if (msg.payload.empty()) {
+                SPDLOG_WARN("WebRTC candidate received with empty payload");
+                nlohmann::json error_response;
+                error_response["type"] = "error";
+                error_response["message"] = "Empty candidate payload";
+                return error_response.dump();
+            }
+
+            SPDLOG_INFO("Processing WebRTC Candidate");
+            try {
+                // 解析 payload (假设是 JSON 格式包含 candidate, sdpMid, sdpMLineIndex)
+                auto payload_json = nlohmann::json::parse(msg.payload);
+                
+                std::string candidate = payload_json.value("candidate", "");
+                std::string sdp_mid = payload_json.value("sdpMid", "");
+                int sdp_mline_index = payload_json.value("sdpMLineIndex", 0);
+                
+                if (candidate.empty()) {
+                    SPDLOG_WARN("Candidate payload missing 'candidate' field");
+                    nlohmann::json error_response;
+                    error_response["type"] = "error";
+                    error_response["message"] = "Missing candidate field";
+                    return error_response.dump();
+                }
+
+                // 将 candidate 添加到 WebRTC 连接
+                bool success = webrtc_streamer.addCandidate(candidate, sdp_mid, sdp_mline_index);
+                
+                nlohmann::json response;
+                if (success) {
+                    response["type"] = "ack";
+                    response["message"] = "Candidate added successfully";
+                    SPDLOG_INFO("Successfully added ICE candidate");
+                } else {
+                    response["type"] = "error";
+                    response["message"] = "Failed to add candidate";
+                    SPDLOG_WARN("Failed to add ICE candidate");
+                }
+                return response.dump();
+                
+            } catch (const std::exception &e) {
+                SPDLOG_ERROR("Error processing candidate: {}", e.what());
+                nlohmann::json error_response;
+                error_response["type"] = "error";
+                error_response["message"] = std::string("Candidate processing error: ") + e.what();
+                return error_response.dump();
+            }
+        }
+        else if (msg.type == "control_cmd" || msg.type == "model_switch") {
+            // Validate payload for model switch
+            if ((msg.type == "model_switch") && msg.payload.empty()) {
+                SPDLOG_WARN("model_switch received with empty payload");
+                nlohmann::json error_response;
+                error_response["type"] = "error";
+                error_response["message"] = "Empty model_switch payload";
+                return error_response.dump();
+            }
+
+            const std::string &cmd = msg.payload;
+            SPDLOG_INFO("Processing control command: {}", cmd);
+
+            if (cmd.find("YOLOV5") != std::string::npos || cmd.find("yolov5") != std::string::npos) {
+                aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::YOLOV5, "./model/yolov5.rknn");
+                SPDLOG_INFO("Switched to YOLOV5 model");
+            } else if (cmd.find("RETINAFACE") != std::string::npos || cmd.find("retinaface") != std::string::npos) {
+                aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::RETINAFACE, "./model/retinaface.rknn");
+                SPDLOG_INFO("Switched to RETINAFACE model");
+            } else if (cmd.find("NONE") != std::string::npos || cmd.find("none") != std::string::npos) {
+                aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::NONE);
+                SPDLOG_INFO("Switched to NONE model");
+            } else {
+                SPDLOG_WARN("Unknown model in control command: {}", cmd);
+            }
+
+            nlohmann::json response;
+            response["type"] = "ack";
+            response["message"] = "Command processed";
+            return response.dump();
+        }
+        else {
+            SPDLOG_WARN("Unknown command type: '{}'", msg.type);
+            nlohmann::json error_response;
+            error_response["type"] = "error";
+            error_response["message"] = std::string("Unknown command type: ") + msg.type;
+            return error_response.dump();
         }
     });
     command_listener.start();
@@ -308,8 +444,14 @@ int main(int argc, char *argv[]) {
         if (s32Ret == RK_SUCCESS) {
             void *pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
             if (pData) {
+                // Send to RTSP
                 rtsp_streamer.pushH264((uint8_t *) pData, stFrame.pstPack->u32Len, stFrame.pstPack->u64PTS);
                 rtsp_streamer.poll();
+
+                // Send to WebRTC if connected
+                if (webrtc_streamer.isConnected()) {
+                    webrtc_streamer.pushFrame((const uint8_t *) pData, stFrame.pstPack->u32Len, stFrame.pstPack->u64PTS / 1000);  // Convert to ms
+                }
             }
         }
     }

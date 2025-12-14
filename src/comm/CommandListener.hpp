@@ -7,9 +7,14 @@
 
 namespace aipc::comm {
 
+    struct CommandMessage {
+        std::string type;      // "webrtc_offer", "webrtc_answer", "control_cmd", etc.
+        std::string payload;   // JSON payload or command data
+    };
+
     class CommandListener {
     public:
-        using Handler = std::function<void(const std::string &command)>;
+        using Handler = std::function<std::string(const CommandMessage &command)>;
 
         CommandListener(int port, Handler handler);
         ~CommandListener();
@@ -22,6 +27,10 @@ namespace aipc::comm {
 
     private:
         void run();
+        CommandMessage parseCommand(const std::string &raw_data);
+
+        // Buffer size increased to 64KB to accommodate large SDP payloads
+        static constexpr size_t BUFFER_SIZE = 65536;
 
         int port_;
         Handler handler_;

@@ -68,6 +68,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/venc
 
         ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libdatachannel/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libdatachannel/deps/json/single_include
 
         ${LUCKFOX_RKMPI_INCLUDE_DIR}
         ${LUCKFOX_RKMPI_INCLUDE_DIR}/rknn
