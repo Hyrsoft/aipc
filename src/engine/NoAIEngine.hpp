@@ -1,17 +1,15 @@
 #pragma once
 #include "IAIEngine.hpp"
 
-class NoAIEngine : public IAIEngine {
-public:
-    int Init(const std::string& model_path) override {
-        return 0;
-    }
+namespace aipc::engine {
 
-    int Inference(const cv::Mat& img, std::vector<ObjectDet>& results) override {
-        return 0;
-    }
+    class NoAIEngine : public IAIEngine {
+    public:
+        int Init(const std::string &model_path) override { return 0; }
 
-    std::string GetName() const override {
-        return "NoAIEngine";
-    }
-};
+        int Inference(const cv::Mat &img, std::vector<ObjectDet> &results) override { return 0; }
+
+        std::string GetName() const override { return "NoAIEngine"; }
+    };
+
+} // namespace aipc::engine

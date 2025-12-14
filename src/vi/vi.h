@@ -1,5 +1,4 @@
-#ifndef __LUCKFOX_MPI_H
-#define __LUCKFOX_MPI_H
+#pragma once
 
 #include <assert.h>
 #include <errno.h>
@@ -25,13 +24,5 @@
 #define TEST_ARGB32_TRANS 0x00000000
 #define TEST_ARGB32_BLACK 0x000000FF
 
-
-RK_U64 TEST_COMM_GetNowUs();
-RK_S32 test_rgn_overlay_line_process(int sX, int sY, int type, int group);
-RK_S32 rgn_overlay_release(int group);
-
-
-int vpss_init(int VpssChn, int width, int height);
-int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType);
-
-#endif
+int vi_dev_init();
+int vi_chn_init(int channelId, int width, int height);

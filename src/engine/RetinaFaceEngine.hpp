@@ -1,18 +1,22 @@
 #pragma once
-#include "IAIEngine.hpp"
 #include <memory>
+#include "IAIEngine.hpp"
 
-struct RetinaFaceContext;
+namespace aipc::engine {
 
-class RetinaFaceEngine : public IAIEngine {
-public:
-    RetinaFaceEngine();
-    ~RetinaFaceEngine();
+    struct RetinaFaceContext;
 
-    int Init(const std::string& model_path) override;
-    int Inference(const cv::Mat& img, std::vector<ObjectDet>& results) override;
-    std::string GetName() const override { return "RetinaFace"; }
+    class RetinaFaceEngine : public IAIEngine {
+    public:
+        RetinaFaceEngine();
+        ~RetinaFaceEngine();
 
-private:
-    std::unique_ptr<RetinaFaceContext> ctx_;
-};
+        int Init(const std::string &model_path) override;
+        int Inference(const cv::Mat &img, std::vector<ObjectDet> &results) override;
+        std::string GetName() const override { return "RetinaFace"; }
+
+    private:
+        std::unique_ptr<RetinaFaceContext> ctx_;
+    };
+
+} // namespace aipc::engine

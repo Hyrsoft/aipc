@@ -12,20 +12,17 @@
 #include <time.h>
 #include <unistd.h>
 #include <vector>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <thread>
 #include <iostream>
 #include <memory>
 #include <chrono>
 
-#include <rtc/rtc.hpp>
-
-#include "rtsp_demo.h"
 #include "luckfox_mpi.h"
+#include "vi.h"
+#include "CommandListener.hpp"
+#include "SelfTest.hpp"
+#include "RtspStreamer.hpp"
 #include "AIManager.hpp"
-#include "YoloV5Engine.hpp"
-#include "RetinaFaceEngine.hpp"
 
 #include "opencv2/core/core.hpp"
 #include "opencv2/highgui/highgui.hpp"
@@ -37,85 +34,13 @@
 int width    = DISP_WIDTH;
 int height   = DISP_HEIGHT;
 
-// 监听webserver的命令
-void CommandListenerThread() {
-    int sockfd;
-    struct sockaddr_in servaddr, cliaddr;
-    char buffer[1024];
-
-    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-        perror("socket creation failed");
-        return;
-    }
-
-    memset(&servaddr, 0, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = INADDR_ANY;
-    servaddr.sin_port = htons(9000); //  监听 9000 端口
-
-    if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-        perror("bind failed");
-        return;
-    }
-
-    printf("[Nexus] Command Listener started on port 9000\n");
-
-    while (true) {
-        socklen_t len = sizeof(cliaddr);
-        int n = recvfrom(sockfd, (char *)buffer, 1024, MSG_WAITALL, (struct sockaddr *)&cliaddr, &len);
-        buffer[n] = '\0';
-        printf("[IPC] Received: %s\n", buffer);
-
-        std::string cmd(buffer);
-        // Convert to uppercase for case-insensitive matching
-        // Or just match the uppercase values sent by Go
-        
-        if (cmd.find("YOLOV5") != std::string::npos || cmd.find("yolov5") != std::string::npos) {
-            AIManager::Instance().SwitchModel(ModelType::YOLOV5, "./model/yolov5.rknn");
-        } 
-        else if (cmd.find("RETINAFACE") != std::string::npos || cmd.find("retinaface") != std::string::npos) {
-            AIManager::Instance().SwitchModel(ModelType::RETINAFACE, "./model/retinaface.rknn");
-        }
-        else if (cmd.find("NONE") != std::string::npos || cmd.find("none") != std::string::npos) {
-            AIManager::Instance().SwitchModel(ModelType::NONE);
-        }
-    }
-}
-
 int main(int argc, char *argv[]) {
-    // ===== WebRTC 集成测试开始 =====
-    std::cout << "[Nexus] Starting EdgeAI IPC with WebRTC Integration Check..." << std::endl;
-
-    try {
-        // 1. 配置 RTC 选项
-        rtc::Configuration config;
-        // 添加一个公用的 STUN 服务器用于测试 (Google 的 STUN 服务器)
-        config.iceServers.emplace_back("stun:stun.l.google.com:19302");
-
-        // 2. 实例化 PeerConnection
-        std::cout << "[Nexus] Creating PeerConnection..." << std::endl;
-        auto pc = std::make_shared<rtc::PeerConnection>(config);
-
-        // 3. 设置状态回调 (简单的 Lambda 表达式)
-        pc->onStateChange([](rtc::PeerConnection::State state) {
-            std::cout << "[Nexus] WebRTC State changed" << std::endl;
-        });
-
-        // 4. 创建一个 DataChannel (数据通道)
-        std::cout << "[Nexus] Creating DataChannel 'test-channel'..." << std::endl;
-        auto dc = pc->createDataChannel("test-channel");
-        
-        dc->onOpen([]() {
-            std::cout << "[Nexus] DataChannel is OPEN!" << std::endl;
-        });
-
-        std::cout << "[Nexus] WebRTC Library initialized successfully! (Build Passed)" << std::endl;
-
-    } catch (const std::exception& e) {
-        std::cerr << "[Nexus] WebRTC Error: " << e.what() << std::endl;
+    const auto webrtc_test = aipc::webrtc::RunSelfTest();
+    if (!webrtc_test.ok) {
+        std::cerr << "[aipc] " << webrtc_test.message << std::endl;
         return -1;
     }
-    // ===== WebRTC 集成测试结束 =====
+    std::cout << "[aipc] " << webrtc_test.message << std::endl;
 
     // Stop existing rkipc or other processes if needed
     // 清理默认的ipc进程
@@ -125,11 +50,21 @@ int main(int argc, char *argv[]) {
     
     // Initialize AI Manager
     // Default to YOLOv5
-    AIManager::Instance().SwitchModel(ModelType::YOLOV5, "./model/yolov5.rknn");
+    aipc::engine::AIManager::Instance().SwitchModel(aipc::engine::ModelType::YOLOV5, "./model/yolov5.rknn");
 
-    // 启动监听线程
-    std::thread listener(CommandListenerThread);
-    listener.detach(); // 分离线程，让它在后台跑
+    // 启动命令监听（UDP:9000）
+    aipc::comm::CommandListener command_listener(9000, [](const std::string& cmd) {
+        std::cout << "[aipc] Received command: " << cmd << std::endl;
+
+        if (cmd.find("YOLOV5") != std::string::npos || cmd.find("yolov5") != std::string::npos) {
+            aipc::engine::AIManager::Instance().SwitchModel(aipc::engine::ModelType::YOLOV5, "./model/yolov5.rknn");
+        } else if (cmd.find("RETINAFACE") != std::string::npos || cmd.find("retinaface") != std::string::npos) {
+            aipc::engine::AIManager::Instance().SwitchModel(aipc::engine::ModelType::RETINAFACE, "./model/retinaface.rknn");
+        } else if (cmd.find("NONE") != std::string::npos || cmd.find("none") != std::string::npos) {
+            aipc::engine::AIManager::Instance().SwitchModel(aipc::engine::ModelType::NONE);
+        }
+    });
+    command_listener.start();
 
     // H264 Frame Setup
     VENC_STREAM_S stFrame;    
@@ -172,12 +107,11 @@ int main(int argc, char *argv[]) {
     }
 
     // RTSP Init
-    rtsp_demo_handle g_rtsplive = NULL;
-    rtsp_session_handle g_rtsp_session;
-    g_rtsplive = create_rtsp_demo(554);
-    g_rtsp_session = rtsp_new_session(g_rtsplive, "/live/0");
-    rtsp_set_video(g_rtsp_session, RTSP_CODEC_ID_VIDEO_H264, NULL, 0);
-    rtsp_sync_video_ts(g_rtsp_session, rtsp_get_reltime(), rtsp_get_ntptime());
+    aipc::rtsp::RtspStreamer rtsp_streamer(554, "/live/0");
+    if (!rtsp_streamer.ok() || !rtsp_streamer.startH264()) {
+        std::cerr << "[aipc] RTSP init failed" << std::endl;
+        return -1;
+    }
     
     // VI Init
     vi_dev_init();
@@ -189,7 +123,7 @@ int main(int argc, char *argv[]) {
 
     printf("venc init success\n");    
     
-    std::vector<ObjectDet> results;
+    std::vector<aipc::engine::ObjectDet> results;
 
     while(1)
     {    
@@ -213,7 +147,7 @@ int main(int argc, char *argv[]) {
             // cv::resize(bgr, frame, cv::Size(width ,height), 0, 0, cv::INTER_LINEAR); // Already same size
             
             // Inference
-            AIManager::Instance().RunInference(bgr, results);
+            aipc::engine::AIManager::Instance().RunInference(bgr, results);
 
             // Draw Results
             for(const auto& det : results)
@@ -244,13 +178,9 @@ int main(int argc, char *argv[]) {
         s32Ret = RK_MPI_VENC_GetStream(0, &stFrame, -1);
         if(s32Ret == RK_SUCCESS)
         {
-            if(g_rtsplive && g_rtsp_session)
-            {
-                void *pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
-                rtsp_tx_video(g_rtsp_session, (uint8_t *)pData, stFrame.pstPack->u32Len,
-                              stFrame.pstPack->u64PTS);
-                rtsp_do_event(g_rtsplive);
-            }
+            void *pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
+            rtsp_streamer.pushH264((uint8_t *)pData, stFrame.pstPack->u32Len, stFrame.pstPack->u64PTS);
+            rtsp_streamer.poll();
         }
 
         // Release Frame
@@ -277,9 +207,6 @@ int main(int argc, char *argv[]) {
     RK_MPI_VENC_DestroyChn(0);
 
     free(stFrame.pstPack);
-
-    if (g_rtsplive)
-        rtsp_del_demo(g_rtsplive);
     
     RK_MPI_SYS_Exit();
 

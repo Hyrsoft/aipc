@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(RV1106_Edge_Smart_Network_Camera)
+project(aipc)
 add_definitions(-DRV1106_1103)
 set(CMAKE_CXX_STANDARD 17)
 
@@ -8,7 +8,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 # opencv-mobile
 set(OpenCV_DIR "./thirdparty/luckfox_pico_rkmpi_example/lib/uclibc/lib/cmake/opencv4")
 find_package(OpenCV REQUIRED)
-message(STATUS "Debug OpenCV_LIBS = ${OpenCV_LIBS}")
 
 #Thread
 set(THREADS_PREFER_PTHREAD_FLAG ON)
@@ -34,10 +33,10 @@ set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)
 add_subdirectory(thirdparty/libdatachannel)
 
 # Collect source files
-file(GLOB_RECURSE SOURCES 
-    "src/*.c"
-    "src/*.cpp"
-    "src/*.cc"
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
+        "src/*.c"
+        "src/*.cpp"
+        "src/*.cc"
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
@@ -53,8 +52,12 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 
         ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
         ${CMAKE_CURRENT_SOURCE_DIR}/src/comm
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/rtsp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/utils
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/webrtc
         ${CMAKE_CURRENT_SOURCE_DIR}/src/rkmpi
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vi
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/venc
 
         ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libdatachannel/include
 
