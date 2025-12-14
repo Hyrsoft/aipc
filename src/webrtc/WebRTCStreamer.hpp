@@ -1,10 +1,12 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <rtc/rtc.hpp>
 
@@ -63,6 +65,20 @@ namespace aipc::webrtc {
         std::atomic<bool> connected_{false};
         std::atomic<bool> answer_ready_{false};
         std::string answer_sdp_;
+
+        // Signaling sync: build a non-trickle Answer (include all ICE candidates in SDP)
+        std::mutex signal_mutex_;
+        std::condition_variable signal_cv_;
+        std::string pending_local_sdp_;
+        bool local_description_received_{false};
+        bool gathering_complete_{false};
+
+        struct PendingCandidate {
+            std::string candidate;
+            std::string sdp_mid;
+            int sdp_mline_index{0};
+        };
+        std::vector<PendingCandidate> pending_candidates_;
 
         // H.264 codec configuration
         static constexpr int VIDEO_PAYLOAD_TYPE = 96;

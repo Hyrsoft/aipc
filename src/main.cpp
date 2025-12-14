@@ -201,12 +201,23 @@ int main(int argc, char *argv[]) {
 
             SPDLOG_INFO("Processing WebRTC Candidate");
             try {
-                // 解析 payload (假设是 JSON 格式包含 candidate, sdpMid, sdpMLineIndex)
-                auto payload_json = nlohmann::json::parse(msg.payload);
-                
-                std::string candidate = payload_json.value("candidate", "");
-                std::string sdp_mid = payload_json.value("sdpMid", "");
-                int sdp_mline_index = payload_json.value("sdpMLineIndex", 0);
+                // payload 通常是 JSON({candidate,sdpMid,sdpMLineIndex})；若不是 JSON，则直接把 payload 当 candidate 字符串。
+                std::string candidate;
+                std::string sdp_mid;
+                int sdp_mline_index = 0;
+
+                try {
+                    auto payload_json = nlohmann::json::parse(msg.payload);
+                    candidate = payload_json.value("candidate", "");
+                    sdp_mid = payload_json.value("sdpMid", "");
+                    sdp_mline_index = payload_json.value("sdpMLineIndex", 0);
+                } catch (...) {
+                    candidate = msg.payload;
+                }
+
+                if (sdp_mid.empty()) {
+                    sdp_mid = "video";
+                }
                 
                 if (candidate.empty()) {
                     SPDLOG_WARN("Candidate payload missing 'candidate' field");
