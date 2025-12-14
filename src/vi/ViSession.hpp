@@ -11,14 +11,14 @@ namespace aipc::vi {
 class ViSession {
 public:
     ViSession(int dev, int chn, int width, int height) : dev_(dev), chn_(chn) {
-        if (InitDev() != 0) {
-            SPDLOG_ERROR("VI InitDev failed");
+        if (init_dev() != 0) {
+            SPDLOG_ERROR("VI init_dev failed");
             ok_ = false;
             return;
         }
-        const int ret = InitChn(width, height);
+        const int ret = init_chn(width, height);
         if (ret != 0) {
-            SPDLOG_ERROR("VI InitChn failed ret={}", ret);
+            SPDLOG_ERROR("VI init_chn failed ret={}", ret);
             ok_ = false;
             return;
         }
@@ -51,7 +51,7 @@ public:
     bool ok() const { return ok_; }
 
 private:
-    int InitDev() {
+    int init_dev() {
         VI_DEV_ATTR_S dev_attr;
         std::memset(&dev_attr, 0, sizeof(dev_attr));
 
@@ -91,7 +91,7 @@ private:
         return 0;
     }
 
-    int InitChn(int width, int height) {
+    int init_chn(int width, int height) {
         constexpr int buf_count = 2;
 
         VI_CHN_ATTR_S chn_attr;

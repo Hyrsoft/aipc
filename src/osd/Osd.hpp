@@ -8,6 +8,6 @@
 
 namespace aipc::osd {
 
-    void DrawDetections(cv::Mat &bgr, const std::vector<aipc::ai::ObjectDet> &dets);
+    void draw_detections(cv::Mat &bgr, const std::vector<aipc::ai::ObjectDet> &dets);
 
 } // namespace aipc::osd

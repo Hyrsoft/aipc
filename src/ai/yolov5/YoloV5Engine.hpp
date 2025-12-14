@@ -13,9 +13,9 @@ namespace aipc::ai {
         YoloV5Engine();
         ~YoloV5Engine();
 
-        int Init(const std::string &model_path) override;
-        int Inference(const cv::Mat &img, std::vector<ObjectDet> &results) override;
-        std::string GetName() const override { return "YoloV5"; }
+        int init(const std::string &model_path) override;
+        int inference(const cv::Mat &img, std::vector<ObjectDet> &results) override;
+        std::string get_name() const override { return "YoloV5"; }
 
     private:
         std::unique_ptr<YoloV5Context> ctx_;

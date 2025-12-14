@@ -55,7 +55,7 @@ namespace aipc::ai {
         }
     }
 
-    int YoloV5Engine::Init(const std::string &model_path) {
+    int YoloV5Engine::init(const std::string &model_path) {
         int ret;
         rknn_context ctx = 0;
 
@@ -141,7 +141,7 @@ namespace aipc::ai {
         return 0;
     }
 
-    int YoloV5Engine::Inference(const cv::Mat &img, std::vector<ObjectDet> &results) {
+    int YoloV5Engine::inference(const cv::Mat &img, std::vector<ObjectDet> &results) {
         if (ctx_->app_ctx.rknn_ctx == 0) {
             return -1;
         }

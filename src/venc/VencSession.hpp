@@ -11,9 +11,9 @@ namespace aipc::venc {
 class VencSession {
 public:
     VencSession(int chn, int width, int height, RK_CODEC_ID_E codec) : chn_(chn) {
-        const int ret = Init(width, height, codec);
+        const int ret = init(width, height, codec);
         if (ret != 0) {
-            SPDLOG_ERROR("VENC Init failed ret={}", ret);
+            SPDLOG_ERROR("VENC init failed ret={}", ret);
             ok_ = false;
             return;
         }
@@ -46,7 +46,7 @@ public:
     bool ok() const { return ok_; }
 
 private:
-    int Init(int width, int height, RK_CODEC_ID_E codec) {
+    int init(int width, int height, RK_CODEC_ID_E codec) {
         VENC_CHN_ATTR_S attr;
         std::memset(&attr, 0, sizeof(attr));
 

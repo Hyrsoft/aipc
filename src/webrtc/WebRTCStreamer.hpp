@@ -14,7 +14,7 @@ namespace aipc::webrtc {
 
     class WebRTCStreamer {
     public:
-        static WebRTCStreamer &getInstance() {
+        static WebRTCStreamer &get_instance() {
             static WebRTCStreamer instance;
             return instance;
         }
@@ -26,22 +26,22 @@ namespace aipc::webrtc {
 
         // Handle WebRTC Offer from remote peer (typically from Go server)
         // Returns the Answer SDP string, or empty string on error
-        std::string handleOffer(const std::string &sdp_offer);
+        std::string handle_offer(const std::string &sdp_offer);
 
         // Add ICE Candidate from remote peer
         // Called when Go sends candidate information
-        bool addCandidate(const std::string &candidate, const std::string &sdp_mid, int sdp_mline_index);
+        bool add_candidate(const std::string &candidate, const std::string &sdp_mid, int sdp_mline_index);
 
         // Push H.264 frame data to WebRTC track
         // The data should be in Annex-B format (with 00 00 00 01 start codes)
-        void pushFrame(const uint8_t *data, size_t size, uint64_t timestamp_ms);
+        void push_frame(const uint8_t *data, size_t size, uint64_t timestamp_ms);
 
         // Request IDR frame (keyframe) from encoder
         // Call this when a new WebRTC connection is established
-        void requestIDR();
+        void request_idr();
 
         // Check if a peer connection is active
-        bool isConnected() const;
+        bool is_connected() const;
 
         // Cleanup and reset peer connection
         void reset();
@@ -55,8 +55,8 @@ namespace aipc::webrtc {
         WebRTCStreamer(WebRTCStreamer &&) = delete;
         WebRTCStreamer &operator=(WebRTCStreamer &&) = delete;
 
-        void setupPeerConnectionCallbacks();
-        void createVideoTrack();
+        void setup_peer_connection_callbacks();
+        bool create_video_track();
 
         std::mutex pc_mutex_;
         std::shared_ptr<rtc::PeerConnection> pc_;

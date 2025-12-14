@@ -10,7 +10,6 @@
 #include <nlohmann/json.hpp>
 
 #include <spdlog/spdlog.h>
-#include "webrtc/WebRTCStreamer.hpp"
 
 namespace aipc::comm {
 
@@ -69,36 +68,28 @@ namespace aipc::comm {
         }
     }
 
-    CommandMessage CommandListener::parseCommand(const std::string &raw_data) {
+    CommandMessage CommandListener::parse_command(const std::string &raw_data) {
         // Handle empty input
         if (raw_data.empty()) {
             SPDLOG_WARN("Received empty command data");
             return CommandMessage{"unknown", ""};
         }
 
-        try {
-            auto json = nlohmann::json::parse(raw_data);
-            
-            // Safely extract fields using .value() with defaults to prevent exceptions
-            std::string type = json.value("type", "unknown");
-            std::string payload = json.value("payload", "");
-            
-            // Additional validation: if payload is required for certain types
-            if ((type == "webrtc_offer" || type == "webrtc_answer" || type == "webrtc_candidate" || 
-                 type == "model_switch") && payload.empty()) {
-                SPDLOG_WARN("Command type '{}' missing required 'payload' field", type);
-            }
-            
-            return CommandMessage{type, payload};
-            
-        } catch (const nlohmann::json::parse_error &e) {
-            SPDLOG_WARN("JSON parse error: {} (data: {})", e.what(), raw_data.substr(0, 100));
-            // Fallback: treat entire message as simple command (legacy support)
-            return CommandMessage{"unknown", raw_data};
-        } catch (const std::exception &e) {
-            SPDLOG_ERROR("Unexpected error parsing command: {}", e.what());
+        const auto json = nlohmann::json::parse(raw_data, nullptr, false);
+        if (json.is_discarded() || !json.is_object()) {
+            SPDLOG_WARN("JSON parse error (data: {})", raw_data.substr(0, 100));
             return CommandMessage{"unknown", raw_data};
         }
+
+        std::string type = json.value("type", "unknown");
+        std::string payload = json.value("payload", "");
+
+        if ((type == "webrtc_offer" || type == "webrtc_answer" || type == "webrtc_candidate" ||
+             type == "model_switch") && payload.empty()) {
+            SPDLOG_WARN("Command type '{}' missing required 'payload' field", type);
+        }
+
+        return CommandMessage{std::move(type), std::move(payload)};
     }
 
     void CommandListener::run() {
@@ -133,7 +124,7 @@ namespace aipc::comm {
             SPDLOG_DEBUG("Received raw data (size: {}): {}", raw_data.size(), raw_data.substr(0, 100));
 
             // Parse the command
-            CommandMessage cmd = parseCommand(raw_data);
+            CommandMessage cmd = parse_command(raw_data);
             
             // [修复2]：跳过 'unknown' 类型且 payload 为空的命令，避免不必要的处理
             if (cmd.type == "unknown" && cmd.payload.empty()) {
@@ -142,17 +133,7 @@ namespace aipc::comm {
             }
 
             if (handler_) {
-                std::string response;
-                try {
-                    response = handler_(cmd);
-                } catch (const std::exception &e) {
-                    SPDLOG_ERROR("Handler exception: {}", e.what());
-                    // Send error response
-                    nlohmann::json error_resp;
-                    error_resp["type"] = "error";
-                    error_resp["message"] = std::string("Handler error: ") + e.what();
-                    response = error_resp.dump();
-                }
+                const std::string response = handler_(cmd);
 
                 // Send response back to client (handle empty responses gracefully)
                 if (!response.empty()) {

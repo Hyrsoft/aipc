@@ -178,7 +178,7 @@ namespace aipc::ai {
         }
     }
 
-    int RetinaFaceEngine::Init(const std::string &model_path) {
+    int RetinaFaceEngine::init(const std::string &model_path) {
         int ret;
         rknn_context ctx = 0;
 
@@ -260,7 +260,7 @@ namespace aipc::ai {
         return 0;
     }
 
-    int RetinaFaceEngine::Inference(const cv::Mat &img, std::vector<ObjectDet> &results) {
+    int RetinaFaceEngine::inference(const cv::Mat &img, std::vector<ObjectDet> &results) {
         if (ctx_->app_ctx.rknn_ctx == 0) {
             return -1;
         }

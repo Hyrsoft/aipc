@@ -27,7 +27,7 @@ namespace aipc::comm {
 
     private:
         void run();
-        CommandMessage parseCommand(const std::string &raw_data);
+        CommandMessage parse_command(const std::string &raw_data);
 
         // Buffer size increased to 64KB to accommodate large SDP payloads
         static constexpr size_t BUFFER_SIZE = 65536;

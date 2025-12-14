@@ -30,7 +30,7 @@ namespace aipc::rkmpi {
             return *this;
         }
 
-        static MbPool Create(uint64_t bytes_per_block, uint32_t count, MB_ALLOC_TYPE_E alloc_type = MB_ALLOC_TYPE_DMA) {
+        static MbPool create(uint64_t bytes_per_block, uint32_t count, MB_ALLOC_TYPE_E alloc_type = MB_ALLOC_TYPE_DMA) {
             MB_POOL_CONFIG_S cfg;
             memset(&cfg, 0, sizeof(cfg));
             cfg.u64MBSize = bytes_per_block;

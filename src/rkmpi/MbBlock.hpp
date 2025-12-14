@@ -40,7 +40,7 @@ namespace aipc::rkmpi {
             return *this;
         }
 
-        static std::shared_ptr<MbBlock> Get(MB_POOL pool, size_t bytes, bool block = true) {
+        static std::shared_ptr<MbBlock> get(MB_POOL pool, size_t bytes, bool block = true) {
             if (pool == MB_INVALID_POOLID) {
                 return {};
             }
@@ -60,7 +60,7 @@ namespace aipc::rkmpi {
 
         size_t size() const { return bytes_; }
 
-        void *virAddr() const {
+        void *vir_addr() const {
             if (!ok()) {
                 return nullptr;
             }

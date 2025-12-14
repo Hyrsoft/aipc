@@ -6,7 +6,7 @@
 
 namespace aipc::osd {
 
-void DrawDetections(cv::Mat &bgr, const std::vector<aipc::ai::ObjectDet> &dets) {
+void draw_detections(cv::Mat &bgr, const std::vector<aipc::ai::ObjectDet> &dets) {
     for (const auto &det : dets) {
         cv::rectangle(bgr, det.box, cv::Scalar(0, 255, 0), 3);
 

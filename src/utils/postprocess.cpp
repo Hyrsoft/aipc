@@ -31,7 +31,7 @@ const int anchor[3][6] = {{10, 13, 16, 30, 33, 23}, {30, 61, 62, 45, 59, 119}, {
 
 inline static int clamp(float val, int min, int max) { return val > min ? (val < max ? val : max) : min; }
 
-static char *readLine(FILE *fp, char *buffer, int *len) {
+static char *read_line(FILE *fp, char *buffer, int *len) {
     int ch;
     int i = 0;
     size_t buff_len = 0;
@@ -64,18 +64,18 @@ static char *readLine(FILE *fp, char *buffer, int *len) {
     return buffer;
 }
 
-static int readLines(const char *fileName, char *lines[], int max_line) {
-    FILE *file = fopen(fileName, "r");
+static int read_lines(const char *file_name, char *lines[], int max_line) {
+    FILE *file = fopen(file_name, "r");
     char *s;
     int i = 0;
     int n = 0;
 
     if (file == NULL) {
-        printf("Open %s fail!\n", fileName);
+        printf("Open %s fail!\n", file_name);
         return -1;
     }
 
-    while ((s = readLine(file, s, &n)) != NULL) {
+    while ((s = read_line(file, s, &n)) != NULL) {
         lines[i++] = s;
         if (i >= max_line)
             break;
@@ -84,9 +84,9 @@ static int readLines(const char *fileName, char *lines[], int max_line) {
     return i;
 }
 
-static int loadLabelName(const char *locationFilename, char *label[]) {
-    printf("load lable %s\n", locationFilename);
-    readLines(locationFilename, label, OBJ_CLASS_NUM);
+static int load_label_name(const char *location_filename, char *label[]) {
+    printf("load lable %s\n", location_filename);
+    read_lines(location_filename, label, OBJ_CLASS_NUM);
     return 0;
 }
 
@@ -434,7 +434,7 @@ int post_process(rknn_app_context_t *app_ctx, void *outputs, float conf_threshol
 
 int init_post_process() {
     int ret = 0;
-    ret = loadLabelName(LABEL_NALE_TXT_PATH, labels);
+    ret = load_label_name(LABEL_NALE_TXT_PATH, labels);
     if (ret < 0) {
         printf("Load %s failed!\n", LABEL_NALE_TXT_PATH);
         return -1;

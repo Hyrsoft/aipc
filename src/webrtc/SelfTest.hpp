@@ -9,6 +9,6 @@ namespace aipc::webrtc {
         std::string message;
     };
 
-    SelfTestResult RunSelfTest();
+    SelfTestResult run_self_test();
 
 } // namespace aipc::webrtc

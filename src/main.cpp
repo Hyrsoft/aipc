@@ -107,7 +107,7 @@ struct VencStreamGuard {
 } // namespace
 
 int main(int argc, char *argv[]) {
-    aipc::logging::Init();
+    aipc::logging::init();
 
     (void) argc;
     (void) argv;
@@ -117,7 +117,7 @@ int main(int argc, char *argv[]) {
     ::signal(SIGINT, HandleSignal);
     ::signal(SIGTERM, HandleSignal);
 
-    const auto webrtc_test = aipc::webrtc::RunSelfTest();
+    const auto webrtc_test = aipc::webrtc::run_self_test();
     if (!webrtc_test.ok) {
         SPDLOG_ERROR("{}", webrtc_test.message);
         return -1;
@@ -125,7 +125,7 @@ int main(int argc, char *argv[]) {
     SPDLOG_INFO("{}", webrtc_test.message);
 
     // Initialize WebRTC Streamer
-    auto &webrtc_streamer = aipc::webrtc::WebRTCStreamer::getInstance();
+    auto &webrtc_streamer = aipc::webrtc::WebRTCStreamer::get_instance();
     if (!webrtc_streamer.init()) {
         SPDLOG_ERROR("Failed to initialize WebRTC Streamer");
         return -1;
@@ -139,7 +139,7 @@ int main(int argc, char *argv[]) {
     RK_S32 s32Ret = 0;
     
     // Initialize AI Manager (default: YOLOv5)
-    aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::YOLOV5, cfg.default_model_path);
+    aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::YOLOV5, cfg.default_model_path);
 
     // 启动命令监听（UDP:9000）
     // Now supports JSON format: {"type": "webrtc_offer", "payload": "v=0\r\no=- ..."}
@@ -166,7 +166,7 @@ int main(int argc, char *argv[]) {
             }
 
             SPDLOG_INFO("Processing WebRTC Offer (payload size: {})", msg.payload.size());
-            std::string answer = webrtc_streamer.handleOffer(msg.payload);
+            std::string answer = webrtc_streamer.handle_offer(msg.payload);
             
             if (answer.empty()) {
                 SPDLOG_ERROR("Failed to generate WebRTC Answer");
@@ -185,7 +185,7 @@ int main(int argc, char *argv[]) {
             SPDLOG_INFO("WebRTC Answer generated successfully");
             
             // Request IDR frame when new connection is established
-            webrtc_streamer.requestIDR();
+            webrtc_streamer.request_idr();
             
             return response.dump();
         }
@@ -200,55 +200,46 @@ int main(int argc, char *argv[]) {
             }
 
             SPDLOG_INFO("Processing WebRTC Candidate");
-            try {
-                // payload 通常是 JSON({candidate,sdpMid,sdpMLineIndex})；若不是 JSON，则直接把 payload 当 candidate 字符串。
-                std::string candidate;
-                std::string sdp_mid;
-                int sdp_mline_index = 0;
 
-                try {
-                    auto payload_json = nlohmann::json::parse(msg.payload);
-                    candidate = payload_json.value("candidate", "");
-                    sdp_mid = payload_json.value("sdpMid", "");
-                    sdp_mline_index = payload_json.value("sdpMLineIndex", 0);
-                } catch (...) {
-                    candidate = msg.payload;
-                }
+            // payload 通常是 JSON({candidate,sdpMid,sdpMLineIndex})；若不是 JSON，则直接把 payload 当 candidate 字符串。
+            std::string candidate;
+            std::string sdp_mid;
+            int sdp_mline_index = 0;
 
-                if (sdp_mid.empty()) {
-                    sdp_mid = "video";
-                }
-                
-                if (candidate.empty()) {
-                    SPDLOG_WARN("Candidate payload missing 'candidate' field");
-                    nlohmann::json error_response;
-                    error_response["type"] = "error";
-                    error_response["message"] = "Missing candidate field";
-                    return error_response.dump();
-                }
+            const auto payload_json = nlohmann::json::parse(msg.payload, nullptr, false);
+            if (!payload_json.is_discarded() && payload_json.is_object()) {
+                candidate = payload_json.value("candidate", "");
+                sdp_mid = payload_json.value("sdpMid", "");
+                sdp_mline_index = payload_json.value("sdpMLineIndex", 0);
+            } else {
+                candidate = msg.payload;
+            }
 
-                // 将 candidate 添加到 WebRTC 连接
-                bool success = webrtc_streamer.addCandidate(candidate, sdp_mid, sdp_mline_index);
-                
-                nlohmann::json response;
-                if (success) {
-                    response["type"] = "ack";
-                    response["message"] = "Candidate added successfully";
-                    SPDLOG_INFO("Successfully added ICE candidate");
-                } else {
-                    response["type"] = "error";
-                    response["message"] = "Failed to add candidate";
-                    SPDLOG_WARN("Failed to add ICE candidate");
-                }
-                return response.dump();
-                
-            } catch (const std::exception &e) {
-                SPDLOG_ERROR("Error processing candidate: {}", e.what());
+            if (sdp_mid.empty()) {
+                sdp_mid = "video";
+            }
+
+            if (candidate.empty()) {
+                SPDLOG_WARN("Candidate payload missing 'candidate' field");
                 nlohmann::json error_response;
                 error_response["type"] = "error";
-                error_response["message"] = std::string("Candidate processing error: ") + e.what();
+                error_response["message"] = "Missing candidate field";
                 return error_response.dump();
             }
+
+            const bool success = webrtc_streamer.add_candidate(candidate, sdp_mid, sdp_mline_index);
+
+            nlohmann::json response;
+            if (success) {
+                response["type"] = "ack";
+                response["message"] = "Candidate added successfully";
+                SPDLOG_INFO("Successfully added ICE candidate");
+            } else {
+                response["type"] = "error";
+                response["message"] = "Failed to add candidate";
+                SPDLOG_WARN("Failed to add ICE candidate");
+            }
+            return response.dump();
         }
         else if (msg.type == "control_cmd" || msg.type == "model_switch") {
             // Validate payload for model switch
@@ -264,13 +255,13 @@ int main(int argc, char *argv[]) {
             SPDLOG_INFO("Processing control command: {}", cmd);
 
             if (cmd.find("YOLOV5") != std::string::npos || cmd.find("yolov5") != std::string::npos) {
-                aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::YOLOV5, "./model/yolov5.rknn");
+                aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::YOLOV5, "./model/yolov5.rknn");
                 SPDLOG_INFO("Switched to YOLOV5 model");
             } else if (cmd.find("RETINAFACE") != std::string::npos || cmd.find("retinaface") != std::string::npos) {
-                aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::RETINAFACE, "./model/retinaface.rknn");
+                aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::RETINAFACE, "./model/retinaface.rknn");
                 SPDLOG_INFO("Switched to RETINAFACE model");
             } else if (cmd.find("NONE") != std::string::npos || cmd.find("none") != std::string::npos) {
-                aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::NONE);
+                aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::NONE);
                 SPDLOG_INFO("Switched to NONE model");
             } else {
                 SPDLOG_WARN("Unknown model in control command: {}", cmd);
@@ -304,7 +295,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Create RGB pool (RAII)
-    auto rgb_pool = aipc::rkmpi::MbPool::Create(static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 3u, 4);
+    auto rgb_pool = aipc::rkmpi::MbPool::create(static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 3u, 4);
     if (!rgb_pool.ok()) {
         return -1;
     }
@@ -336,7 +327,7 @@ int main(int argc, char *argv[]) {
 
     // RTSP Init
     aipc::rtsp::RtspStreamer rtsp_streamer(cfg.rtsp_port, cfg.rtsp_path);
-    if (!rtsp_streamer.ok() || !rtsp_streamer.startH264()) {
+    if (!rtsp_streamer.ok() || !rtsp_streamer.start_h264()) {
         SPDLOG_ERROR("RTSP init failed");
         return -1;
     }
@@ -381,12 +372,12 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
-            cv::Mat bgr(height, width, CV_8UC3, blk->virAddr());
+            cv::Mat bgr(height, width, CV_8UC3, blk->vir_addr());
             cv::Mat bgr_copy = bgr.clone();
             blk.reset();
 
             local_results.clear();
-            aipc::ai::AIManager::Instance().RunInference(bgr_copy, local_results);
+            aipc::ai::AIManager::get_instance().run_inference(bgr_copy, local_results);
 
             {
                 std::lock_guard<std::mutex> lk(results_m);
@@ -397,11 +388,11 @@ int main(int argc, char *argv[]) {
 
     while (g_running.load()) {
         // Get RGB MB from pool for this frame
-        auto rgb_blk = aipc::rkmpi::MbBlock::Get(rgb_pool.get(), static_cast<size_t>(width) * static_cast<size_t>(height) * 3u, true);
+        auto rgb_blk = aipc::rkmpi::MbBlock::get(rgb_pool.get(), static_cast<size_t>(width) * static_cast<size_t>(height) * 3u, true);
         if (!rgb_blk || !rgb_blk->ok()) {
             continue;
         }
-        unsigned char *rgb_data = static_cast<unsigned char *>(rgb_blk->virAddr());
+        unsigned char *rgb_data = static_cast<unsigned char *>(rgb_blk->vir_addr());
         if (!rgb_data) {
             continue;
         }
@@ -409,7 +400,7 @@ int main(int argc, char *argv[]) {
 
         // Timestamp
         h264_frame.stVFrame.u32TimeRef = H264_TimeRef++;
-        h264_frame.stVFrame.u64PTS = aipc::rkmpi::NowUs();
+        h264_frame.stVFrame.u64PTS = aipc::rkmpi::now_us();
 
         // Get VI Frame
         s32Ret = RK_MPI_VI_GetChnFrame(cfg.vi_dev, cfg.vi_chn, &stViFrame, -1);
@@ -433,7 +424,7 @@ int main(int argc, char *argv[]) {
             std::lock_guard<std::mutex> lk(results_m);
             draw_results = latest_results;
         }
-        aipc::osd::DrawDetections(bgr, draw_results);
+        aipc::osd::draw_detections(bgr, draw_results);
 
         // Submit latest frame to AI thread (drop old if not consumed)
         // 注意：放在 OSD 之后，避免 AI 读/主线程写同一缓冲的竞争。
@@ -456,12 +447,12 @@ int main(int argc, char *argv[]) {
             void *pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
             if (pData) {
                 // Send to RTSP
-                rtsp_streamer.pushH264((uint8_t *) pData, stFrame.pstPack->u32Len, stFrame.pstPack->u64PTS);
+                rtsp_streamer.push_h264((uint8_t *) pData, stFrame.pstPack->u32Len, stFrame.pstPack->u64PTS);
                 rtsp_streamer.poll();
 
                 // Send to WebRTC if connected
-                if (webrtc_streamer.isConnected()) {
-                    webrtc_streamer.pushFrame((const uint8_t *) pData, stFrame.pstPack->u32Len, stFrame.pstPack->u64PTS / 1000);  // Convert to ms
+                if (webrtc_streamer.is_connected()) {
+                    webrtc_streamer.push_frame((const uint8_t *) pData, stFrame.pstPack->u32Len, stFrame.pstPack->u64PTS / 1000);  // Convert to ms
                 }
             }
         }
