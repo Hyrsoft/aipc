@@ -11,15 +11,23 @@
 #include <sys/poll.h>
 #include <time.h>
 #include <unistd.h>
-#include <vector>
-#include <thread>
-#include <memory>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
-#include "rkmpi/luckfox_mpi.h"
-#include "vi/vi.h"
+#include "rkmpi/IspSession.hpp"
+#include "rkmpi/MbBlock.hpp"
+#include "rkmpi/MbPool.hpp"
+#include "rkmpi/MpiSystem.hpp"
+#include "rkmpi/Time.hpp"
+
+#include "vi/ViSession.hpp"
 
 #include "comm/CommandListener.hpp"
 #include "webrtc/SelfTest.hpp"
@@ -30,18 +38,58 @@
 #include "osd/Osd.hpp"
 #include "utils/Logging.hpp"
 
+#include "venc/VencSession.hpp"
+
 #include "opencv2/core/core.hpp"
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
 
-#define DISP_WIDTH  720
-#define DISP_HEIGHT 480
+namespace {
 
-int width    = DISP_WIDTH;
-int height   = DISP_HEIGHT;
+std::atomic<bool> g_running{true};
+
+void HandleSignal(int) { g_running = false; }
+
+struct ViFrameGuard {
+    int dev{0};
+    int chn{0};
+    VIDEO_FRAME_INFO_S *frame{nullptr};
+    bool active{false};
+
+    ~ViFrameGuard() {
+        if (!active || !frame) {
+            return;
+        }
+        const auto ret = RK_MPI_VI_ReleaseChnFrame(dev, chn, frame);
+        if (ret != RK_SUCCESS) {
+            SPDLOG_WARN("RK_MPI_VI_ReleaseChnFrame fail {:x}", static_cast<unsigned int>(ret));
+        }
+    }
+};
+
+struct VencStreamGuard {
+    int chn{0};
+    VENC_STREAM_S *stream{nullptr};
+    bool active{false};
+
+    ~VencStreamGuard() {
+        if (!active || !stream) {
+            return;
+        }
+        const auto ret = RK_MPI_VENC_ReleaseStream(chn, stream);
+        if (ret != RK_SUCCESS) {
+            SPDLOG_WARN("RK_MPI_VENC_ReleaseStream fail {:x}", static_cast<unsigned int>(ret));
+        }
+    }
+};
+
+} // namespace
 
 int main(int argc, char *argv[]) {
     aipc::logging::Init();
+
+    ::signal(SIGINT, HandleSignal);
+    ::signal(SIGTERM, HandleSignal);
 
     const auto webrtc_test = aipc::webrtc::RunSelfTest();
     if (!webrtc_test.ok) {
@@ -54,7 +102,7 @@ int main(int argc, char *argv[]) {
     // 清理默认的ipc进程
     system("RkLunch-stop.sh");
 
-    RK_S32 s32Ret = 0; 
+    RK_S32 s32Ret = 0;
     
     // Initialize AI Manager
     // Default to YOLOv5
@@ -74,45 +122,51 @@ int main(int argc, char *argv[]) {
     });
     command_listener.start();
 
-    // H264 Frame Setup
-    VENC_STREAM_S stFrame;    
-    stFrame.pstPack = (VENC_PACK_S *)malloc(sizeof(VENC_PACK_S));
-    RK_U64 H264_PTS = 0;
-    RK_U32 H264_TimeRef = 0; 
+    constexpr int width = 720;
+    constexpr int height = 480;
+
+    // ISP Init (RAII)
+    RK_BOOL multi_sensor = RK_FALSE;
+    const char *iq_dir = "/etc/iqfiles";
+    rk_aiq_working_mode_t hdr_mode = RK_AIQ_WORKING_MODE_NORMAL;
+    aipc::rkmpi::IspSession isp(0, hdr_mode, multi_sensor, iq_dir);
+
+    // MPI Init (RAII)
+    aipc::rkmpi::MpiSystem mpi;
+    if (!mpi.ok()) {
+        return -1;
+    }
+
+    // Create RGB pool (RAII)
+    auto rgb_pool = aipc::rkmpi::MbPool::Create(static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 3u, 4);
+    if (!rgb_pool.ok()) {
+        return -1;
+    }
+
+    // H264 stream pack buffer (RAII)
+    auto pack = std::unique_ptr<VENC_PACK_S, void (*)(void *)>(
+            static_cast<VENC_PACK_S *>(std::malloc(sizeof(VENC_PACK_S))), std::free);
+    if (!pack) {
+        SPDLOG_ERROR("malloc VENC_PACK_S failed");
+        return -1;
+    }
+
+    VENC_STREAM_S stFrame;
+    std::memset(&stFrame, 0, sizeof(stFrame));
+    stFrame.pstPack = pack.get();
+
+    RK_U32 H264_TimeRef = 0;
     VIDEO_FRAME_INFO_S stViFrame;
-    
-    // Create Pool
-    MB_POOL_CONFIG_S PoolCfg;
-    memset(&PoolCfg, 0, sizeof(MB_POOL_CONFIG_S));
-    PoolCfg.u64MBSize = width * height * 3 ;
-    PoolCfg.u32MBCnt = 4; // Increase buffer count to avoid tearing/ghosting
-    PoolCfg.enAllocType = MB_ALLOC_TYPE_DMA;
-    MB_POOL src_Pool = RK_MPI_MB_CreatePool(&PoolCfg);
-    SPDLOG_INFO("Create Pool success");
 
     // Build h264_frame structure (common parts)
     VIDEO_FRAME_INFO_S h264_frame;
-    memset(&h264_frame, 0, sizeof(VIDEO_FRAME_INFO_S));
+    std::memset(&h264_frame, 0, sizeof(h264_frame));
     h264_frame.stVFrame.u32Width = width;
     h264_frame.stVFrame.u32Height = height;
     h264_frame.stVFrame.u32VirWidth = width;
     h264_frame.stVFrame.u32VirHeight = height;
-    h264_frame.stVFrame.enPixelFormat =  RK_FMT_RGB888; 
+    h264_frame.stVFrame.enPixelFormat = RK_FMT_RGB888;
     h264_frame.stVFrame.u32FrameFlag = 160;
-    // pMbBlk will be set in the loop
-
-    // ISP Init
-    RK_BOOL multi_sensor = RK_FALSE;    
-    const char *iq_dir = "/etc/iqfiles";
-    rk_aiq_working_mode_t hdr_mode = RK_AIQ_WORKING_MODE_NORMAL;
-    SAMPLE_COMM_ISP_Init(0, hdr_mode, multi_sensor, iq_dir);
-    SAMPLE_COMM_ISP_Run(0);
-
-    // MPI Init
-    if (RK_MPI_SYS_Init() != RK_SUCCESS) {
-        SPDLOG_ERROR("rk mpi sys init fail!");
-        return -1;
-    }
 
     // RTSP Init
     aipc::rtsp::RtspStreamer rtsp_streamer(554, "/live/0");
@@ -120,89 +174,135 @@ int main(int argc, char *argv[]) {
         SPDLOG_ERROR("RTSP init failed");
         return -1;
     }
+
+    // VI/VENC Init (RAII)
+    aipc::vi::ViSession vi(0, 0, width, height);
+    if (!vi.ok()) {
+        return -1;
+    }
+
+    aipc::venc::VencSession venc(0, width, height, RK_VIDEO_ID_AVC);
+    if (!venc.ok()) {
+        return -1;
+    }
+
+    SPDLOG_INFO("VI/VENC init success");
     
-    // VI Init
-    vi_dev_init();
-    vi_chn_init(0, width, height);
+    // AI async worker: consume latest frame, run inference, update latest results
+    std::mutex ai_m;
+    std::condition_variable ai_cv;
+    std::shared_ptr<aipc::rkmpi::MbBlock> ai_latest_blk;
+    bool ai_stop = false;
 
-    // VENC Init
-    RK_CODEC_ID_E enCodecType = RK_VIDEO_ID_AVC;
-    venc_init(0, width, height, enCodecType);
+    std::mutex results_m;
+    std::vector<aipc::ai::ObjectDet> latest_results;
 
-    SPDLOG_INFO("venc init success");
-    
-    std::vector<aipc::ai::ObjectDet> results;
+    std::thread ai_thread([&]() {
+        std::vector<aipc::ai::ObjectDet> local_results;
+        while (true) {
+            std::shared_ptr<aipc::rkmpi::MbBlock> blk;
+            {
+                std::unique_lock<std::mutex> lk(ai_m);
+                ai_cv.wait(lk, [&]() { return ai_stop || ai_latest_blk != nullptr; });
+                if (ai_stop) {
+                    break;
+                }
+                blk = std::move(ai_latest_blk);
+                ai_latest_blk.reset();
+            }
 
-    while(1)
-    {    
-        // Get MB from Pool for this frame
-        MB_BLK src_Blk = RK_MPI_MB_GetMB(src_Pool, width * height * 3, RK_TRUE);
-        unsigned char *data = (unsigned char *)RK_MPI_MB_Handle2VirAddr(src_Blk);
-        h264_frame.stVFrame.pMbBlk = src_Blk;
+            if (!blk || !blk->ok()) {
+                continue;
+            }
+
+            cv::Mat bgr(height, width, CV_8UC3, blk->virAddr());
+            cv::Mat bgr_copy = bgr.clone();
+            blk.reset();
+
+            local_results.clear();
+            aipc::ai::AIManager::Instance().RunInference(bgr_copy, local_results);
+
+            {
+                std::lock_guard<std::mutex> lk(results_m);
+                latest_results = local_results;
+            }
+        }
+    });
+
+    while (g_running.load()) {
+        // Get RGB MB from pool for this frame
+        auto rgb_blk = aipc::rkmpi::MbBlock::Get(rgb_pool.get(), static_cast<size_t>(width) * static_cast<size_t>(height) * 3u, true);
+        if (!rgb_blk || !rgb_blk->ok()) {
+            continue;
+        }
+        unsigned char *rgb_data = static_cast<unsigned char *>(rgb_blk->virAddr());
+        if (!rgb_data) {
+            continue;
+        }
+        h264_frame.stVFrame.pMbBlk = rgb_blk->handle();
+
+        // Timestamp
+        h264_frame.stVFrame.u32TimeRef = H264_TimeRef++;
+        h264_frame.stVFrame.u64PTS = aipc::rkmpi::NowUs();
 
         // Get VI Frame
-        h264_frame.stVFrame.u32TimeRef = H264_TimeRef++;
-        h264_frame.stVFrame.u64PTS = TEST_COMM_GetNowUs(); 
         s32Ret = RK_MPI_VI_GetChnFrame(0, 0, &stViFrame, -1);
-        if(s32Ret == RK_SUCCESS)
-        {
-            void *vi_data = RK_MPI_MB_Handle2VirAddr(stViFrame.stVFrame.pMbBlk);    
-
-            cv::Mat yuv420sp(height + height / 2, width, CV_8UC1, vi_data);
-            cv::Mat bgr(height, width, CV_8UC3, data);            
-            
-            cv::cvtColor(yuv420sp, bgr, cv::COLOR_YUV420sp2BGR);
-            // cv::resize(bgr, frame, cv::Size(width ,height), 0, 0, cv::INTER_LINEAR); // Already same size
-            
-            // Inference
-            aipc::ai::AIManager::Instance().RunInference(bgr, results);
-
-            // Draw Results
-            aipc::osd::DrawDetections(bgr, results);
+        ViFrameGuard vi_guard{0, 0, &stViFrame, s32Ret == RK_SUCCESS};
+        if (s32Ret != RK_SUCCESS) {
+            continue;
         }
-        
-        // Encode H264
-        RK_MPI_VENC_SendFrame(0, &h264_frame, -1);
 
-        // Release MB (VENC should have taken a reference if needed, or we wait for it to finish? 
-        // In standard MPI, SendFrame is async but takes reference. We release OUR reference.)
-        RK_MPI_MB_ReleaseMB(src_Blk);
+        void *vi_data = RK_MPI_MB_Handle2VirAddr(stViFrame.stVFrame.pMbBlk);
+        if (!vi_data) {
+            continue;
+        }
+
+        cv::Mat yuv420sp(height + height / 2, width, CV_8UC1, vi_data);
+        cv::Mat bgr(height, width, CV_8UC3, rgb_data);
+        cv::cvtColor(yuv420sp, bgr, cv::COLOR_YUV420sp2BGR);
+
+        // Draw latest results (may be from older frame)
+        std::vector<aipc::ai::ObjectDet> draw_results;
+        {
+            std::lock_guard<std::mutex> lk(results_m);
+            draw_results = latest_results;
+        }
+        aipc::osd::DrawDetections(bgr, draw_results);
+
+        // Submit latest frame to AI thread (drop old if not consumed)
+        // 注意：放在 OSD 之后，避免 AI 读/主线程写同一缓冲的竞争。
+        {
+            std::lock_guard<std::mutex> lk(ai_m);
+            ai_latest_blk = rgb_blk;
+        }
+        ai_cv.notify_one();
+
+        // Encode H264
+        s32Ret = RK_MPI_VENC_SendFrame(0, &h264_frame, -1);
+        if (s32Ret != RK_SUCCESS) {
+            SPDLOG_WARN("RK_MPI_VENC_SendFrame fail {:x}", static_cast<unsigned int>(s32Ret));
+        }
 
         // RTSP Send
         s32Ret = RK_MPI_VENC_GetStream(0, &stFrame, -1);
-        if(s32Ret == RK_SUCCESS)
-        {
+        VencStreamGuard venc_guard{0, &stFrame, s32Ret == RK_SUCCESS};
+        if (s32Ret == RK_SUCCESS) {
             void *pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
-            rtsp_streamer.pushH264((uint8_t *)pData, stFrame.pstPack->u32Len, stFrame.pstPack->u64PTS);
-            rtsp_streamer.poll();
-        }
-
-        // Release Frame
-        s32Ret = RK_MPI_VI_ReleaseChnFrame(0, 0, &stViFrame);
-        if (s32Ret != RK_SUCCESS) {
-            SPDLOG_WARN("RK_MPI_VI_ReleaseChnFrame fail {:x}", static_cast<unsigned int>(s32Ret));
-        }
-        s32Ret = RK_MPI_VENC_ReleaseStream(0, &stFrame);
-        if (s32Ret != RK_SUCCESS) {
-            SPDLOG_WARN("RK_MPI_VENC_ReleaseStream fail {:x}", static_cast<unsigned int>(s32Ret));
+            if (pData) {
+                rtsp_streamer.pushH264((uint8_t *) pData, stFrame.pstPack->u32Len, stFrame.pstPack->u64PTS);
+                rtsp_streamer.poll();
+            }
         }
     }
 
-    // Cleanup
-    // RK_MPI_MB_ReleaseMB(src_Blk); // Removed as we release in loop
-    RK_MPI_MB_DestroyPool(src_Pool);
-    
-    RK_MPI_VI_DisableChn(0, 0);
-    RK_MPI_VI_DisableDev(0);
-
-    SAMPLE_COMM_ISP_Stop(0);
-    
-    RK_MPI_VENC_StopRecvFrame(0);
-    RK_MPI_VENC_DestroyChn(0);
-
-    free(stFrame.pstPack);
-    
-    RK_MPI_SYS_Exit();
+    {
+        std::lock_guard<std::mutex> lk(ai_m);
+        ai_stop = true;
+    }
+    ai_cv.notify_one();
+    if (ai_thread.joinable()) {
+        ai_thread.join();
+    }
 
     return 0;
 }
