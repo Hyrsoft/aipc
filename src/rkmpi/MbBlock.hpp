@@ -21,9 +21,10 @@ namespace aipc::rkmpi {
         MbBlock(const MbBlock &) = delete;
         MbBlock &operator=(const MbBlock &) = delete;
 
-        MbBlock(MbBlock &&other) noexcept : blk_(other.blk_), bytes_(other.bytes_) {
+        MbBlock(MbBlock &&other) noexcept : blk_(other.blk_), bytes_(other.bytes_), cached_vir_addr_(other.cached_vir_addr_) {
             other.blk_ = MB_INVALID_HANDLE;
             other.bytes_ = 0;
+            other.cached_vir_addr_ = nullptr;
         }
 
         MbBlock &operator=(MbBlock &&other) noexcept {
@@ -31,8 +32,10 @@ namespace aipc::rkmpi {
                 reset();
                 blk_ = other.blk_;
                 bytes_ = other.bytes_;
+                cached_vir_addr_ = other.cached_vir_addr_;
                 other.blk_ = MB_INVALID_HANDLE;
                 other.bytes_ = 0;
+                other.cached_vir_addr_ = nullptr;
             }
             return *this;
         }
@@ -61,7 +64,11 @@ namespace aipc::rkmpi {
             if (!ok()) {
                 return nullptr;
             }
-            return RK_MPI_MB_Handle2VirAddr(blk_);
+            if (cached_vir_addr_ != nullptr) {
+                return cached_vir_addr_;
+            }
+            cached_vir_addr_ = RK_MPI_MB_Handle2VirAddr(blk_);
+            return cached_vir_addr_;
         }
 
         void reset() {
@@ -69,12 +76,14 @@ namespace aipc::rkmpi {
                 RK_MPI_MB_ReleaseMB(blk_);
                 blk_ = MB_INVALID_HANDLE;
                 bytes_ = 0;
+                cached_vir_addr_ = nullptr;
             }
         }
 
     private:
         MB_BLK blk_{MB_INVALID_HANDLE};
         size_t bytes_{0};
+        mutable void *cached_vir_addr_{nullptr};
     };
 
 } // namespace aipc::rkmpi

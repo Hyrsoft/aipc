@@ -50,6 +50,24 @@ std::atomic<bool> g_running{true};
 
 void HandleSignal(int) { g_running = false; }
 
+struct AppConfig {
+    int vi_dev{0};
+    int vi_chn{0};
+
+    int width{720};
+    int height{480};
+
+    int command_port{9000};
+    int rtsp_port{554};
+    const char *rtsp_path{"/live/0"};
+
+    const char *iq_dir{"/etc/iqfiles"};
+    RK_BOOL multi_sensor{RK_FALSE};
+    rk_aiq_working_mode_t hdr_mode{RK_AIQ_WORKING_MODE_NORMAL};
+
+    const char *default_model_path{"./model/yolov5.rknn"};
+};
+
 struct ViFrameGuard {
     int dev{0};
     int chn{0};
@@ -88,6 +106,11 @@ struct VencStreamGuard {
 int main(int argc, char *argv[]) {
     aipc::logging::Init();
 
+    (void) argc;
+    (void) argv;
+
+    const AppConfig cfg;
+
     ::signal(SIGINT, HandleSignal);
     ::signal(SIGTERM, HandleSignal);
 
@@ -104,12 +127,11 @@ int main(int argc, char *argv[]) {
 
     RK_S32 s32Ret = 0;
     
-    // Initialize AI Manager
-    // Default to YOLOv5
-    aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::YOLOV5, "./model/yolov5.rknn");
+    // Initialize AI Manager (default: YOLOv5)
+    aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::YOLOV5, cfg.default_model_path);
 
     // 启动命令监听（UDP:9000）
-    aipc::comm::CommandListener command_listener(9000, [](const std::string& cmd) {
+    aipc::comm::CommandListener command_listener(cfg.command_port, [](const std::string& cmd) {
         SPDLOG_INFO("Received command: {}", cmd);
 
         if (cmd.find("YOLOV5") != std::string::npos || cmd.find("yolov5") != std::string::npos) {
@@ -122,14 +144,11 @@ int main(int argc, char *argv[]) {
     });
     command_listener.start();
 
-    constexpr int width = 720;
-    constexpr int height = 480;
+    const int width = cfg.width;
+    const int height = cfg.height;
 
     // ISP Init (RAII)
-    RK_BOOL multi_sensor = RK_FALSE;
-    const char *iq_dir = "/etc/iqfiles";
-    rk_aiq_working_mode_t hdr_mode = RK_AIQ_WORKING_MODE_NORMAL;
-    aipc::rkmpi::IspSession isp(0, hdr_mode, multi_sensor, iq_dir);
+    aipc::rkmpi::IspSession isp(0, cfg.hdr_mode, cfg.multi_sensor, cfg.iq_dir);
 
     // MPI Init (RAII)
     aipc::rkmpi::MpiSystem mpi;
@@ -169,14 +188,14 @@ int main(int argc, char *argv[]) {
     h264_frame.stVFrame.u32FrameFlag = 160;
 
     // RTSP Init
-    aipc::rtsp::RtspStreamer rtsp_streamer(554, "/live/0");
+    aipc::rtsp::RtspStreamer rtsp_streamer(cfg.rtsp_port, cfg.rtsp_path);
     if (!rtsp_streamer.ok() || !rtsp_streamer.startH264()) {
         SPDLOG_ERROR("RTSP init failed");
         return -1;
     }
 
     // VI/VENC Init (RAII)
-    aipc::vi::ViSession vi(0, 0, width, height);
+    aipc::vi::ViSession vi(cfg.vi_dev, cfg.vi_chn, width, height);
     if (!vi.ok()) {
         return -1;
     }
@@ -246,8 +265,8 @@ int main(int argc, char *argv[]) {
         h264_frame.stVFrame.u64PTS = aipc::rkmpi::NowUs();
 
         // Get VI Frame
-        s32Ret = RK_MPI_VI_GetChnFrame(0, 0, &stViFrame, -1);
-        ViFrameGuard vi_guard{0, 0, &stViFrame, s32Ret == RK_SUCCESS};
+        s32Ret = RK_MPI_VI_GetChnFrame(cfg.vi_dev, cfg.vi_chn, &stViFrame, -1);
+        ViFrameGuard vi_guard{cfg.vi_dev, cfg.vi_chn, &stViFrame, s32Ret == RK_SUCCESS};
         if (s32Ret != RK_SUCCESS) {
             continue;
         }
