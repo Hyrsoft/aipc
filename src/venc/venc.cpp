@@ -1,7 +1,9 @@
 #include "venc.h"
 
+#include <spdlog/spdlog.h>
+
 int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType) {
-    printf("%s\n", __func__);
+    SPDLOG_DEBUG("{}", __func__);
     VENC_RECV_PIC_PARAM_S stRecvParam;
     VENC_CHN_ATTR_S stAttr;
     memset(&stAttr, 0, sizeof(VENC_CHN_ATTR_S));

@@ -1,10 +1,11 @@
 #pragma once
+
 #include <memory>
-#include "IAIEngine.hpp"
 
-namespace aipc::engine {
+#include "ai/IAIEngine.hpp"
 
-    // Forward declaration to hide implementation details
+namespace aipc::ai {
+
     struct YoloV5Context;
 
     class YoloV5Engine : public IAIEngine {
@@ -20,4 +21,4 @@ namespace aipc::engine {
         std::unique_ptr<YoloV5Context> ctx_;
     };
 
-} // namespace aipc::engine
+} // namespace aipc::ai

@@ -1,14 +1,12 @@
 #pragma once
+
 #include <memory>
 #include <mutex>
+
 #include "IAIEngine.hpp"
 #include "NoAIEngine.hpp"
-// Forward declarations or include headers for other engines
-// We will include them in the cpp file or here if we use them in SwitchModel
-// For simplicity, we'll include them here, but we haven't created them yet.
-// So I will comment them out for now and uncomment later, or just create empty files first.
 
-namespace aipc::engine {
+namespace aipc::ai {
 
     enum class ModelType { NONE, YOLOV5, RETINAFACE };
 
@@ -30,8 +28,9 @@ namespace aipc::engine {
 
         std::string GetCurrentModelName() {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (current_engine_)
+            if (current_engine_) {
                 return current_engine_->GetName();
+            }
             return "None";
         }
 
@@ -42,4 +41,4 @@ namespace aipc::engine {
         std::mutex mutex_;
     };
 
-} // namespace aipc::engine
+} // namespace aipc::ai

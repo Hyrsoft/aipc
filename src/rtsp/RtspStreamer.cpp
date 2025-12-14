@@ -1,19 +1,19 @@
 #include "RtspStreamer.hpp"
 
-#include <iostream>
+#include <spdlog/spdlog.h>
 
 namespace aipc::rtsp {
 
     RtspStreamer::RtspStreamer(int port, std::string path) : port_(port), path_(std::move(path)) {
         demo_ = create_rtsp_demo(port_);
         if (!demo_) {
-            std::cerr << "[aipc] RTSP create_rtsp_demo failed" << std::endl;
+            SPDLOG_ERROR("RTSP create_rtsp_demo failed");
             return;
         }
 
         session_ = rtsp_new_session(demo_, path_.c_str());
         if (!session_) {
-            std::cerr << "[aipc] RTSP rtsp_new_session failed" << std::endl;
+            SPDLOG_ERROR("RTSP rtsp_new_session failed");
             return;
         }
     }

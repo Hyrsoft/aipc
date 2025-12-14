@@ -1,8 +1,10 @@
 #pragma once
-#include <memory>
-#include "IAIEngine.hpp"
 
-namespace aipc::engine {
+#include <memory>
+
+#include "ai/IAIEngine.hpp"
+
+namespace aipc::ai {
 
     struct RetinaFaceContext;
 
@@ -19,4 +21,4 @@ namespace aipc::engine {
         std::unique_ptr<RetinaFaceContext> ctx_;
     };
 
-} // namespace aipc::engine
+} // namespace aipc::ai

@@ -1,15 +1,19 @@
 #include "RetinaFaceEngine.hpp"
-#include <iostream>
+
 #include <math.h>
 #include <opencv2/imgproc.hpp>
 #include <stdlib.h>
 #include <string.h>
+
+#include <spdlog/spdlog.h>
+
 #include "rknn_api.h"
-#include "rknn_box_priors.h"
 
-namespace aipc::engine {
+// NOTE: this header is huge. Keep it in src/engine to avoid a massive move/patch.
+#include "engine/rknn_box_priors.h"
 
-    // Define internal structures to avoid conflicts with YOLOv5
+namespace aipc::ai {
+
     typedef struct {
         int left;
         int top;
@@ -48,14 +52,12 @@ namespace aipc::engine {
         bool is_quant;
     } rf_app_context_t;
 
-    // Helper functions
     static void dump_tensor_attr(rknn_tensor_attr *attr) {
-        printf("  index=%d, name=%s, n_dims=%d, dims=[%d, %d, %d, %d], n_elems=%d, size=%d, fmt=%s, type=%s, "
-               "qnt_type=%s, "
-               "zp=%d, scale=%f\n",
-               attr->index, attr->name, attr->n_dims, attr->dims[0], attr->dims[1], attr->dims[2], attr->dims[3],
-               attr->n_elems, attr->size, get_format_string(attr->fmt), get_type_string(attr->type),
-               get_qnt_type_string(attr->qnt_type), attr->zp, attr->scale);
+        SPDLOG_DEBUG("tensor attr index={} name={} n_dims={} dims=[{}, {}, {}, {}] n_elems={} size={} fmt={} type={} "
+                     "qnt_type={} zp={} scale={}",
+                     attr->index, attr->name ? attr->name : "", attr->n_dims, attr->dims[0], attr->dims[1],
+                     attr->dims[2], attr->dims[3], attr->n_elems, attr->size, get_format_string(attr->fmt),
+                     get_type_string(attr->type), get_qnt_type_string(attr->qnt_type), attr->zp, attr->scale);
     }
 
     static float CalculateOverlap(float xmin0, float ymin0, float xmax0, float ymax0, float xmin1, float ymin1,
@@ -131,19 +133,15 @@ namespace aipc::engine {
         return f;
     }
 
-    static int8_t qnt_f32_to_affine(float f32, int32_t zp, float scale) {
-        float dst_val = (f32 / scale) + zp;
-        int8_t res = (int8_t) __clip(dst_val, -128, 127);
-        return res;
-    }
-
     static float deqnt_affine_to_f32(int8_t qnt, int32_t zp, float scale) { return ((float) qnt - (float) zp) * scale; }
 
     static int clamp(float x, int min, int max) {
-        if (x > max)
+        if (x > max) {
             return max;
-        if (x < min)
+        }
+        if (x < min) {
             return min;
+        }
         return x;
     }
 
@@ -186,14 +184,14 @@ namespace aipc::engine {
 
         ret = rknn_init(&ctx, (char *) model_path.c_str(), 0, 0, NULL);
         if (ret < 0) {
-            printf("rknn_init fail! ret=%d\n", ret);
+            SPDLOG_ERROR("rknn_init fail! ret={}", ret);
             return -1;
         }
 
         rknn_input_output_num io_num;
         ret = rknn_query(ctx, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
         if (ret != RKNN_SUCC) {
-            printf("rknn_query fail! ret=%d\n", ret);
+            SPDLOG_ERROR("rknn_query fail! ret={}", ret);
             return -1;
         }
 
@@ -203,7 +201,7 @@ namespace aipc::engine {
             input_attrs[i].index = i;
             ret = rknn_query(ctx, RKNN_QUERY_NATIVE_INPUT_ATTR, &(input_attrs[i]), sizeof(rknn_tensor_attr));
             if (ret != RKNN_SUCC) {
-                printf("rknn_query fail! ret=%d\n", ret);
+                SPDLOG_ERROR("rknn_query fail! ret={}", ret);
                 return -1;
             }
             dump_tensor_attr(&(input_attrs[i]));
@@ -215,7 +213,7 @@ namespace aipc::engine {
             output_attrs[i].index = i;
             ret = rknn_query(ctx, RKNN_QUERY_NATIVE_NHWC_OUTPUT_ATTR, &(output_attrs[i]), sizeof(rknn_tensor_attr));
             if (ret != RKNN_SUCC) {
-                printf("rknn_query fail! ret=%d\n", ret);
+                SPDLOG_ERROR("rknn_query fail! ret={}", ret);
                 return -1;
             }
             dump_tensor_attr(&(output_attrs[i]));
@@ -227,7 +225,7 @@ namespace aipc::engine {
 
         ret = rknn_set_io_mem(ctx, ctx_->app_ctx.input_mems[0], &input_attrs[0]);
         if (ret < 0) {
-            printf("input_mems rknn_set_io_mem fail! ret=%d\n", ret);
+            SPDLOG_ERROR("input_mems rknn_set_io_mem fail! ret={}", ret);
             return -1;
         }
 
@@ -235,18 +233,13 @@ namespace aipc::engine {
             ctx_->app_ctx.output_mems[i] = rknn_create_mem(ctx, output_attrs[i].size_with_stride);
             ret = rknn_set_io_mem(ctx, ctx_->app_ctx.output_mems[i], &output_attrs[i]);
             if (ret < 0) {
-                printf("output_mems rknn_set_io_mem fail! ret=%d\n", ret);
+                SPDLOG_ERROR("output_mems rknn_set_io_mem fail! ret={}", ret);
                 return -1;
             }
         }
 
         ctx_->app_ctx.rknn_ctx = ctx;
-
-        if (output_attrs[0].qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC) {
-            ctx_->app_ctx.is_quant = true;
-        } else {
-            ctx_->app_ctx.is_quant = false;
-        }
+        ctx_->app_ctx.is_quant = (output_attrs[0].qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC);
 
         ctx_->app_ctx.io_num = io_num;
         ctx_->app_ctx.input_attrs = (rknn_tensor_attr *) malloc(io_num.n_input * sizeof(rknn_tensor_attr));
@@ -268,20 +261,20 @@ namespace aipc::engine {
     }
 
     int RetinaFaceEngine::Inference(const cv::Mat &img, std::vector<ObjectDet> &results) {
-        if (ctx_->app_ctx.rknn_ctx == 0)
+        if (ctx_->app_ctx.rknn_ctx == 0) {
             return -1;
+        }
 
         int width = ctx_->app_ctx.model_width;
         int height = ctx_->app_ctx.model_height;
 
         cv::Mat resized_img;
         cv::resize(img, resized_img, cv::Size(width, height));
-
         memcpy(ctx_->app_ctx.input_mems[0]->virt_addr, resized_img.data, width * height * 3);
 
         int ret = rknn_run(ctx_->app_ctx.rknn_ctx, nullptr);
         if (ret < 0) {
-            printf("rknn_run fail! ret=%d\n", ret);
+            SPDLOG_ERROR("rknn_run fail! ret={}", ret);
             return -1;
         }
 
@@ -356,7 +349,6 @@ namespace aipc::engine {
         }
 
         quick_sort_indice_inverse(props, 0, validCount - 1, filter_indices);
-
         nms(validCount, loc_fp32, filter_indices, 0.2, width, height);
 
         results.clear();
@@ -376,7 +368,6 @@ namespace aipc::engine {
             float x2 = loc_fp32[n * 4 + 2] * width;
             float y2 = loc_fp32[n * 4 + 3] * height;
 
-            // Scale back to original image
             float scaleX = (float) img.cols / (float) width;
             float scaleY = (float) img.rows / (float) height;
 
@@ -385,7 +376,7 @@ namespace aipc::engine {
                                (int) ((clamp(x2, 0, width) - clamp(x1, 0, width)) * scaleX),
                                (int) ((clamp(y2, 0, height) - clamp(y1, 0, height)) * scaleY));
             det.score = props[i];
-            det.class_id = 0; // Face
+            det.class_id = 0;
             det.label = "face";
 
             for (int j = 0; j < 5; j++) {
@@ -401,4 +392,4 @@ namespace aipc::engine {
         return 0;
     }
 
-} // namespace aipc::engine
+} // namespace aipc::ai

@@ -1,14 +1,15 @@
 #include "SelfTest.hpp"
 
-#include <iostream>
 #include <memory>
+
+#include <spdlog/spdlog.h>
 
 #include <rtc/rtc.hpp>
 
 namespace aipc::webrtc {
 
     SelfTestResult RunSelfTest() {
-        std::cout << "[aipc] WebRTC self-test starting..." << std::endl;
+        SPDLOG_INFO("WebRTC self-test starting...");
 
         try {
             rtc::Configuration config;
@@ -17,11 +18,11 @@ namespace aipc::webrtc {
             auto pc = std::make_shared<rtc::PeerConnection>(config);
 
             pc->onStateChange([](rtc::PeerConnection::State state) {
-                std::cout << "[aipc] WebRTC State: " << static_cast<int>(state) << std::endl;
+                SPDLOG_DEBUG("WebRTC State: {}", static_cast<int>(state));
             });
 
             auto dc = pc->createDataChannel("test-channel");
-            dc->onOpen([]() { std::cout << "[aipc] DataChannel is OPEN!" << std::endl; });
+            dc->onOpen([]() { SPDLOG_INFO("DataChannel is OPEN!"); });
 
             return SelfTestResult{true, "WebRTC Library initialized successfully"};
         } catch (const std::exception &e) {

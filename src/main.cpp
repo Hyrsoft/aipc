@@ -13,16 +13,22 @@
 #include <unistd.h>
 #include <vector>
 #include <thread>
-#include <iostream>
 #include <memory>
 #include <chrono>
 
-#include "luckfox_mpi.h"
-#include "vi.h"
-#include "CommandListener.hpp"
-#include "SelfTest.hpp"
-#include "RtspStreamer.hpp"
-#include "AIManager.hpp"
+#include <spdlog/spdlog.h>
+
+#include "rkmpi/luckfox_mpi.h"
+#include "vi/vi.h"
+
+#include "comm/CommandListener.hpp"
+#include "webrtc/SelfTest.hpp"
+#include "rtsp/RtspStreamer.hpp"
+
+#include "ai/AIManager.hpp"
+
+#include "osd/Osd.hpp"
+#include "utils/Logging.hpp"
 
 #include "opencv2/core/core.hpp"
 #include "opencv2/highgui/highgui.hpp"
@@ -35,12 +41,14 @@ int width    = DISP_WIDTH;
 int height   = DISP_HEIGHT;
 
 int main(int argc, char *argv[]) {
+    aipc::logging::Init();
+
     const auto webrtc_test = aipc::webrtc::RunSelfTest();
     if (!webrtc_test.ok) {
-        std::cerr << "[aipc] " << webrtc_test.message << std::endl;
+        SPDLOG_ERROR("{}", webrtc_test.message);
         return -1;
     }
-    std::cout << "[aipc] " << webrtc_test.message << std::endl;
+    SPDLOG_INFO("{}", webrtc_test.message);
 
     // Stop existing rkipc or other processes if needed
     // 清理默认的ipc进程
@@ -50,18 +58,18 @@ int main(int argc, char *argv[]) {
     
     // Initialize AI Manager
     // Default to YOLOv5
-    aipc::engine::AIManager::Instance().SwitchModel(aipc::engine::ModelType::YOLOV5, "./model/yolov5.rknn");
+    aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::YOLOV5, "./model/yolov5.rknn");
 
     // 启动命令监听（UDP:9000）
     aipc::comm::CommandListener command_listener(9000, [](const std::string& cmd) {
-        std::cout << "[aipc] Received command: " << cmd << std::endl;
+        SPDLOG_INFO("Received command: {}", cmd);
 
         if (cmd.find("YOLOV5") != std::string::npos || cmd.find("yolov5") != std::string::npos) {
-            aipc::engine::AIManager::Instance().SwitchModel(aipc::engine::ModelType::YOLOV5, "./model/yolov5.rknn");
+            aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::YOLOV5, "./model/yolov5.rknn");
         } else if (cmd.find("RETINAFACE") != std::string::npos || cmd.find("retinaface") != std::string::npos) {
-            aipc::engine::AIManager::Instance().SwitchModel(aipc::engine::ModelType::RETINAFACE, "./model/retinaface.rknn");
+            aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::RETINAFACE, "./model/retinaface.rknn");
         } else if (cmd.find("NONE") != std::string::npos || cmd.find("none") != std::string::npos) {
-            aipc::engine::AIManager::Instance().SwitchModel(aipc::engine::ModelType::NONE);
+            aipc::ai::AIManager::Instance().SwitchModel(aipc::ai::ModelType::NONE);
         }
     });
     command_listener.start();
@@ -80,7 +88,7 @@ int main(int argc, char *argv[]) {
     PoolCfg.u32MBCnt = 4; // Increase buffer count to avoid tearing/ghosting
     PoolCfg.enAllocType = MB_ALLOC_TYPE_DMA;
     MB_POOL src_Pool = RK_MPI_MB_CreatePool(&PoolCfg);
-    printf("Create Pool success !\n");    
+    SPDLOG_INFO("Create Pool success");
 
     // Build h264_frame structure (common parts)
     VIDEO_FRAME_INFO_S h264_frame;
@@ -102,14 +110,14 @@ int main(int argc, char *argv[]) {
 
     // MPI Init
     if (RK_MPI_SYS_Init() != RK_SUCCESS) {
-        printf("rk mpi sys init fail!");
+        SPDLOG_ERROR("rk mpi sys init fail!");
         return -1;
     }
 
     // RTSP Init
     aipc::rtsp::RtspStreamer rtsp_streamer(554, "/live/0");
     if (!rtsp_streamer.ok() || !rtsp_streamer.startH264()) {
-        std::cerr << "[aipc] RTSP init failed" << std::endl;
+        SPDLOG_ERROR("RTSP init failed");
         return -1;
     }
     
@@ -121,9 +129,9 @@ int main(int argc, char *argv[]) {
     RK_CODEC_ID_E enCodecType = RK_VIDEO_ID_AVC;
     venc_init(0, width, height, enCodecType);
 
-    printf("venc init success\n");    
+    SPDLOG_INFO("venc init success");
     
-    std::vector<aipc::engine::ObjectDet> results;
+    std::vector<aipc::ai::ObjectDet> results;
 
     while(1)
     {    
@@ -147,24 +155,10 @@ int main(int argc, char *argv[]) {
             // cv::resize(bgr, frame, cv::Size(width ,height), 0, 0, cv::INTER_LINEAR); // Already same size
             
             // Inference
-            aipc::engine::AIManager::Instance().RunInference(bgr, results);
+            aipc::ai::AIManager::Instance().RunInference(bgr, results);
 
             // Draw Results
-            for(const auto& det : results)
-            {
-                cv::rectangle(bgr, det.box, cv::Scalar(0, 255, 0), 3);
-                
-                char text[32];
-                sprintf(text, "%s %.1f%%", det.label.c_str(), det.score * 100);
-                cv::putText(bgr, text, cv::Point(det.box.x, det.box.y - 8),
-                            cv::FONT_HERSHEY_SIMPLEX, 1,
-                            cv::Scalar(0, 255, 0), 2);
-                
-                // Draw landmarks if any (RetinaFace)
-                for (const auto& pt : det.landmarks) {
-                    cv::circle(bgr, pt, 2, cv::Scalar(0, 0, 255), -1);
-                }
-            }
+            aipc::osd::DrawDetections(bgr, results);
         }
         
         // Encode H264
@@ -186,11 +180,11 @@ int main(int argc, char *argv[]) {
         // Release Frame
         s32Ret = RK_MPI_VI_ReleaseChnFrame(0, 0, &stViFrame);
         if (s32Ret != RK_SUCCESS) {
-            printf("RK_MPI_VI_ReleaseChnFrame fail %x\n", s32Ret);
+            SPDLOG_WARN("RK_MPI_VI_ReleaseChnFrame fail {:x}", static_cast<unsigned int>(s32Ret));
         }
         s32Ret = RK_MPI_VENC_ReleaseStream(0, &stFrame);
         if (s32Ret != RK_SUCCESS) {
-            printf("RK_MPI_VENC_ReleaseStream fail %x\n", s32Ret);
+            SPDLOG_WARN("RK_MPI_VENC_ReleaseStream fail {:x}", static_cast<unsigned int>(s32Ret));
         }
     }
 

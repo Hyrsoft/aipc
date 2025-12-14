@@ -32,6 +32,13 @@ set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(thirdparty/libdatachannel)
 
+# spdlog
+set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
+set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(thirdparty/spdlog EXCLUDE_FROM_ALL)
+
 # Collect source files
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
         "src/*.c"
@@ -50,7 +57,8 @@ add_compile_options(-g -Wall
 target_include_directories(${PROJECT_NAME} PRIVATE
         ${OpenCV_INCLUDE_DIRS}
 
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+
         ${CMAKE_CURRENT_SOURCE_DIR}/src/comm
         ${CMAKE_CURRENT_SOURCE_DIR}/src/rtsp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/utils
@@ -92,6 +100,7 @@ target_link_libraries(${PROJECT_NAME}
         rtsp
         rga
         datachannel
+        spdlog::spdlog_header_only
 )
 
 # Install

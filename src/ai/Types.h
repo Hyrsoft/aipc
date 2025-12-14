@@ -1,9 +1,11 @@
 #pragma once
+
 #include <opencv2/core.hpp>
+
 #include <string>
 #include <vector>
 
-namespace aipc::engine {
+namespace aipc::ai {
 
     struct ObjectDet {
         cv::Rect box; // 检测框 (基于原图坐标)
@@ -13,4 +15,4 @@ namespace aipc::engine {
         std::vector<cv::Point2f> landmarks; // 关键点 (RetinaFace专用, YOLO为空即可)
     };
 
-} // namespace aipc::engine
+} // namespace aipc::ai

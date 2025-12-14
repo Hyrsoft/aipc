@@ -7,7 +7,8 @@
 
 #include <cerrno>
 #include <cstring>
-#include <iostream>
+
+#include <spdlog/spdlog.h>
 
 namespace aipc::comm {
 
@@ -22,7 +23,7 @@ namespace aipc::comm {
 
         sockfd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
         if (sockfd_ < 0) {
-            std::cerr << "[aipc] CommandListener socket() failed: " << std::strerror(errno) << std::endl;
+            SPDLOG_ERROR("CommandListener socket() failed: {}", std::strerror(errno));
             running_ = false;
             return false;
         }
@@ -34,7 +35,7 @@ namespace aipc::comm {
         servaddr.sin_port = htons(static_cast<uint16_t>(port_));
 
         if (::bind(sockfd_, reinterpret_cast<const sockaddr *>(&servaddr), sizeof(servaddr)) < 0) {
-            std::cerr << "[aipc] CommandListener bind() failed: " << std::strerror(errno) << std::endl;
+            SPDLOG_ERROR("CommandListener bind() failed: {}", std::strerror(errno));
             ::close(sockfd_);
             sockfd_ = -1;
             running_ = false;
@@ -61,7 +62,7 @@ namespace aipc::comm {
     }
 
     void CommandListener::run() {
-        std::cout << "[aipc] CommandListener started on port " << port_ << std::endl;
+        SPDLOG_INFO("CommandListener started on port {}", port_);
 
         while (running_) {
             char buffer[1024];

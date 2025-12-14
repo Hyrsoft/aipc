@@ -1,7 +1,9 @@
 #include "vi.h"
 
+#include <spdlog/spdlog.h>
+
 int vi_dev_init() {
-    printf("%s\n", __func__);
+    SPDLOG_DEBUG("{}", __func__);
     int ret = 0;
     int devId = 0;
     int pipeId = devId;
@@ -16,11 +18,11 @@ int vi_dev_init() {
         // 0-1.config dev
         ret = RK_MPI_VI_SetDevAttr(devId, &stDevAttr);
         if (ret != RK_SUCCESS) {
-            printf("RK_MPI_VI_SetDevAttr %x\n", ret);
+            SPDLOG_ERROR("RK_MPI_VI_SetDevAttr {:x}", static_cast<unsigned int>(ret));
             return -1;
         }
     } else {
-        printf("RK_MPI_VI_SetDevAttr already\n");
+        SPDLOG_INFO("RK_MPI_VI_SetDevAttr already");
     }
     // 1.get dev enable status
     ret = RK_MPI_VI_GetDevIsEnable(devId);
@@ -28,7 +30,7 @@ int vi_dev_init() {
         // 1-2.enable dev
         ret = RK_MPI_VI_EnableDev(devId);
         if (ret != RK_SUCCESS) {
-            printf("RK_MPI_VI_EnableDev %x\n", ret);
+            SPDLOG_ERROR("RK_MPI_VI_EnableDev {:x}", static_cast<unsigned int>(ret));
             return -1;
         }
         // 1-3.bind dev/pipe
@@ -36,11 +38,11 @@ int vi_dev_init() {
         stBindPipe.PipeId[0] = pipeId;
         ret = RK_MPI_VI_SetDevBindPipe(devId, &stBindPipe);
         if (ret != RK_SUCCESS) {
-            printf("RK_MPI_VI_SetDevBindPipe %x\n", ret);
+            SPDLOG_ERROR("RK_MPI_VI_SetDevBindPipe {:x}", static_cast<unsigned int>(ret));
             return -1;
         }
     } else {
-        printf("RK_MPI_VI_EnableDev already\n");
+        SPDLOG_INFO("RK_MPI_VI_EnableDev already");
     }
 
     return 0;
@@ -62,7 +64,7 @@ int vi_chn_init(int channelId, int width, int height) {
     ret = RK_MPI_VI_SetChnAttr(0, channelId, &vi_chn_attr);
     ret |= RK_MPI_VI_EnableChn(0, channelId);
     if (ret) {
-        printf("ERROR: create VI error! ret=%d\n", ret);
+        SPDLOG_ERROR("create VI error ret={}", ret);
         return ret;
     }
 

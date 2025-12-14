@@ -1,18 +1,21 @@
 #include "YoloV5Engine.hpp"
-#include <iostream>
+
 #include <opencv2/imgproc.hpp>
-#include "postprocess.h"
+
+#include <spdlog/spdlog.h>
+
+#include "utils/postprocess.h"
 
 // Helper functions from yolov5.cpp
 static void dump_tensor_attr(rknn_tensor_attr *attr) {
-    printf("  index=%d, name=%s, n_dims=%d, dims=[%d, %d, %d, %d], n_elems=%d, size=%d, fmt=%s, type=%s, qnt_type=%s, "
-           "zp=%d, scale=%f\n",
-           attr->index, attr->name, attr->n_dims, attr->dims[0], attr->dims[1], attr->dims[2], attr->dims[3],
-           attr->n_elems, attr->size, get_format_string(attr->fmt), get_type_string(attr->type),
-           get_qnt_type_string(attr->qnt_type), attr->zp, attr->scale);
+    SPDLOG_DEBUG("tensor attr index={} name={} n_dims={} dims=[{}, {}, {}, {}] n_elems={} size={} fmt={} type={} "
+                 "qnt_type={} zp={} scale={}",
+                 attr->index, attr->name ? attr->name : "", attr->n_dims, attr->dims[0], attr->dims[1], attr->dims[2],
+                 attr->dims[3], attr->n_elems, attr->size, get_format_string(attr->fmt), get_type_string(attr->type),
+                 get_qnt_type_string(attr->qnt_type), attr->zp, attr->scale);
 }
 
-namespace aipc::engine {
+namespace aipc::ai {
 
     struct YoloV5Context {
         rknn_app_context_t app_ctx;
@@ -29,7 +32,6 @@ namespace aipc::engine {
 
     YoloV5Engine::~YoloV5Engine() {
         if (ctx_->app_ctx.rknn_ctx != 0) {
-            // Release memory
             if (ctx_->app_ctx.input_attrs != NULL) {
                 free(ctx_->app_ctx.input_attrs);
                 ctx_->app_ctx.input_attrs = NULL;
@@ -59,74 +61,62 @@ namespace aipc::engine {
 
         ret = rknn_init(&ctx, (char *) model_path.c_str(), 0, 0, NULL);
         if (ret < 0) {
-            printf("rknn_init fail! ret=%d\n", ret);
+            SPDLOG_ERROR("rknn_init fail! ret={}", ret);
             return -1;
         }
 
-        // Get Model Input Output Number
         rknn_input_output_num io_num;
         ret = rknn_query(ctx, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
         if (ret != RKNN_SUCC) {
-            printf("rknn_query fail! ret=%d\n", ret);
+            SPDLOG_ERROR("rknn_query fail! ret={}", ret);
             return -1;
         }
 
-        // Get Model Input Info
         rknn_tensor_attr input_attrs[io_num.n_input];
         memset(input_attrs, 0, sizeof(input_attrs));
         for (int i = 0; i < io_num.n_input; i++) {
             input_attrs[i].index = i;
             ret = rknn_query(ctx, RKNN_QUERY_NATIVE_INPUT_ATTR, &(input_attrs[i]), sizeof(rknn_tensor_attr));
             if (ret != RKNN_SUCC) {
-                printf("rknn_query fail! ret=%d\n", ret);
+                SPDLOG_ERROR("rknn_query fail! ret={}", ret);
                 return -1;
             }
             dump_tensor_attr(&(input_attrs[i]));
         }
 
-        // Get Model Output Info
         rknn_tensor_attr output_attrs[io_num.n_output];
         memset(output_attrs, 0, sizeof(output_attrs));
         for (int i = 0; i < io_num.n_output; i++) {
             output_attrs[i].index = i;
             ret = rknn_query(ctx, RKNN_QUERY_NATIVE_NHWC_OUTPUT_ATTR, &(output_attrs[i]), sizeof(rknn_tensor_attr));
             if (ret != RKNN_SUCC) {
-                printf("rknn_query fail! ret=%d\n", ret);
+                SPDLOG_ERROR("rknn_query fail! ret={}", ret);
                 return -1;
             }
             dump_tensor_attr(&(output_attrs[i]));
         }
 
-        // default input type is int8 (normalize and quantize need compute in outside)
-        // if set uint8, will fuse normalize and quantize to npu
         input_attrs[0].type = RKNN_TENSOR_UINT8;
         input_attrs[0].fmt = RKNN_TENSOR_NHWC;
         ctx_->app_ctx.input_mems[0] = rknn_create_mem(ctx, input_attrs[0].size_with_stride);
 
-        // Set input tensor memory
         ret = rknn_set_io_mem(ctx, ctx_->app_ctx.input_mems[0], &input_attrs[0]);
         if (ret < 0) {
-            printf("input_mems rknn_set_io_mem fail! ret=%d\n", ret);
+            SPDLOG_ERROR("input_mems rknn_set_io_mem fail! ret={}", ret);
             return -1;
         }
 
-        // Set output tensor memory
         for (uint32_t i = 0; i < io_num.n_output; ++i) {
             ctx_->app_ctx.output_mems[i] = rknn_create_mem(ctx, output_attrs[i].size_with_stride);
             ret = rknn_set_io_mem(ctx, ctx_->app_ctx.output_mems[i], &output_attrs[i]);
             if (ret < 0) {
-                printf("output_mems rknn_set_io_mem fail! ret=%d\n", ret);
+                SPDLOG_ERROR("output_mems rknn_set_io_mem fail! ret={}", ret);
                 return -1;
             }
         }
 
         ctx_->app_ctx.rknn_ctx = ctx;
-
-        if (output_attrs[0].qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC) {
-            ctx_->app_ctx.is_quant = true;
-        } else {
-            ctx_->app_ctx.is_quant = false;
-        }
+        ctx_->app_ctx.is_quant = (output_attrs[0].qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC);
 
         ctx_->app_ctx.io_num = io_num;
         ctx_->app_ctx.input_attrs = (rknn_tensor_attr *) malloc(io_num.n_input * sizeof(rknn_tensor_attr));
@@ -152,10 +142,10 @@ namespace aipc::engine {
     }
 
     int YoloV5Engine::Inference(const cv::Mat &img, std::vector<ObjectDet> &results) {
-        if (ctx_->app_ctx.rknn_ctx == 0)
+        if (ctx_->app_ctx.rknn_ctx == 0) {
             return -1;
+        }
 
-        // Letterbox
         float scaleX = (float) ctx_->model_width / (float) img.cols;
         float scaleY = (float) ctx_->model_height / (float) img.rows;
         ctx_->scale = scaleX < scaleY ? scaleX : scaleY;
@@ -172,22 +162,17 @@ namespace aipc::engine {
         cv::Rect roi(ctx_->leftPadding, ctx_->topPadding, inputWidth, inputHeight);
         inputScale.copyTo(letterboxImage(roi));
 
-        // Copy to input memory
         memcpy(ctx_->app_ctx.input_mems[0]->virt_addr, letterboxImage.data, ctx_->model_width * ctx_->model_height * 3);
 
-        // Run inference
         int ret = rknn_run(ctx_->app_ctx.rknn_ctx, nullptr);
         if (ret < 0) {
-            printf("rknn_run fail! ret=%d\n", ret);
+            SPDLOG_ERROR("rknn_run fail! ret={}", ret);
             return -1;
         }
 
-        // Post process
         object_detect_result_list od_results;
-        // Use default thresholds
         post_process(&ctx_->app_ctx, ctx_->app_ctx.output_mems, BOX_THRESH, NMS_THRESH, &od_results);
 
-        // Convert results
         results.clear();
         for (int i = 0; i < od_results.count; i++) {
             object_detect_result *det_result = &(od_results.results[i]);
@@ -197,7 +182,6 @@ namespace aipc::engine {
             int x2 = det_result->box.right;
             int y2 = det_result->box.bottom;
 
-            // Map coordinates back to original image
             int mx1 = x1 - ctx_->leftPadding;
             int my1 = y1 - ctx_->topPadding;
             int mx2 = x2 - ctx_->leftPadding;
@@ -219,4 +203,4 @@ namespace aipc::engine {
         return 0;
     }
 
-} // namespace aipc::engine
+} // namespace aipc::ai
