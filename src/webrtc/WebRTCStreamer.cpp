@@ -122,14 +122,21 @@ namespace aipc::webrtc {
 
         pc_->onStateChange([this](rtc::PeerConnection::State state) {
             const char *state_str[] = {"New", "Connecting", "Connected", "Disconnected", "Failed", "Closed"};
-            SPDLOG_INFO("WebRTC PeerConnection state: {}", state_str[static_cast<int>(state)]);
+            SPDLOG_WARN("🔌 [PeerConnection State Change] {}", state_str[static_cast<int>(state)]);
 
             if (state == rtc::PeerConnection::State::Connected) {
+                SPDLOG_WARN("✅ [PeerConnection] Successfully connected!");
                 connected_ = true;
             } else if (state == rtc::PeerConnection::State::Disconnected ||
                        state == rtc::PeerConnection::State::Failed || state == rtc::PeerConnection::State::Closed) {
+                SPDLOG_WARN("❌ [PeerConnection] Connection lost or failed");
                 connected_ = false;
             }
+        });
+        
+        pc_->onGatheringStateChange([this](rtc::PeerConnection::GatheringState state) {
+            const char *state_str[] = {"New", "InProgress", "Complete"};
+            SPDLOG_WARN("📡 [ICE Gathering State] {}", state_str[static_cast<int>(state)]);
         });
 
         pc_->onLocalDescription([this](rtc::Description description) {
@@ -215,7 +222,18 @@ namespace aipc::webrtc {
 
             rtc::Configuration config;
             config.bindAddress = "0.0.0.0";
+            
+            // 🟢 添加多个 STUN 服务器以解决 mDNS 隐私保护问题
+            // 这强制浏览器生成 Server Reflexive 候选者（真实 IP）而非隐藏的 .local 地址
             config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+            config.iceServers.emplace_back("stun:stun1.l.google.com:19302");
+            config.iceServers.emplace_back("stun:stun2.l.google.com:19302");
+            
+            // 限制 UDP 端口范围以避免防火墙问题（可选，但在某些网络环境中有帮助）
+            config.portRangeBegin = 40000;
+            config.portRangeEnd = 40100;
+            
+            SPDLOG_INFO("PeerConnection config: STUN servers configured, UDP port range: 40000-40100");
 
             pc_ = std::make_shared<rtc::PeerConnection>(config);
             if (!pc_) {
@@ -325,14 +343,22 @@ namespace aipc::webrtc {
             pending.sdp_mid = sdp_mid;
             pending.sdp_mline_index = sdp_mline_index;
             pending_candidates_.push_back(std::move(pending));
-            SPDLOG_INFO("Buffered remote ICE candidate (pc not ready yet). buffered={}", pending_candidates_.size());
+            SPDLOG_WARN("📨 [ICE Candidate] Buffered (PC not ready). total buffered={}", pending_candidates_.size());
             return true;
         }
 
         const std::string mid = sdp_mid.empty() ? "video" : sdp_mid;
         rtc::Candidate cand(candidate, mid);
         pc_->addRemoteCandidate(cand);
-        SPDLOG_INFO("Added remote ICE candidate: {} (mid: {})", candidate.substr(0, 80), mid);
+        
+        // Extract candidate type and address for logging
+        std::string cand_type = "unknown";
+        if (candidate.find("typ host") != std::string::npos) cand_type = "host";
+        else if (candidate.find("typ srflx") != std::string::npos) cand_type = "srflx (Server Reflexive)";
+        else if (candidate.find("typ prflx") != std::string::npos) cand_type = "prflx (Peer Reflexive)";
+        else if (candidate.find("typ relay") != std::string::npos) cand_type = "relay";
+        
+        SPDLOG_WARN("📨 [ICE Candidate] Added: type={}, {}", cand_type, candidate.substr(0, 100));
         return true;
     }
 

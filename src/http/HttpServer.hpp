@@ -4,6 +4,7 @@
 #include <thread>
 #include <memory>
 #include <atomic>
+#include <chrono>
 
 namespace httplib {
     class Server;

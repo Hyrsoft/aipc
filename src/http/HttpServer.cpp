@@ -19,38 +19,37 @@ namespace aipc {
             }
 
             // Mount the document root to the root path
-            // set_mount_point works for static files
             if (!server_->set_mount_point("/", doc_root)) {
                 SPDLOG_ERROR("Failed to mount {} to /", doc_root);
                 return false;
             }
 
-            // Also handle the case where the user requests / without index.html
-            // httplib might handle this automatically if set_mount_point is used, 
-            // but let's verify or just rely on it. 
-            // Actually set_mount_point serves files from that directory.
-            
             running_ = true;
             server_thread_ = std::thread([this, port]() {
-                SPDLOG_INFO("HTTP Server starting on port {}", port);
-                // Listen on all interfaces
-                server_->listen("0.0.0.0", port);
-                SPDLOG_INFO("HTTP Server stopped");
+                SPDLOG_INFO("[HTTP Server] Starting on port {}", port);
+                // Listen on all interfaces (blocking call)
+                if (server_->listen("0.0.0.0", port)) {
+                    SPDLOG_INFO("[HTTP Server] Successfully listening on port {}", port);
+                } else {
+                    SPDLOG_ERROR("[HTTP Server] Failed to listen on port {}", port);
+                }
             });
-            
-            // Detach or keep joinable? 
-            // If we want to stop it cleanly in destructor, we keep it joinable.
-            
+
+            // Give the server thread time to start listening
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
             return true;
         }
 
         void HttpServer::stop() {
             if (running_) {
+                SPDLOG_INFO("[HTTP Server] Stopping...");
                 server_->stop();
                 if (server_thread_.joinable()) {
                     server_thread_.join();
                 }
                 running_ = false;
+                SPDLOG_INFO("[HTTP Server] Stopped");
             }
         }
 

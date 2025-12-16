@@ -158,17 +158,23 @@ int main(int argc, char *argv[]) {
         }
     });
 
-    // Start WebSocket server for signaling and control
-    webrtc_streamer.start_server(8000);
-
-    // Start HTTP Server for static files
+    // Start HTTP Server for static files (Port 80 - for web interface)
     aipc::http::HttpServer http_server;
-    if (!http_server.start(80, "./www")) {
+    int http_port = 80;
+    if (!http_server.start(http_port, "./www")) {
         SPDLOG_WARN("Failed to start HTTP server on port 80, trying 8080");
-        if (!http_server.start(8080, "./www")) {
-             SPDLOG_ERROR("Failed to start HTTP server");
+        http_port = 8080;
+        if (!http_server.start(http_port, "./www")) {
+             SPDLOG_ERROR("Failed to start HTTP server on both port 80 and 8080");
         }
     }
+    SPDLOG_INFO("=====================================================");
+    SPDLOG_INFO("[WEBRTC STREAMING] Web Interface: http://<Device_IP>:{}", http_port);
+    SPDLOG_INFO("[WEBRTC STREAMING] WebSocket Signaling: ws://<Device_IP>:8000");
+    SPDLOG_INFO("=====================================================");
+
+    // Start WebSocket server for signaling and control (Port 8000 - for WebRTC)
+    webrtc_streamer.start_server(8000);
 
     const int width = cfg.width;
     const int height = cfg.height;
