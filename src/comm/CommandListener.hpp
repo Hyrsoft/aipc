@@ -8,8 +8,8 @@
 namespace aipc::comm {
 
     struct CommandMessage {
-        std::string type;      // "webrtc_offer", "webrtc_answer", "control_cmd", etc.
-        std::string payload;   // JSON payload or command data
+        std::string type; // "webrtc_offer", "webrtc_answer", "control_cmd", etc.
+        std::string payload; // JSON payload or command data
     };
 
     class CommandListener {

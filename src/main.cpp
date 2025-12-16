@@ -1,7 +1,12 @@
 #include <assert.h>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <memory>
+#include <mutex>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -9,104 +14,95 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/poll.h>
+#include <thread>
 #include <time.h>
 #include <unistd.h>
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <memory>
-#include <mutex>
-#include <thread>
 #include <vector>
 
 #include <spdlog/spdlog.h>
 
+#include <nlohmann/json.hpp>
+#include "ai/AIManager.hpp"
+// #include "comm/CommandListener.hpp"
+#include "opencv2/core/core.hpp"
+#include "opencv2/highgui/highgui.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+#include "ai/osd/Osd.hpp"
 #include "rkmpi/IspSession.hpp"
 #include "rkmpi/MbBlock.hpp"
 #include "rkmpi/MbPool.hpp"
 #include "rkmpi/MpiSystem.hpp"
 #include "rkmpi/Time.hpp"
-
-#include "vi/ViSession.hpp"
-
-#include "comm/CommandListener.hpp"
-#include "webrtc/SelfTest.hpp"
-#include "webrtc/WebRTCStreamer.hpp"
 #include "rtsp/RtspStreamer.hpp"
-
-#include <nlohmann/json.hpp>
-
-#include "ai/AIManager.hpp"
-
-#include "osd/Osd.hpp"
 #include "utils/Logging.hpp"
-
-#include "venc/VencSession.hpp"
-
-#include "opencv2/core/core.hpp"
-#include "opencv2/highgui/highgui.hpp"
-#include "opencv2/imgproc/imgproc.hpp"
+#include "video/VencSession.hpp"
+#include "video/ViSession.hpp"
+#include "webrtc/WebRTCStreamer.hpp"
 
 namespace {
 
-std::atomic<bool> g_running{true};
+    // 全局变量，判断程序是否在运行
+    std::atomic<bool> g_running{true};
 
-void HandleSignal(int) { g_running = false; }
+    void HandleSignal(int) { g_running = false; }
 
-struct AppConfig {
-    int vi_dev{0};
-    int vi_chn{0};
+    struct AppConfig {
+        int vi_dev{0};
+        int vi_chn{0};
 
-    int width{720};
-    int height{480};
+        int width{720};
+        int height{480};
 
-    int command_port{9000};
-    int rtsp_port{554};
-    const char *rtsp_path{"/live/0"};
+        int command_port{9000};
+        int rtsp_port{554};
+        const char *rtsp_path{"/live/0"};
 
-    const char *iq_dir{"/etc/iqfiles"};
-    RK_BOOL multi_sensor{RK_FALSE};
-    rk_aiq_working_mode_t hdr_mode{RK_AIQ_WORKING_MODE_NORMAL};
+        const char *iq_dir{"/etc/iqfiles"};
+        RK_BOOL multi_sensor{RK_FALSE};
+        rk_aiq_working_mode_t hdr_mode{RK_AIQ_WORKING_MODE_NORMAL};
 
-    const char *default_model_path{"./model/yolov5.rknn"};
-};
+        const char *default_model_path{"./model/yolov5.rknn"};
+    };
 
-struct ViFrameGuard {
-    int dev{0};
-    int chn{0};
-    VIDEO_FRAME_INFO_S *frame{nullptr};
-    bool active{false};
+    struct ViFrameGuard {
+        int dev{0};
+        int chn{0};
+        VIDEO_FRAME_INFO_S *frame{nullptr};
+        bool active{false};
 
-    ~ViFrameGuard() {
-        if (!active || !frame) {
-            return;
+        // 在析构函数中释放资源
+        ~ViFrameGuard() {
+            if (!active || !frame) {
+                return;
+            }
+            const auto ret = RK_MPI_VI_ReleaseChnFrame(dev, chn, frame);
+            if (ret != RK_SUCCESS) {
+                SPDLOG_WARN("RK_MPI_VI_ReleaseChnFrame fail {:x}", static_cast<unsigned int>(ret));
+            }
         }
-        const auto ret = RK_MPI_VI_ReleaseChnFrame(dev, chn, frame);
-        if (ret != RK_SUCCESS) {
-            SPDLOG_WARN("RK_MPI_VI_ReleaseChnFrame fail {:x}", static_cast<unsigned int>(ret));
-        }
-    }
-};
+    };
 
-struct VencStreamGuard {
-    int chn{0};
-    VENC_STREAM_S *stream{nullptr};
-    bool active{false};
+    struct VencStreamGuard {
+        int chn{0};
+        VENC_STREAM_S *stream{nullptr};
+        bool active{false};
 
-    ~VencStreamGuard() {
-        if (!active || !stream) {
-            return;
+        ~VencStreamGuard() {
+            if (!active || !stream) {
+                return;
+            }
+            const auto ret = RK_MPI_VENC_ReleaseStream(chn, stream);
+            if (ret != RK_SUCCESS) {
+                SPDLOG_WARN("RK_MPI_VENC_ReleaseStream fail {:x}", static_cast<unsigned int>(ret));
+            }
         }
-        const auto ret = RK_MPI_VENC_ReleaseStream(chn, stream);
-        if (ret != RK_SUCCESS) {
-            SPDLOG_WARN("RK_MPI_VENC_ReleaseStream fail {:x}", static_cast<unsigned int>(ret));
-        }
-    }
-};
+    };
 
 } // namespace
 
 int main(int argc, char *argv[]) {
+
+    // 初始化日志
     aipc::logging::init();
 
     (void) argc;
@@ -117,192 +113,77 @@ int main(int argc, char *argv[]) {
     ::signal(SIGINT, HandleSignal);
     ::signal(SIGTERM, HandleSignal);
 
-    const auto webrtc_test = aipc::webrtc::run_self_test();
-    if (!webrtc_test.ok) {
-        SPDLOG_ERROR("{}", webrtc_test.message);
-        return -1;
-    }
-    SPDLOG_INFO("{}", webrtc_test.message);
-
     // Initialize WebRTC Streamer
     auto &webrtc_streamer = aipc::webrtc::WebRTCStreamer::get_instance();
     if (!webrtc_streamer.init()) {
         SPDLOG_ERROR("Failed to initialize WebRTC Streamer");
         return -1;
     }
-    SPDLOG_INFO("WebRTC Streamer initialized");
+    SPDLOG_INFO("WebRTC Streamer 初始化成功");
 
-    // Stop existing rkipc or other processes if needed
     // 清理默认的ipc进程
     system("RkLunch-stop.sh");
 
     RK_S32 s32Ret = 0;
-    
+
     // Initialize AI Manager (default: YOLOv5)
     aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::YOLOV5, cfg.default_model_path);
 
     // 启动命令监听（UDP:9000）
     // Now supports JSON format: {"type": "webrtc_offer", "payload": "v=0\r\no=- ..."}
-    aipc::comm::CommandListener command_listener(cfg.command_port, [&](const aipc::comm::CommandMessage &msg) -> std::string {
-        SPDLOG_INFO("Received command type: '{}', payload size: {}", msg.type, msg.payload.size());
-
-        // Validate command
-        if (msg.type.empty()) {
-            SPDLOG_WARN("Empty command type received");
-            nlohmann::json error_response;
-            error_response["type"] = "error";
-            error_response["message"] = "Empty command type";
-            return error_response.dump();
-        }
-
-        if (msg.type == "webrtc_offer") {
-            // Validate payload
-            if (msg.payload.empty()) {
-                SPDLOG_ERROR("WebRTC offer received with empty payload");
-                nlohmann::json error_response;
-                error_response["type"] = "error";
-                error_response["message"] = "Empty SDP payload";
-                return error_response.dump();
-            }
-
-            SPDLOG_INFO("Processing WebRTC Offer (payload size: {})", msg.payload.size());
-            std::string answer = webrtc_streamer.handle_offer(msg.payload);
+    // Set up control callback for WebRTC
+    webrtc_streamer.set_control_callback([](const std::string &msg_str) {
+        try {
+            auto json = nlohmann::json::parse(msg_str);
+            std::string type = json.value("type", "");
             
-            if (answer.empty()) {
-                SPDLOG_ERROR("Failed to generate WebRTC Answer");
-                // Return error response
-                nlohmann::json error_response;
-                error_response["type"] = "error";
-                error_response["message"] = "Failed to generate Answer";
-                return error_response.dump();
+            if (type == "control") {
+                std::string cmd = json.value("command", "");
+                SPDLOG_INFO("Processing control command: {}", cmd);
+
+                if (cmd == "model_yolov5") {
+                    aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::YOLOV5, "./model/yolov5.rknn");
+                    SPDLOG_INFO("Switched to YOLOV5 model");
+                } else if (cmd == "model_retinaface") {
+                    aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::RETINAFACE, "./model/retinaface.rknn");
+                    SPDLOG_INFO("Switched to RETINAFACE model");
+                } else if (cmd == "model_none") {
+                    aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::NONE);
+                    SPDLOG_INFO("Switched to NONE model");
+                }
             }
-
-            // Return Answer wrapped in JSON
-            nlohmann::json response;
-            response["type"] = "webrtc_answer";
-            response["payload"] = answer;
-            
-            SPDLOG_INFO("WebRTC Answer generated successfully");
-            
-            // Request IDR frame when new connection is established
-            webrtc_streamer.request_idr();
-            
-            return response.dump();
-        }
-        // [新增] 处理 ICE Candidate 交换
-        else if (msg.type == "webrtc_candidate") {
-            if (msg.payload.empty()) {
-                SPDLOG_WARN("WebRTC candidate received with empty payload");
-                nlohmann::json error_response;
-                error_response["type"] = "error";
-                error_response["message"] = "Empty candidate payload";
-                return error_response.dump();
-            }
-
-            SPDLOG_INFO("Processing WebRTC Candidate");
-
-            // payload 通常是 JSON({candidate,sdpMid,sdpMLineIndex})；若不是 JSON，则直接把 payload 当 candidate 字符串。
-            std::string candidate;
-            std::string sdp_mid;
-            int sdp_mline_index = 0;
-
-            const auto payload_json = nlohmann::json::parse(msg.payload, nullptr, false);
-            if (!payload_json.is_discarded() && payload_json.is_object()) {
-                candidate = payload_json.value("candidate", "");
-                sdp_mid = payload_json.value("sdpMid", "");
-                sdp_mline_index = payload_json.value("sdpMLineIndex", 0);
-            } else {
-                candidate = msg.payload;
-            }
-
-            if (sdp_mid.empty()) {
-                sdp_mid = "video";
-            }
-
-            if (candidate.empty()) {
-                SPDLOG_WARN("Candidate payload missing 'candidate' field");
-                nlohmann::json error_response;
-                error_response["type"] = "error";
-                error_response["message"] = "Missing candidate field";
-                return error_response.dump();
-            }
-
-            const bool success = webrtc_streamer.add_candidate(candidate, sdp_mid, sdp_mline_index);
-
-            nlohmann::json response;
-            if (success) {
-                response["type"] = "ack";
-                response["message"] = "Candidate added successfully";
-                SPDLOG_INFO("Successfully added ICE candidate");
-            } else {
-                response["type"] = "error";
-                response["message"] = "Failed to add candidate";
-                SPDLOG_WARN("Failed to add ICE candidate");
-            }
-            return response.dump();
-        }
-        else if (msg.type == "control_cmd" || msg.type == "model_switch") {
-            // Validate payload for model switch
-            if ((msg.type == "model_switch") && msg.payload.empty()) {
-                SPDLOG_WARN("model_switch received with empty payload");
-                nlohmann::json error_response;
-                error_response["type"] = "error";
-                error_response["message"] = "Empty model_switch payload";
-                return error_response.dump();
-            }
-
-            const std::string &cmd = msg.payload;
-            SPDLOG_INFO("Processing control command: {}", cmd);
-
-            if (cmd.find("YOLOV5") != std::string::npos || cmd.find("yolov5") != std::string::npos) {
-                aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::YOLOV5, "./model/yolov5.rknn");
-                SPDLOG_INFO("Switched to YOLOV5 model");
-            } else if (cmd.find("RETINAFACE") != std::string::npos || cmd.find("retinaface") != std::string::npos) {
-                aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::RETINAFACE, "./model/retinaface.rknn");
-                SPDLOG_INFO("Switched to RETINAFACE model");
-            } else if (cmd.find("NONE") != std::string::npos || cmd.find("none") != std::string::npos) {
-                aipc::ai::AIManager::get_instance().switch_model(aipc::ai::ModelType::NONE);
-                SPDLOG_INFO("Switched to NONE model");
-            } else {
-                SPDLOG_WARN("Unknown model in control command: {}", cmd);
-            }
-
-            nlohmann::json response;
-            response["type"] = "ack";
-            response["message"] = "Command processed";
-            return response.dump();
-        }
-        else {
-            SPDLOG_WARN("Unknown command type: '{}'", msg.type);
-            nlohmann::json error_response;
-            error_response["type"] = "error";
-            error_response["message"] = std::string("Unknown command type: ") + msg.type;
-            return error_response.dump();
+        } catch (const std::exception &e) {
+            SPDLOG_ERROR("Control callback error: {}", e.what());
         }
     });
-    command_listener.start();
+
+    // Start WebSocket server for signaling and control
+    webrtc_streamer.start_server(8000);
 
     const int width = cfg.width;
     const int height = cfg.height;
 
-    // ISP Init (RAII)
+    // ISP Init
     aipc::rkmpi::IspSession isp(0, cfg.hdr_mode, cfg.multi_sensor, cfg.iq_dir);
 
-    // MPI Init (RAII)
+    // MPI Init
     aipc::rkmpi::MpiSystem mpi;
     if (!mpi.ok()) {
         return -1;
     }
 
-    // Create RGB pool (RAII)
+    // Create RGB pool
     auto rgb_pool = aipc::rkmpi::MbPool::create(static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 3u, 4);
     if (!rgb_pool.ok()) {
         return -1;
     }
 
-    // H264 stream pack buffer (RAII)
-    auto pack = std::unique_ptr<VENC_PACK_S, void (*)(void *)>(
-            static_cast<VENC_PACK_S *>(std::malloc(sizeof(VENC_PACK_S))), std::free);
+    // H264 stream pack buffer
+    auto venc_delete = [](VENC_PACK_S *p) { std::free(p); };
+
+    auto pack = std::unique_ptr<VENC_PACK_S, decltype(venc_delete)>(
+            static_cast<VENC_PACK_S *>(std::malloc(sizeof(VENC_PACK_S))), venc_delete);
+
     if (!pack) {
         SPDLOG_ERROR("malloc VENC_PACK_S failed");
         return -1;
@@ -332,7 +213,7 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    // VI/VENC Init (RAII)
+    // VI/VENC Init
     aipc::vi::ViSession vi(cfg.vi_dev, cfg.vi_chn, width, height);
     if (!vi.ok()) {
         return -1;
@@ -344,8 +225,9 @@ int main(int argc, char *argv[]) {
     }
 
     SPDLOG_INFO("VI/VENC init success");
-    
+
     // AI async worker: consume latest frame, run inference, update latest results
+    // AI推理线程，生产最新的视频帧，更新结果
     std::mutex ai_m;
     std::condition_variable ai_cv;
     std::shared_ptr<aipc::rkmpi::MbBlock> ai_latest_blk;
@@ -355,7 +237,7 @@ int main(int argc, char *argv[]) {
     std::vector<aipc::ai::ObjectDet> latest_results;
 
     std::thread ai_thread([&]() {
-        std::vector<aipc::ai::ObjectDet> local_results;
+        std::vector<aipc::ai::ObjectDet> local_results; // AI推理结果
         while (true) {
             std::shared_ptr<aipc::rkmpi::MbBlock> blk;
             {
@@ -386,9 +268,11 @@ int main(int argc, char *argv[]) {
         }
     });
 
+
     while (g_running.load()) {
         // Get RGB MB from pool for this frame
-        auto rgb_blk = aipc::rkmpi::MbBlock::get(rgb_pool.get(), static_cast<size_t>(width) * static_cast<size_t>(height) * 3u, true);
+        auto rgb_blk = aipc::rkmpi::MbBlock::get(rgb_pool.get(),
+                                                 static_cast<size_t>(width) * static_cast<size_t>(height) * 3u, true);
         if (!rgb_blk || !rgb_blk->ok()) {
             continue;
         }
@@ -452,7 +336,8 @@ int main(int argc, char *argv[]) {
 
                 // Send to WebRTC if connected
                 if (webrtc_streamer.is_connected()) {
-                    webrtc_streamer.push_frame((const uint8_t *) pData, stFrame.pstPack->u32Len, stFrame.pstPack->u64PTS / 1000);  // Convert to ms
+                    webrtc_streamer.push_frame((const uint8_t *) pData, stFrame.pstPack->u32Len,
+                                               stFrame.pstPack->u64PTS / 1000); // Convert to ms
                 }
             }
         }

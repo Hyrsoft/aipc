@@ -21,7 +21,8 @@ namespace aipc::rkmpi {
         MbBlock(const MbBlock &) = delete;
         MbBlock &operator=(const MbBlock &) = delete;
 
-        MbBlock(MbBlock &&other) noexcept : blk_(other.blk_), bytes_(other.bytes_), cached_vir_addr_(other.cached_vir_addr_) {
+        MbBlock(MbBlock &&other) noexcept :
+            blk_(other.blk_), bytes_(other.bytes_), cached_vir_addr_(other.cached_vir_addr_) {
             other.blk_ = MB_INVALID_HANDLE;
             other.bytes_ = 0;
             other.cached_vir_addr_ = nullptr;

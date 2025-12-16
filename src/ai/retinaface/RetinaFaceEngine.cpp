@@ -282,7 +282,7 @@ namespace aipc::ai {
         uint8_t *scores = (uint8_t *) (ctx_->app_ctx.output_mems[1]->virt_addr);
         uint8_t *landms = (uint8_t *) (ctx_->app_ctx.output_mems[2]->virt_addr);
 
-        const float (*prior_ptr)[4];
+        const float(*prior_ptr)[4];
         int num_priors = 16800;
         prior_ptr = BOX_PRIORS_640;
 

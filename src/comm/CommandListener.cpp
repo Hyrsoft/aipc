@@ -85,7 +85,8 @@ namespace aipc::comm {
         std::string payload = json.value("payload", "");
 
         if ((type == "webrtc_offer" || type == "webrtc_answer" || type == "webrtc_candidate" ||
-             type == "model_switch") && payload.empty()) {
+             type == "model_switch") &&
+            payload.empty()) {
             SPDLOG_WARN("Command type '{}' missing required 'payload' field", type);
         }
 
@@ -101,8 +102,8 @@ namespace aipc::comm {
             sockaddr_in cliaddr;
             socklen_t len = sizeof(cliaddr);
 
-            const int n = ::recvfrom(sockfd_, buffer.get(), BUFFER_SIZE - 1, 0, reinterpret_cast<sockaddr *>(&cliaddr),
-                                     &len);
+            const int n =
+                    ::recvfrom(sockfd_, buffer.get(), BUFFER_SIZE - 1, 0, reinterpret_cast<sockaddr *>(&cliaddr), &len);
             if (n < 0) {
                 if (!running_) {
                     break;
@@ -110,7 +111,7 @@ namespace aipc::comm {
                 SPDLOG_WARN("CommandListener recvfrom error: {}", std::strerror(errno));
                 continue;
             }
-            
+
             // [修复1]：处理空接收（可能由于网络问题）
             if (n == 0) {
                 SPDLOG_DEBUG("Received empty packet");
@@ -125,7 +126,7 @@ namespace aipc::comm {
 
             // Parse the command
             CommandMessage cmd = parse_command(raw_data);
-            
+
             // [修复2]：跳过 'unknown' 类型且 payload 为空的命令，避免不必要的处理
             if (cmd.type == "unknown" && cmd.payload.empty()) {
                 SPDLOG_DEBUG("Skipping empty/malformed command");
@@ -137,8 +138,8 @@ namespace aipc::comm {
 
                 // Send response back to client (handle empty responses gracefully)
                 if (!response.empty()) {
-                    int sent = ::sendto(sockfd_, response.c_str(), response.size(), 0, 
-                                       reinterpret_cast<const sockaddr *>(&cliaddr), len);
+                    int sent = ::sendto(sockfd_, response.c_str(), response.size(), 0,
+                                        reinterpret_cast<const sockaddr *>(&cliaddr), len);
                     if (sent < 0) {
                         SPDLOG_WARN("sendto failed: {}", std::strerror(errno));
                     } else {
@@ -147,7 +148,7 @@ namespace aipc::comm {
                 }
             }
         }
-        
+
         SPDLOG_INFO("CommandListener stopped");
     }
 

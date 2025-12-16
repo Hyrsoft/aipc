@@ -1,9 +1,10 @@
 #include "WebRTCStreamer.hpp"
 
-#include <spdlog/spdlog.h>
 #include <chrono>
 #include <memory>
+#include <spdlog/spdlog.h>
 #include <thread>
+#include <nlohmann/json.hpp>
 
 namespace aipc::webrtc {
 
@@ -21,19 +22,77 @@ namespace aipc::webrtc {
 
         rtc::InitLogger(rtc::LogLevel::Warning);
 
-        rtc::Configuration config;
-        config.bindAddress = "0.0.0.0";
-        config.iceServers.emplace_back(stun_server);
-
-        auto test_pc = std::make_shared<rtc::PeerConnection>(config);
-        if (!test_pc) {
-            SPDLOG_ERROR("Failed to create test PeerConnection with IPv4 config");
-            return false;
-        }
-
+        // We don't create PC here anymore, we create it on offer
         initialized_ = true;
-        SPDLOG_INFO("WebRTCStreamer initialized successfully with IPv4 binding");
+        SPDLOG_INFO("WebRTCStreamer initialized successfully");
         return true;
+    }
+
+    void WebRTCStreamer::start_server(uint16_t port) {
+        rtc::WebSocketServer::Configuration config;
+        config.port = port;
+        config.bindAddress = "0.0.0.0";
+        
+        try {
+            ws_server_ = std::make_shared<rtc::WebSocketServer>(config);
+        } catch (const std::exception &e) {
+            SPDLOG_ERROR("Failed to start WebSocket server on port {}: {}", port, e.what());
+            return;
+        }
+        
+        ws_server_->onClient([this](std::shared_ptr<rtc::WebSocket> ws) {
+            SPDLOG_INFO("WebSocket client connected");
+            std::lock_guard<std::mutex> lock(ws_mutex_);
+            ws_client_ = ws;
+            
+            ws->onMessage([this, ws](auto message) {
+                if (std::holds_alternative<std::string>(message)) {
+                    std::string msg = std::get<std::string>(message);
+                    try {
+                        auto json = nlohmann::json::parse(msg);
+                        std::string type = json.value("type", "");
+                        
+                        if (type == "offer") {
+                            std::string sdp = json.value("sdp", "");
+                            std::string answer = handle_offer(sdp);
+                            if (!answer.empty()) {
+                                nlohmann::json resp;
+                                resp["type"] = "answer";
+                                resp["sdp"] = answer;
+                                ws->send(resp.dump());
+                            }
+                        } else if (type == "candidate") {
+                            std::string cand = json.value("candidate", "");
+                            std::string mid = json.value("sdpMid", "");
+                            int mline = json.value("sdpMLineIndex", 0);
+                            add_candidate(cand, mid, mline);
+                        } else if (type == "control") {
+                            if (control_cb_) {
+                                control_cb_(msg);
+                            }
+                        }
+                    } catch (const std::exception &e) {
+                        SPDLOG_ERROR("JSON parse error: {}", e.what());
+                    }
+                }
+            });
+            
+            ws->onClosed([this]() {
+                SPDLOG_INFO("WebSocket client disconnected");
+            });
+        });
+        SPDLOG_INFO("WebSocket server started on port {}", port);
+    }
+
+    void WebRTCStreamer::send_data(const std::string &data) {
+        if (data_channel_ && data_channel_->isOpen()) {
+            data_channel_->send(data);
+        } else {
+            std::lock_guard<std::mutex> lock(ws_mutex_);
+            if (ws_client_) {
+                ws_client_->send(data);
+            }
+        }
     }
 
     bool WebRTCStreamer::create_video_track() {
@@ -68,8 +127,7 @@ namespace aipc::webrtc {
             if (state == rtc::PeerConnection::State::Connected) {
                 connected_ = true;
             } else if (state == rtc::PeerConnection::State::Disconnected ||
-                       state == rtc::PeerConnection::State::Failed ||
-                       state == rtc::PeerConnection::State::Closed) {
+                       state == rtc::PeerConnection::State::Failed || state == rtc::PeerConnection::State::Closed) {
                 connected_ = false;
             }
         });
@@ -112,6 +170,20 @@ namespace aipc::webrtc {
                 }
                 signal_cv_.notify_all();
             }
+        });
+
+        pc_->onDataChannel([this](std::shared_ptr<rtc::DataChannel> dc) {
+            SPDLOG_INFO("DataChannel received: {}", dc->label());
+            data_channel_ = dc;
+            
+            dc->onMessage([this](auto message) {
+                if (std::holds_alternative<std::string>(message)) {
+                    std::string msg = std::get<std::string>(message);
+                    if (control_cb_) {
+                        control_cb_(msg);
+                    }
+                }
+            });
         });
     }
 
@@ -158,7 +230,7 @@ namespace aipc::webrtc {
 
             if (!pending_candidates_.empty()) {
                 SPDLOG_INFO("Applying {} buffered ICE candidates", pending_candidates_.size());
-                for (const auto &pending : pending_candidates_) {
+                for (const auto &pending: pending_candidates_) {
                     const std::string mid = pending.sdp_mid.empty() ? "video" : pending.sdp_mid;
                     rtc::Candidate cand(pending.candidate, mid);
                     pc_->addRemoteCandidate(cand);
@@ -175,9 +247,8 @@ namespace aipc::webrtc {
         std::string answer;
         {
             std::unique_lock<std::mutex> lock(signal_mutex_);
-            const bool ok = signal_cv_.wait_for(lock, std::chrono::seconds(8), [this]() {
-                return answer_ready_.load(std::memory_order_acquire);
-            });
+            const bool ok = signal_cv_.wait_for(lock, std::chrono::seconds(8),
+                                                [this]() { return answer_ready_.load(std::memory_order_acquire); });
             if (!ok) {
                 SPDLOG_WARN("Timeout waiting for ICE gathering complete; answer may be incomplete");
                 if (!pending_local_sdp_.empty()) {
@@ -206,7 +277,7 @@ namespace aipc::webrtc {
             return;
         }
 
-        (void)timestamp_ms;
+        (void) timestamp_ms;
         video_track_->send(reinterpret_cast<const std::byte *>(data), size);
     }
 
@@ -245,8 +316,7 @@ namespace aipc::webrtc {
         SPDLOG_INFO("WebRTCStreamer reset");
     }
 
-    bool WebRTCStreamer::add_candidate(const std::string &candidate, const std::string &sdp_mid,
-                                      int sdp_mline_index) {
+    bool WebRTCStreamer::add_candidate(const std::string &candidate, const std::string &sdp_mid, int sdp_mline_index) {
         std::lock_guard<std::mutex> lock(pc_mutex_);
 
         if (!pc_) {

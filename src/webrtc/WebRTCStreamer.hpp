@@ -3,12 +3,14 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include <rtc/rtc.hpp>
+#include <rtc/websocketserver.hpp>
 
 namespace aipc::webrtc {
 
@@ -23,6 +25,16 @@ namespace aipc::webrtc {
 
         // Initialize WebRTC with STUN server configuration
         bool init(const std::string &stun_server = "stun:stun.l.google.com:19302");
+
+        // Start WebSocket server for signaling
+        void start_server(uint16_t port);
+
+        // Callback for control commands (JSON)
+        using ControlCallback = std::function<void(const std::string &json_cmd)>;
+        void set_control_callback(ControlCallback cb) { control_cb_ = cb; }
+
+        // Send data (e.g. AI results) to client via DataChannel
+        void send_data(const std::string &data);
 
         // Handle WebRTC Offer from remote peer (typically from Go server)
         // Returns the Answer SDP string, or empty string on error
@@ -57,10 +69,19 @@ namespace aipc::webrtc {
 
         void setup_peer_connection_callbacks();
         bool create_video_track();
+        void setup_data_channel();
 
         std::mutex pc_mutex_;
         std::shared_ptr<rtc::PeerConnection> pc_;
         std::shared_ptr<rtc::Track> video_track_;
+        std::shared_ptr<rtc::DataChannel> data_channel_;
+        
+        std::shared_ptr<rtc::WebSocketServer> ws_server_;
+        std::shared_ptr<rtc::WebSocket> ws_client_; // Current active signaling client
+        std::mutex ws_mutex_;
+
+        ControlCallback control_cb_;
+
         std::atomic<bool> initialized_{false};
         std::atomic<bool> connected_{false};
         std::atomic<bool> answer_ready_{false};
