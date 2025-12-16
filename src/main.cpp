@@ -38,6 +38,7 @@
 #include "video/VencSession.hpp"
 #include "video/ViSession.hpp"
 #include "webrtc/WebRTCStreamer.hpp"
+#include "http/HttpServer.hpp"
 
 namespace {
 
@@ -159,6 +160,15 @@ int main(int argc, char *argv[]) {
 
     // Start WebSocket server for signaling and control
     webrtc_streamer.start_server(8000);
+
+    // Start HTTP Server for static files
+    aipc::http::HttpServer http_server;
+    if (!http_server.start(80, "./www")) {
+        SPDLOG_WARN("Failed to start HTTP server on port 80, trying 8080");
+        if (!http_server.start(8080, "./www")) {
+             SPDLOG_ERROR("Failed to start HTTP server");
+        }
+    }
 
     const int width = cfg.width;
     const int height = cfg.height;

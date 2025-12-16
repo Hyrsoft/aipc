@@ -66,9 +66,11 @@ target_include_directories(${PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/rkmpi
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vi
         ${CMAKE_CURRENT_SOURCE_DIR}/src/venc
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/http
 
         ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libdatachannel/include
         ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libdatachannel/deps/json/single_include
+        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/cpp-httplib
 
         ${LUCKFOX_RKMPI_INCLUDE_DIR}
         ${LUCKFOX_RKMPI_INCLUDE_DIR}/rknn
