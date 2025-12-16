@@ -7,7 +7,7 @@
 
 namespace aipc::ai {
 
-    void AIManager::SwitchModel(ModelType type, const std::string &path) {
+    void AIManager::switch_model(ModelType type, const std::string &path) {
         std::lock_guard<std::mutex> lock(mutex_);
 
         SPDLOG_INFO("Switching AI Model...");
@@ -38,7 +38,7 @@ namespace aipc::ai {
                 }
             }
 
-            if (new_engine->Init(model_path) != 0) {
+            if (new_engine->init(model_path) != 0) {
                 SPDLOG_ERROR("Failed to load model: {}. Fallback to NoAI.", model_path);
                 current_engine_ = std::make_unique<NoAIEngine>();
                 return;

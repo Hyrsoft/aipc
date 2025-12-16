@@ -1,0 +1,4 @@
+CompileFlags:
+  CompilationDatabase: build/Debug
+  # Remove:
+  #   - "-mcpu=c908v"

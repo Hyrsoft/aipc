@@ -9,11 +9,13 @@
 
 namespace aipc::logging {
 
-void Init() {
-    static std::once_flag once;
-    std::call_once(once, []() {
-        try {
-            auto logger = spdlog::stdout_color_mt("aipc");
+    void init() {
+        static std::once_flag once;
+        std::call_once(once, []() {
+            auto logger = spdlog::get("aipc");
+            if (!logger) {
+                logger = spdlog::stdout_color_mt("aipc");
+            }
             spdlog::set_default_logger(std::move(logger));
 
             // time, level, logger-name, message
@@ -22,7 +24,7 @@ void Init() {
 #ifndef NDEBUG
             spdlog::set_level(spdlog::level::debug);
 #else
-            spdlog::set_level(spdlog::level::info);
+        spdlog::set_level(spdlog::level::info);
 #endif
 
             if (const char *env_level = std::getenv("AIPC_LOG_LEVEL")) {
@@ -33,10 +35,7 @@ void Init() {
             }
 
             spdlog::flush_on(spdlog::level::info);
-        } catch (...) {
-            // If spdlog init fails, keep running with whatever default behaviour exists.
-        }
-    });
-}
+        });
+    }
 
 } // namespace aipc::logging

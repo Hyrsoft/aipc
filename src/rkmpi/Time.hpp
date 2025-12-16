@@ -6,6 +6,6 @@
 
 namespace aipc::rkmpi {
 
-    RK_U64 NowUs();
+    RK_U64 now_us();
 
 } // namespace aipc::rkmpi

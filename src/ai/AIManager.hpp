@@ -12,24 +12,24 @@ namespace aipc::ai {
 
     class AIManager {
     public:
-        static AIManager &Instance() {
+        static AIManager &get_instance() {
             static AIManager s;
             return s;
         }
 
-        void SwitchModel(ModelType type, const std::string &path = "");
+        void switch_model(ModelType type, const std::string &path = "");
 
-        void RunInference(const cv::Mat &img, std::vector<ObjectDet> &out) {
+        void run_inference(const cv::Mat &img, std::vector<ObjectDet> &out) {
             std::lock_guard<std::mutex> lock(mutex_);
             if (current_engine_) {
-                current_engine_->Inference(img, out);
+                current_engine_->inference(img, out);
             }
         }
 
-        std::string GetCurrentModelName() {
+        std::string get_current_model_name() {
             std::lock_guard<std::mutex> lock(mutex_);
             if (current_engine_) {
-                return current_engine_->GetName();
+                return current_engine_->get_name();
             }
             return "None";
         }

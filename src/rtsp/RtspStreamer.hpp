@@ -18,9 +18,9 @@ namespace aipc::rtsp {
         bool ok() const;
 
         // H264: codec_data 为空时将按 demo 默认方式推流（与原 main.cpp 保持一致）
-        bool startH264();
+        bool start_h264();
 
-        void pushH264(const uint8_t *frame, int len, uint64_t pts);
+        void push_h264(const uint8_t *frame, int len, uint64_t pts);
         void poll();
 
     private:

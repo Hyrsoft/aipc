@@ -6,7 +6,7 @@
 
 namespace aipc::rkmpi {
 
-    inline bool Ok(RK_S32 ret, const char *expr, const char *file, int line) {
+    inline bool ok(RK_S32 ret, const char *expr, const char *file, int line) {
         if (ret == RK_SUCCESS) {
             return true;
         }
@@ -16,4 +16,4 @@ namespace aipc::rkmpi {
 
 } // namespace aipc::rkmpi
 
-#define AIPC_CHECK_MPI(expr) (::aipc::rkmpi::Ok((expr), #expr, __FILE__, __LINE__))
+#define AIPC_CHECK_MPI(expr) (::aipc::rkmpi::ok((expr), #expr, __FILE__, __LINE__))

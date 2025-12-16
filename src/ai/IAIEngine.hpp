@@ -11,9 +11,9 @@ namespace aipc::ai {
     public:
         virtual ~IAIEngine() = default;
 
-        virtual int Init(const std::string &model_path) = 0;
-        virtual int Inference(const cv::Mat &img, std::vector<ObjectDet> &results) = 0;
-        virtual std::string GetName() const = 0;
+        virtual int init(const std::string &model_path) = 0;
+        virtual int inference(const cv::Mat &img, std::vector<ObjectDet> &results) = 0;
+        virtual std::string get_name() const = 0;
     };
 
 } // namespace aipc::ai

@@ -13,9 +13,9 @@ namespace aipc::ai {
         RetinaFaceEngine();
         ~RetinaFaceEngine();
 
-        int Init(const std::string &model_path) override;
-        int Inference(const cv::Mat &img, std::vector<ObjectDet> &results) override;
-        std::string GetName() const override { return "RetinaFace"; }
+        int init(const std::string &model_path) override;
+        int inference(const cv::Mat &img, std::vector<ObjectDet> &results) override;
+        std::string get_name() const override { return "RetinaFace"; }
 
     private:
         std::unique_ptr<RetinaFaceContext> ctx_;

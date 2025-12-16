@@ -31,7 +31,7 @@ namespace aipc::rtsp {
 
     bool RtspStreamer::ok() const { return demo_ != nullptr && session_ != nullptr; }
 
-    bool RtspStreamer::startH264() {
+    bool RtspStreamer::start_h264() {
         if (!ok()) {
             return false;
         }
@@ -41,7 +41,7 @@ namespace aipc::rtsp {
         return true;
     }
 
-    void RtspStreamer::pushH264(const uint8_t *frame, int len, uint64_t pts) {
+    void RtspStreamer::push_h264(const uint8_t *frame, int len, uint64_t pts) {
         if (!ok()) {
             return;
         }
