@@ -39,7 +39,7 @@ public:
      * 
      * 如果 logger 不存在则创建新的实例并注册
      */
-    static std::shared_ptr<spdlog::logger> get_logger(const std::string& name) {
+    static std::shared_ptr<spdlog::logger> GetLogger(const std::string& name) {
         auto logger = spdlog::get(name);
         if (!logger) {
             // 创建带颜色的控制台输出 logger
@@ -66,7 +66,7 @@ public:
      * 在 main 函数开始时调用，用于配置全局日志设置
      * 对于嵌入式环境，可以考虑开启异步日志以减少对实时性的影响
      */
-    static void init() {
+    static void Init() {
         // 设置全局日志等级（受限于 SPDLOG_ACTIVE_LEVEL）
         spdlog::set_level(spdlog::level::trace);
         
@@ -77,7 +77,7 @@ public:
         // spdlog::init_thread_pool(8192, 1);
         
         // 创建默认 logger
-        get_logger("main");
+        GetLogger("main");
     }
 
     /**
@@ -85,7 +85,7 @@ public:
      * 
      * 在程序退出前调用，确保所有日志都被刷新
      */
-    static void shutdown() {
+    static void Shutdown() {
         spdlog::shutdown();
     }
 };
@@ -102,7 +102,7 @@ public:
 #endif
 
 // 获取当前模块的 logger
-#define GET_LOGGER() LogManager::get_logger(LOG_TAG)
+#define GET_LOGGER() LogManager::GetLogger(LOG_TAG)
 
 // 日志宏 - 支持编译时级别控制
 #define LOG_TRACE(...)    SPDLOG_LOGGER_TRACE(GET_LOGGER(), __VA_ARGS__)

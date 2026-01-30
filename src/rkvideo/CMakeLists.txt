@@ -11,6 +11,7 @@ set(RKVIDEO_SOURCES
 set(RKVIDEO_HEADERS
     luckfox_mpi.h
     rkvideo.h
+    stream_dispatcher.h
 )
 
 # ========================================

@@ -8,7 +8,7 @@
 
 int main() {
     // 初始化日志系统
-    LogManager::init();
+    LogManager::Init();
     
     LOG_INFO("=== AIPC Application Starting ===");
     
@@ -32,7 +32,7 @@ int main() {
     rkvideo_deinit();
     
     LOG_INFO("=== AIPC Application Terminated ===");
-    LogManager::shutdown();
+    LogManager::Shutdown();
     
     return 0;
 }
