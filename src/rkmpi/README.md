@@ -1,0 +1,1 @@
+直接使用luckfox写好的rkmpi文件，基于这个文件，快速搭建vi采集，venc编码的效果，编码得到的h.264码流，交由rtsp服务器或者webrtc进行分发
