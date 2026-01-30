@@ -1,19 +1,20 @@
-# Specify the cross-compilation toolchain
+# 1. 指定目标系统信息
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
-set(SDK_PATH "/project")
+# 2. 指定交叉编译器
+set(TOOLCHAIN_PATH "/home/hao/projects/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf")
+set(CMAKE_C_COMPILER "${TOOLCHAIN_PATH}/bin/arm-rockchip830-linux-uclibcgnueabihf-gcc")
+set(CMAKE_CXX_COMPILER "${TOOLCHAIN_PATH}/bin/arm-rockchip830-linux-uclibcgnueabihf-g++")
 
-# Specify the compiler paths
-set(CMAKE_C_COMPILER ${SDK_PATH}/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-gcc)
-set(CMAKE_CXX_COMPILER ${SDK_PATH}/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-g++)
+# 3. 指定 Sysroot (系统根目录)，让编译器和链接器能找到正确的头文件和库
+set(CMAKE_SYSROOT "${TOOLCHAIN_PATH}/arm-rockchip830-linux-uclibcgnueabihf/sysroot")
 
-# Specify the sysroot (if available)
-set(CMAKE_SYSROOT ${SDK_PATH}/sysdrv/source/buildroot/buildroot-2023.02.6/output/host/arm-buildroot-linux-uclibcgnueabihf/sysroot)
+# 告诉 CMake 不要为共享库链接创建依赖关系，这通常能避免生成不被支持的链接器标志
+set(CMAKE_LINK_DEPENDS_NO_SHARED TRUE)
 
-# Add paths to find libraries and includes
-set(CMAKE_FIND_ROOT_PATH ${CMAKE_SYSROOT})
-
+# 5. 配置查找库和头文件的默认路径
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
