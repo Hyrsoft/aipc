@@ -19,16 +19,30 @@ set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
 # spdlog 编译时日志级别控制
 # ========================================
 # 设置此选项可在编译时完全移除低于该级别的日志代码（零开销）
-# 可选值:
-#   0 = TRACE (显示所有日志)
-#   1 = DEBUG
-#   2 = INFO (默认，推荐用于发布版本)
-#   3 = WARN
-#   4 = ERROR
-#   5 = CRITICAL
-#   6 = OFF (完全禁用所有日志)
-set(SPDLOG_ACTIVE_LEVEL "2" CACHE STRING "Compile-time log level (0=TRACE, 6=OFF)")
+# 定义日志等级常量
+set(LOG_LEVEL_TRACE    0)
+set(LOG_LEVEL_DEBUG    1)
+set(LOG_LEVEL_INFO     2)
+set(LOG_LEVEL_WARN     3)
+set(LOG_LEVEL_ERROR    4)
+set(LOG_LEVEL_CRITICAL 5)
+set(LOG_LEVEL_OFF      6)
+
+# 根据构建类型自动设置默认日志等级
+# Debug 模式下默认 DEBUG，Release 模式下默认 INFO
+if(NOT DEFINED SPDLOG_ACTIVE_LEVEL)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(SPDLOG_ACTIVE_LEVEL ${LOG_LEVEL_DEBUG} CACHE STRING "Compile-time log level")
+    else()
+        set(SPDLOG_ACTIVE_LEVEL ${LOG_LEVEL_INFO} CACHE STRING "Compile-time log level")
+    endif()
+endif()
+
 add_compile_definitions(SPDLOG_ACTIVE_LEVEL=${SPDLOG_ACTIVE_LEVEL})
+
+# 针对嵌入式环境的优化编译选项
+add_compile_options(-ffunction-sections -fdata-sections)
+add_link_options(-Wl,--gc-sections)
 
 # ========================================
 # 第三方库路径（全局可用）

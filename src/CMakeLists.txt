@@ -3,8 +3,11 @@
 # 创建 aipc 可执行文件
 # ========================================
 
+# 添加公共模块（必须在其他模块之前）
+add_subdirectory(common)
+
 # 添加子模块（静态库）
-add_subdirectory(rkmpi)
+add_subdirectory(rkvideo)
 add_subdirectory(rtsp)
 add_subdirectory(webrtc)
 
@@ -28,7 +31,8 @@ target_include_directories(aipc
 # 链接静态库和第三方库
 target_link_libraries(aipc
     PRIVATE
-        rkmpi
+        common
+        rkvideo
         # rtsp_lib      # 启用后取消注释
         # webrtc_lib    # 启用后取消注释
         spdlog::spdlog

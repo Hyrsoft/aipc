@@ -10,3 +10,7 @@
  */
 
  #pragma once
+
+
+ int rkvideo_init();
+ int rkvideo_deinit();

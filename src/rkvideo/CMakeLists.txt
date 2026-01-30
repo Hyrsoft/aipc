@@ -1,16 +1,16 @@
 
 # ========================================
-# rkmpi 静态库
+# rkvideo 静态库
 # ========================================
 
-set(RKMPI_SOURCES
+set(RKVIDEO_SOURCES
     luckfox_mpi.cpp
-    rkmpi.cpp
+    rkvideo.cpp
 )
 
-set(RKMPI_HEADERS
+set(RKVIDEO_HEADERS
     luckfox_mpi.h
-    rkmpi.h
+    rkvideo.h
 )
 
 # ========================================
@@ -30,10 +30,10 @@ set(MPI_LIBS
 )
 
 # 创建静态库
-add_library(rkmpi STATIC ${RKMPI_SOURCES} ${RKMPI_HEADERS})
+add_library(rkvideo STATIC ${RKVIDEO_SOURCES} ${RKVIDEO_HEADERS})
 
 # 设置头文件包含目录
-target_include_directories(rkmpi
+target_include_directories(rkvideo
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${LUCKFOX_MPI_INCLUDE_DIR}
@@ -48,21 +48,22 @@ target_include_directories(rkmpi
 )
 
 # 链接 Luckfox MPI 库目录
-target_link_directories(rkmpi
+target_link_directories(rkvideo
     PUBLIC
         ${LUCKFOX_MPI_LIB_DIR}
 )
 
 # 链接依赖库
-target_link_libraries(rkmpi
+target_link_libraries(rkvideo
     PUBLIC
         ${MPI_LIBS}
     PRIVATE
+        common
         spdlog::spdlog
 )
 
 # 设置编译选项
-target_compile_options(rkmpi
+target_compile_options(rkvideo
     PRIVATE
         -Wall
         -Wextra
