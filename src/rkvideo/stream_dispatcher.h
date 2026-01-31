@@ -2,12 +2,12 @@
  * @file stream_dispatcher.h
  * @brief 视频流分发器 - 管理 VENC 输出到多个消费者的分发
  *
- * 实现 VENC 编码流到 RTSP 和 WebRTC 的零拷贝分发
+ * 实现 VENC 编码流到 RTSP 和 WebRTC 的分发
  * 
  * 设计要点：
- * - 零拷贝共享：RTSP 和 WebRTC 拿到的是同一个内存块地址
- * - 解耦释放：任一消费者处理慢不影响其他消费者
- * - 背压处理：队列满时丢弃旧帧，避免 VENC Buffer Pool 耗尽
+ * - 数据拷贝后释放：GetStream/ReleaseStream 在同一线程中完成，避免死锁
+ * - 拷贝后共享：多消费者共享拷贝后的数据
+ * - 背压处理：队列满时丢弃旧帧
  *
  * @author 好软，好温暖
  * @date 2026-01-31
@@ -28,9 +28,12 @@
 /**
  * @brief 流消费者回调类型
  * 
- * 消费者通过此回调接收编码流
+ * 消费者通过此回调接收编码帧（拷贝后的数据）
  */
-using StreamConsumer = std::function<void(EncodedStreamPtr)>;
+using StreamConsumer = std::function<void(EncodedFramePtr)>;
+
+// 编码帧队列类型
+using EncodedFrameQueue = MediaQueue<EncodedFramePtr>;
 
 /**
  * @brief 视频流分发器
@@ -58,7 +61,7 @@ public:
      * @param queue_size 消费者队列大小（背压控制）
      */
     void RegisterConsumer(const std::string& name, StreamConsumer consumer, size_t queue_size = 3) {
-        consumers_.push_back({name, consumer, std::make_unique<EncodedStreamQueue>(queue_size)});
+        consumers_.push_back({name, consumer, std::make_unique<EncodedFrameQueue>(queue_size)});
         LOG_INFO("Registered stream consumer: {}", name);
     }
     
@@ -66,20 +69,24 @@ public:
      * @brief 启动分发器
      * 
      * 启动后会创建：
-     * 1. 一个获取线程：从 VENC 获取编码流
-     * 2. 多个分发线程：为每个消费者分发数据
+     * 1. 多个分发线程：为每个消费者分发数据（先启动，确保准备就绪）
+     * 2. 一个获取线程：从 VENC 获取编码流
      */
     void Start() {
         if (running_) return;
         running_ = true;
         
-        // 启动获取线程
-        fetch_thread_ = std::thread(&StreamDispatcher::FetchLoop, this);
-        
-        // 为每个消费者启动分发线程
+        // 先启动消费者分发线程（确保它们准备好接收数据）
         for (auto& c : consumers_) {
             c.thread = std::thread(&StreamDispatcher::DispatchLoop, this, &c);
+            LOG_DEBUG("Started dispatch thread for consumer: {}", c.name);
         }
+        
+        // 短暂延迟，确保消费者线程就绪
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
+        // 最后启动获取线程
+        fetch_thread_ = std::thread(&StreamDispatcher::FetchLoop, this);
         
         LOG_INFO("StreamDispatcher started with {} consumers", consumers_.size());
     }
@@ -118,35 +125,47 @@ private:
     struct ConsumerInfo {
         std::string name;
         StreamConsumer callback;
-        std::unique_ptr<EncodedStreamQueue> queue;
+        std::unique_ptr<EncodedFrameQueue> queue;
         std::thread thread;
     };
     
     /**
      * @brief 获取循环 - 从 VENC 获取编码流并分发到各队列
+     * 
+     * 关键：GetStream 和 ReleaseStream 必须在同一线程中完成
+     * 因此采用"拷贝后释放"策略
      */
     void FetchLoop() {
         LOG_DEBUG("Fetch loop started for VENC channel {}", venc_chn_id_);
         
         uint64_t frameCount = 0;
+        uint64_t errorCount = 0;
+        
         while (running_) {
-            // 从 VENC 获取编码流（阻塞）
-            auto stream = acquire_encoded_stream(venc_chn_id_, 1000);  // 1秒超时
+            // 从 VENC 获取编码帧（获取后立即拷贝并释放 VENC buffer）
+            auto frame = acquire_encoded_frame(venc_chn_id_, 1000);  // 1秒超时
             
-            if (!stream) {
-                LOG_WARN("Failed to get stream from VENC channel {}", venc_chn_id_);
-                continue;  // 超时或错误，继续尝试
+            if (!frame) {
+                errorCount++;
+                if (errorCount % 5 == 1) {  // 每5次错误打印一次
+                    LOG_WARN("Failed to get frame from VENC channel {} (error #{})", 
+                             venc_chn_id_, errorCount);
+                }
+                continue;
             }
             
             frameCount++;
-            if (frameCount % 30 == 1) {  // 每30帧打印一次
-                LOG_DEBUG("Got frame #{}, size={} bytes", 
-                         frameCount, stream->pstPack ? stream->pstPack->u32Len : 0);
+            errorCount = 0;  // 重置错误计数
+            
+            // 打印帧信息
+            if (frameCount <= 5 || frameCount % 30 == 0) {
+                LOG_DEBUG("Got frame #{}, seq={}, size={} bytes, keyframe={}", 
+                         frameCount, frame->seq, frame->data.size(), frame->isKeyFrame);
             }
             
-            // 分发给所有消费者（零拷贝，只是增加引用计数）
+            // 分发给所有消费者（共享拷贝后的数据）
             for (auto& c : consumers_) {
-                c.queue->push(stream);  // shared_ptr 拷贝，引用计数 +1
+                c.queue->push(frame);  // shared_ptr 拷贝，引用计数 +1
             }
         }
         
@@ -159,16 +178,23 @@ private:
     void DispatchLoop(ConsumerInfo* consumer) {
         LOG_DEBUG("Dispatch loop started for consumer: {}", consumer->name);
         
+        uint64_t processedCount = 0;
         while (running_) {
-            EncodedStreamPtr stream;
-            if (consumer->queue->pop(stream, 1000)) {  // 1秒超时
-                if (stream && consumer->callback) {
-                    consumer->callback(stream);
+            EncodedFramePtr frame;
+            if (consumer->queue->pop(frame, 1000)) {  // 1秒超时
+                if (frame && consumer->callback) {
+                    processedCount++;
+                    if (processedCount <= 5 || processedCount % 30 == 0) {
+                        LOG_DEBUG("Consumer {} processing frame #{}, seq={}", 
+                                 consumer->name, processedCount, frame->seq);
+                    }
+                    consumer->callback(frame);
                 }
             }
         }
         
-        LOG_DEBUG("Dispatch loop exited for consumer: {}", consumer->name);
+        LOG_DEBUG("Dispatch loop exited for consumer: {}, processed {} frames", 
+                 consumer->name, processedCount);
     }
     
     RK_S32 venc_chn_id_;

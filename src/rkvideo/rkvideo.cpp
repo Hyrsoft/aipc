@@ -16,6 +16,8 @@
 
 static MPP_CHN_S stSrcChn, stvencChn;
 static VideoConfig g_videoConfig;
+
+// 分发器的实例
 static std::unique_ptr<StreamDispatcher> g_dispatcher;
 
 // 消费者注册信息（在启动前注册）
@@ -99,9 +101,9 @@ int rkvideo_init() {
         std::lock_guard<std::mutex> lock(g_consumerMutex);
         for (const auto& reg : g_pendingConsumers) {
             g_dispatcher->RegisterConsumer(reg.name, 
-                [reg](EncodedStreamPtr stream) {
+                [reg](EncodedFramePtr frame) {
                     if (reg.callback) {
-                        reg.callback(stream, reg.userData);
+                        reg.callback(frame, reg.userData);
                     }
                 }, 
                 reg.queueSize);
@@ -158,9 +160,9 @@ void rkvideo_register_stream_consumer(const char* name, VideoStreamCallback call
     if (g_dispatcher) {
         // 如果分发器已创建，直接注册
         g_dispatcher->RegisterConsumer(name, 
-            [callback, userData](EncodedStreamPtr stream) {
+            [callback, userData](EncodedFramePtr frame) {
                 if (callback) {
-                    callback(stream, userData);
+                    callback(frame, userData);
                 }
             }, 
             queueSize);

@@ -84,14 +84,86 @@ inline VideoFramePtr acquire_video_frame(RK_S32 dev_id, RK_S32 chn_id, RK_S32 ti
 }
 
 /**
+ * @brief 编码数据的拷贝版本（用于跨线程安全传递）
+ * 
+ * VENC 的 GetStream/ReleaseStream 必须在同一线程中调用，
+ * 因此需要拷贝数据后立即释放 VENC buffer
+ */
+struct EncodedFrame {
+    std::vector<uint8_t> data;  // 编码数据拷贝
+    uint64_t pts;               // 时间戳
+    uint32_t seq;               // 序列号
+    bool isKeyFrame;            // 是否为关键帧
+    
+    EncodedFrame() : pts(0), seq(0), isKeyFrame(false) {}
+    EncodedFrame(const uint8_t* d, size_t len, uint64_t p, uint32_t s, bool key)
+        : data(d, d + len), pts(p), seq(s), isKeyFrame(key) {}
+};
+
+using EncodedFramePtr = std::shared_ptr<EncodedFrame>;
+
+/**
+ * @brief 从 VENC 通道获取编码流，拷贝数据后立即释放
+ * 
+ * @param chn_id VENC 通道 ID
+ * @param timeout_ms 超时时间（毫秒），-1 表示阻塞等待
+ * @return EncodedFramePtr 成功返回帧指针，失败返回 nullptr
+ * 
+ * @note 此函数会拷贝编码数据，然后立即调用 ReleaseStream
+ * @note 这样可以避免 GetStream/ReleaseStream 在不同线程调用导致的死锁
+ */
+inline EncodedFramePtr acquire_encoded_frame(RK_S32 chn_id, RK_S32 timeout_ms = -1) {
+    VENC_STREAM_S stream;
+    VENC_PACK_S pack;
+    memset(&stream, 0, sizeof(stream));
+    memset(&pack, 0, sizeof(pack));
+    stream.pstPack = &pack;
+    
+    RK_S32 ret = RK_MPI_VENC_GetStream(chn_id, &stream, timeout_ms);
+    if (ret != RK_SUCCESS) {
+        return nullptr;
+    }
+    
+    // 获取数据指针
+    void* data = RK_MPI_MB_Handle2VirAddr(pack.pMbBlk);
+    if (!data || pack.u32Len == 0) {
+        RK_MPI_VENC_ReleaseStream(chn_id, &stream);
+        return nullptr;
+    }
+    
+    // 判断是否为关键帧
+    bool isKeyFrame = (pack.DataType.enH264EType == H264E_NALU_ISLICE ||
+                       pack.DataType.enH264EType == H264E_NALU_IDRSLICE ||
+                       pack.DataType.enH265EType == H265E_NALU_ISLICE ||
+                       pack.DataType.enH265EType == H265E_NALU_IDRSLICE);
+    
+    // 拷贝数据
+    auto frame = std::make_shared<EncodedFrame>(
+        static_cast<const uint8_t*>(data),
+        pack.u32Len,
+        pack.u64PTS,
+        stream.u32Seq,
+        isKeyFrame
+    );
+    
+    // 立即释放 VENC buffer（在同一线程中）
+    RK_MPI_VENC_ReleaseStream(chn_id, &stream);
+    
+    return frame;
+}
+
+// ============================================================================
+// 旧版接口（保留用于兼容，但有并发问题，不推荐跨线程使用）
+// ============================================================================
+
+/**
  * @brief 从 VENC 通道获取编码流并包装为智能指针
+ * 
+ * @deprecated 此接口在跨线程使用时可能导致死锁，建议使用 acquire_encoded_frame
  * 
  * @param chn_id VENC 通道 ID
  * @param timeout_ms 超时时间（毫秒），-1 表示阻塞等待
  * @return EncodedStreamPtr 成功返回流指针，失败返回 nullptr
- * 
- * @note 返回的智能指针在所有引用释放后会自动调用 RK_MPI_VENC_ReleaseStream
- * @note 内部会分配 VENC_PACK_S，也会在释放时一并清理
  */
 inline EncodedStreamPtr acquire_encoded_stream(RK_S32 chn_id, RK_S32 timeout_ms = -1) {
     auto stream = new VENC_STREAM_S();
@@ -110,10 +182,19 @@ inline EncodedStreamPtr acquire_encoded_stream(RK_S32 chn_id, RK_S32 timeout_ms 
         return nullptr;
     }
     
+    printf("[media_buffer] VENC GetStream success, seq=%u, len=%u\n", 
+           stream->u32Seq, stream->pstPack->u32Len);
+    
     // 创建带自定义删除器的 shared_ptr
     return EncodedStreamPtr(stream, [chn_id](VENC_STREAM_S* p) {
         if (p) {
-            RK_MPI_VENC_ReleaseStream(chn_id, p);
+            printf("[media_buffer] Releasing VENC stream, seq=%u\n", p->u32Seq);
+            RK_S32 ret = RK_MPI_VENC_ReleaseStream(chn_id, p);
+            if (ret != RK_SUCCESS) {
+                printf("[media_buffer] VENC ReleaseStream failed: 0x%x\n", ret);
+            } else {
+                printf("[media_buffer] VENC ReleaseStream success\n");
+            }
             delete p->pstPack;
             delete p;
         }
@@ -211,7 +292,9 @@ public:
      */
     bool push(T item) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (stopped_) return false;
+        if (stopped_) {
+            return false;
+        }
         
         // 背压处理：队列满时丢弃最旧的帧
         if (max_size_ > 0 && queue_.size() >= max_size_) {
@@ -244,7 +327,9 @@ public:
             }
         }
         
-        if (stopped_ && queue_.empty()) return false;
+        if (stopped_ && queue_.empty()) {
+            return false;
+        }
         
         item = std::move(queue_.front());
         queue_.pop();

@@ -55,7 +55,7 @@ int rkvideo_deinit();
 /**
  * @brief 流消费者回调类型
  */
-using VideoStreamCallback = void(*)(EncodedStreamPtr stream, void* userData);
+using VideoStreamCallback = void(*)(EncodedFramePtr frame, void* userData);
 
 /**
  * @brief 注册编码流消费者

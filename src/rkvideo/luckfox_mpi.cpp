@@ -66,7 +66,7 @@ int vi_dev_init() {
 
 int vi_chn_init(int channelId, int width, int height) {
 	int ret;
-	int buf_cnt = 2;
+	int buf_cnt = 4;  // 增加 buffer 数量
 	// VI init
 	VI_CHN_ATTR_S vi_chn_attr;
 	memset(&vi_chn_attr, 0, sizeof(vi_chn_attr));
@@ -77,7 +77,9 @@ int vi_chn_init(int channelId, int width, int height) {
 	vi_chn_attr.stSize.u32Height = height;
 	vi_chn_attr.enPixelFormat = RK_FMT_YUV420SP;
 	vi_chn_attr.enCompressMode = COMPRESS_MODE_NONE; // COMPRESS_AFBC_16x16;
-	vi_chn_attr.u32Depth = 2; //0, get fail, 1 - u32BufCount, can get, if bind to other device, must be < u32BufCount
+	// 关键：当 VI 绑定到 VENC 时，u32Depth 必须小于 u32BufCount
+	// 设为 0 表示完全绑定模式，VI 帧直接送到 VENC
+	vi_chn_attr.u32Depth = 0;
 	ret = RK_MPI_VI_SetChnAttr(0, channelId, &vi_chn_attr);
 	ret |= RK_MPI_VI_EnableChn(0, channelId);
 	if (ret) {
@@ -118,7 +120,7 @@ int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType) {
 	stAttr.stVencAttr.u32PicHeight = height;
 	stAttr.stVencAttr.u32VirWidth = width;
 	stAttr.stVencAttr.u32VirHeight = height;
-	stAttr.stVencAttr.u32StreamBufCnt = 2;
+	stAttr.stVencAttr.u32StreamBufCnt = 4;  // 增加 buffer 数量，避免耗尽
 	stAttr.stVencAttr.u32BufSize = width * height * 3 / 2;
 	stAttr.stVencAttr.enMirror = MIRROR_NONE;
 

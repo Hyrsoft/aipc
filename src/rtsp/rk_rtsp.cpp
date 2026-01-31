@@ -12,9 +12,10 @@
 #include "rk_rtsp.h"
 #include "rtsp_demo.h"
 #include "common/logger.h"
+#include "common/media_buffer.h"
 
-#include "rk_mpi_mb.h"
-#include <unistd.h>
+#include <thread>
+#include <chrono>
 
 // ============================================================================
 // RtspServer 类实现
@@ -47,7 +48,7 @@ bool RtspServer::Init(const RtspConfig& config) {
         if (retry < maxRetries - 1) {
             LOG_WARN("Port {} may be in use, retrying ({}/{})...", 
                      config_.port, retry + 1, maxRetries);
-            usleep(retryDelayMs * 1000);
+            std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
         }
     }
     
@@ -109,23 +110,19 @@ void RtspServer::Deinit() {
              stats_.framesSent, stats_.bytesSent, stats_.errors);
 }
 
-bool RtspServer::SendVideoFrame(const EncodedStreamPtr& stream) {
-    if (!initialized_ || !stream || !stream->pstPack) {
+bool RtspServer::SendVideoFrame(const EncodedFramePtr& frame) {
+    if (!initialized_ || !frame || frame->data.empty()) {
+        LOG_WARN("SendVideoFrame: invalid state or frame");
         return false;
     }
 
-    // 从 MPI buffer 获取虚拟地址
-    void* data = RK_MPI_MB_Handle2VirAddr(stream->pstPack->pMbBlk);
-    if (!data) {
-        LOG_ERROR("Failed to get virtual address from MB handle");
-        stats_.errors++;
-        return false;
-    }
+    LOG_DEBUG("SendVideoFrame: len={}, pts={}, seq={}", 
+              frame->data.size(), frame->pts, frame->seq);
 
     return SendVideoData(
-        static_cast<const uint8_t*>(data),
-        stream->pstPack->u32Len,
-        stream->pstPack->u64PTS
+        frame->data.data(),
+        static_cast<int>(frame->data.size()),
+        frame->pts
     );
 }
 
@@ -198,6 +195,6 @@ void rtsp_server_deinit() {
     GetRtspServer().Deinit();
 }
 
-void rtsp_stream_consumer(EncodedStreamPtr stream, void* /* userData */) {
-    GetRtspServer().SendVideoFrame(stream);
+void rtsp_stream_consumer(EncodedFramePtr frame, void* /* userData */) {
+    GetRtspServer().SendVideoFrame(frame);
 }

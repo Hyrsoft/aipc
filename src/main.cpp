@@ -3,7 +3,8 @@
 
 #include <csignal>
 #include <atomic>
-#include <unistd.h>
+#include <thread>
+#include <chrono>
 #include "common/logger.h"
 #include "rkvideo/rkvideo.h"
 #include "thread_stream.h"
@@ -60,7 +61,7 @@ int main() {
 
     // 主循环
     while (g_running) {
-        usleep(100 * 1000);  // 100ms
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     // 清理资源
