@@ -2,12 +2,12 @@
  * @file stream_dispatcher.h
  * @brief 视频流分发器 - 管理 VENC 输出到多个消费者的分发
  *
- * 实现 VENC 编码流到 RTSP 和 WebRTC 的分发
+ * 实现 VENC 编码流到 RTSP 和 WebRTC 的零拷贝分发
  * 
  * 设计要点：
- * - 数据拷贝后释放：GetStream/ReleaseStream 在同一线程中完成，避免死锁
- * - 拷贝后共享：多消费者共享拷贝后的数据
- * - 背压处理：队列满时丢弃旧帧
+ * - 零拷贝共享：RTSP 和 WebRTC 拿到的是同一个内存块地址
+ * - 解耦释放：任一消费者处理慢不影响其他消费者
+ * - 背压处理：队列满时丢弃旧帧，避免 VENC Buffer Pool 耗尽
  *
  * @author 好软，好温暖
  * @date 2026-01-31
@@ -28,12 +28,9 @@
 /**
  * @brief 流消费者回调类型
  * 
- * 消费者通过此回调接收编码帧（拷贝后的数据）
+ * 消费者通过此回调接收编码流（零拷贝共享）
  */
-using StreamConsumer = std::function<void(EncodedFramePtr)>;
-
-// 编码帧队列类型
-using EncodedFrameQueue = MediaQueue<EncodedFramePtr>;
+using StreamConsumer = std::function<void(EncodedStreamPtr)>;
 
 /**
  * @brief 视频流分发器
@@ -61,7 +58,7 @@ public:
      * @param queue_size 消费者队列大小（背压控制）
      */
     void RegisterConsumer(const std::string& name, StreamConsumer consumer, size_t queue_size = 3) {
-        consumers_.push_back({name, consumer, std::make_unique<EncodedFrameQueue>(queue_size)});
+        consumers_.push_back({name, consumer, std::make_unique<EncodedStreamQueue>(queue_size)});
         LOG_INFO("Registered stream consumer: {}", name);
     }
     
@@ -125,15 +122,15 @@ private:
     struct ConsumerInfo {
         std::string name;
         StreamConsumer callback;
-        std::unique_ptr<EncodedFrameQueue> queue;
+        std::unique_ptr<EncodedStreamQueue> queue;
         std::thread thread;
     };
     
     /**
      * @brief 获取循环 - 从 VENC 获取编码流并分发到各队列
      * 
-     * 关键：GetStream 和 ReleaseStream 必须在同一线程中完成
-     * 因此采用"拷贝后释放"策略
+     * 使用零拷贝共享：多个消费者共享同一个 VENC buffer
+     * shared_ptr 引用计数管理，最后一个使用者释放时调用 ReleaseStream
      */
     void FetchLoop() {
         LOG_DEBUG("Fetch loop started for VENC channel {}", venc_chn_id_);
@@ -142,13 +139,13 @@ private:
         uint64_t errorCount = 0;
         
         while (running_) {
-            // 从 VENC 获取编码帧（获取后立即拷贝并释放 VENC buffer）
-            auto frame = acquire_encoded_frame(venc_chn_id_, 1000);  // 1秒超时
+            // 从 VENC 获取编码流（零拷贝，shared_ptr 管理生命周期）
+            auto stream = acquire_encoded_stream(venc_chn_id_, 1000);  // 1秒超时
             
-            if (!frame) {
+            if (!stream) {
                 errorCount++;
                 if (errorCount % 5 == 1) {  // 每5次错误打印一次
-                    LOG_WARN("Failed to get frame from VENC channel {} (error #{})", 
+                    LOG_WARN("Failed to get stream from VENC channel {} (error #{})", 
                              venc_chn_id_, errorCount);
                 }
                 continue;
@@ -159,14 +156,17 @@ private:
             
             // 打印帧信息
             if (frameCount <= 5 || frameCount % 30 == 0) {
-                LOG_DEBUG("Got frame #{}, seq={}, size={} bytes, keyframe={}", 
-                         frameCount, frame->seq, frame->data.size(), frame->isKeyFrame);
+                LOG_DEBUG("Got frame #{}, size={} bytes", 
+                         frameCount, stream->pstPack ? stream->pstPack->u32Len : 0);
             }
             
-            // 分发给所有消费者（共享拷贝后的数据）
+            // 分发给所有消费者（零拷贝，只是增加引用计数）
             for (auto& c : consumers_) {
-                c.queue->push(frame);  // shared_ptr 拷贝，引用计数 +1
+                c.queue->push(stream);  // shared_ptr 拷贝，引用计数 +1
             }
+            
+            // stream 在这里离开作用域后，引用计数 -1
+            // 当所有消费者都处理完毕后，最后一个释放时会调用 ReleaseStream
         }
         
         LOG_DEBUG("Fetch loop exited, total frames: {}", frameCount);
@@ -180,15 +180,15 @@ private:
         
         uint64_t processedCount = 0;
         while (running_) {
-            EncodedFramePtr frame;
-            if (consumer->queue->pop(frame, 1000)) {  // 1秒超时
-                if (frame && consumer->callback) {
+            EncodedStreamPtr stream;
+            if (consumer->queue->pop(stream, 1000)) {  // 1秒超时
+                if (stream && consumer->callback) {
                     processedCount++;
                     if (processedCount <= 5 || processedCount % 30 == 0) {
-                        LOG_DEBUG("Consumer {} processing frame #{}, seq={}", 
-                                 consumer->name, processedCount, frame->seq);
+                        LOG_DEBUG("Consumer {} processing frame #{}, ref_count={}", 
+                                 consumer->name, processedCount, stream.use_count());
                     }
-                    consumer->callback(frame);
+                    consumer->callback(stream);
                 }
             }
         }

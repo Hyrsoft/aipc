@@ -153,13 +153,15 @@ inline EncodedFramePtr acquire_encoded_frame(RK_S32 chn_id, RK_S32 timeout_ms = 
 }
 
 // ============================================================================
-// 旧版接口（保留用于兼容，但有并发问题，不推荐跨线程使用）
+// 零拷贝编码流接口 - 用于 VENC 输出的跨线程共享
 // ============================================================================
 
 /**
  * @brief 从 VENC 通道获取编码流并包装为智能指针
  * 
- * @deprecated 此接口在跨线程使用时可能导致死锁，建议使用 acquire_encoded_frame
+ * 使用 shared_ptr 的引用计数管理 VENC buffer 生命周期：
+ * - 获取时调用 GetStream
+ * - 最后一个使用者释放时自动调用 ReleaseStream
  * 
  * @param chn_id VENC 通道 ID
  * @param timeout_ms 超时时间（毫秒），-1 表示阻塞等待
@@ -173,28 +175,15 @@ inline EncodedStreamPtr acquire_encoded_stream(RK_S32 chn_id, RK_S32 timeout_ms 
     
     RK_S32 ret = RK_MPI_VENC_GetStream(chn_id, stream, timeout_ms);
     if (ret != RK_SUCCESS) {
-        // 调试：打印错误码（仅在非超时时打印）
-        if (ret != RK_ERR_VENC_BUF_EMPTY) {
-            printf("[media_buffer] VENC GetStream failed: 0x%x\n", ret);
-        }
         delete stream->pstPack;
         delete stream;
         return nullptr;
     }
     
-    printf("[media_buffer] VENC GetStream success, seq=%u, len=%u\n", 
-           stream->u32Seq, stream->pstPack->u32Len);
-    
     // 创建带自定义删除器的 shared_ptr
     return EncodedStreamPtr(stream, [chn_id](VENC_STREAM_S* p) {
         if (p) {
-            printf("[media_buffer] Releasing VENC stream, seq=%u\n", p->u32Seq);
-            RK_S32 ret = RK_MPI_VENC_ReleaseStream(chn_id, p);
-            if (ret != RK_SUCCESS) {
-                printf("[media_buffer] VENC ReleaseStream failed: 0x%x\n", ret);
-            } else {
-                printf("[media_buffer] VENC ReleaseStream success\n");
-            }
+            RK_MPI_VENC_ReleaseStream(chn_id, p);
             delete p->pstPack;
             delete p;
         }

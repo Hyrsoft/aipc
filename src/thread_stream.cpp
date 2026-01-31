@@ -41,8 +41,8 @@ bool stream_rtsp_init(const RtspConfig& config) {
     // 使用 C 风格回调函数包装器
     rkvideo_register_stream_consumer(
         "rtsp",
-        [](EncodedFramePtr frame, void* userData) {
-            rtsp_stream_consumer(frame, userData);
+        [](EncodedStreamPtr stream, void* userData) {
+            rtsp_stream_consumer(stream, userData);
         },
         nullptr,
         3  // 队列大小

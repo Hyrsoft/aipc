@@ -92,7 +92,6 @@ int rkvideo_init() {
         return -1;
     }
     LOG_INFO("VI to VENC binding successful");
-
     // 创建流分发器
     g_dispatcher = std::make_unique<StreamDispatcher>(0);
     
@@ -101,9 +100,9 @@ int rkvideo_init() {
         std::lock_guard<std::mutex> lock(g_consumerMutex);
         for (const auto& reg : g_pendingConsumers) {
             g_dispatcher->RegisterConsumer(reg.name, 
-                [reg](EncodedFramePtr frame) {
+                [reg](EncodedStreamPtr stream) {
                     if (reg.callback) {
-                        reg.callback(frame, reg.userData);
+                        reg.callback(stream, reg.userData);
                     }
                 }, 
                 reg.queueSize);
@@ -160,9 +159,9 @@ void rkvideo_register_stream_consumer(const char* name, VideoStreamCallback call
     if (g_dispatcher) {
         // 如果分发器已创建，直接注册
         g_dispatcher->RegisterConsumer(name, 
-            [callback, userData](EncodedFramePtr frame) {
+            [callback, userData](EncodedStreamPtr stream) {
                 if (callback) {
-                    callback(frame, userData);
+                    callback(stream, userData);
                 }
             }, 
             queueSize);
