@@ -120,6 +120,31 @@ public:
      */
     void OnError(ErrorCallback callback);
 
+    // ========================================================================
+    // HTTP 信令模式 API
+    // ========================================================================
+
+    /**
+     * @brief 创建 Offer (HTTP 信令模式)
+     * @return SDP Offer
+     */
+    std::string CreateOfferForHttp();
+
+    /**
+     * @brief 设置 Answer (HTTP 信令模式)
+     */
+    bool SetAnswerFromHttp(const std::string& sdp);
+
+    /**
+     * @brief 添加远程 ICE 候选 (HTTP 信令模式)
+     */
+    bool AddIceCandidateFromHttp(const std::string& candidate, const std::string& mid);
+
+    /**
+     * @brief 获取本地 ICE 候选列表
+     */
+    std::vector<std::pair<std::string, std::string>> GetLocalIceCandidates();
+
 private:
     WebRTCThreadConfig config_;
     bool valid_ = false;

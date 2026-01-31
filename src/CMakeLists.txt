@@ -30,6 +30,7 @@ add_executable(aipc ${AIPC_SOURCES})
 target_include_directories(aipc
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${LIBDATACHANNEL_PATH}/deps/json/single_include  # nlohmann/json
 )
 
 # 链接静态库和第三方库

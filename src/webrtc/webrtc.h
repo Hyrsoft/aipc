@@ -201,6 +201,38 @@ public:
     bool SendDataMessage(const std::string& message);
 
     // ========================================================================
+    // HTTP 信令模式 API（用于网页直连）
+    // ========================================================================
+
+    /**
+     * @brief 创建 Offer 用于 HTTP 信令
+     * @return SDP Offer 字符串，失败返回空
+     */
+    std::string CreateOfferForHttp();
+
+    /**
+     * @brief 处理来自 HTTP 的 Answer
+     * @param sdp Answer SDP
+     * @return true 成功
+     */
+    bool SetAnswerFromHttp(const std::string& sdp);
+
+    /**
+     * @brief 添加来自 HTTP 的 ICE 候选
+     */
+    bool AddIceCandidateFromHttp(const std::string& candidate, const std::string& mid);
+
+    /**
+     * @brief 获取本地 ICE 候选列表（用于 HTTP 响应）
+     */
+    std::vector<std::pair<std::string, std::string>> GetLocalIceCandidates();
+
+    /**
+     * @brief 检查是否有待发送的本地 ICE 候选
+     */
+    bool HasPendingLocalIceCandidates() const;
+
+    // ========================================================================
     // 状态查询
     // ========================================================================
 
@@ -295,5 +327,11 @@ private:
     std::mutex ice_mutex_;
     std::vector<std::tuple<std::string, std::string, int>> pending_ice_candidates_;
     std::atomic<bool> sdp_exchange_completed_{false};
+
+    // HTTP 信令模式的本地 ICE 候选缓存
+    mutable std::mutex local_ice_mutex_;
+    std::vector<std::pair<std::string, std::string>> local_ice_candidates_;
+    std::string pending_local_sdp_;
+    std::atomic<bool> http_mode_{false};
 };
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AIPC 控制面板</title>
+    <title>AIPC - RV1106 边缘 AI 相机</title>
     <style>
         * {
             box-sizing: border-box;
@@ -15,31 +15,76 @@
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             min-height: 100vh;
             color: #fff;
-            padding: 20px;
         }
         .container {
-            max-width: 1000px;
+            max-width: 1200px;
             margin: 0 auto;
+            padding: 20px;
         }
         header {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }
         header h1 {
-            font-size: 2rem;
-            margin-bottom: 10px;
+            font-size: 1.8rem;
+            margin-bottom: 5px;
         }
         header p {
             color: #8892b0;
+            font-size: 0.9rem;
         }
+
+        /* 标签页样式 */
+        .tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            background: rgba(255,255,255,0.05);
+            padding: 5px;
+            border-radius: 12px;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            background: transparent;
+            color: #8892b0;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .tab-btn:hover {
+            color: #fff;
+            background: rgba(255,255,255,0.05);
+        }
+        .tab-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+
+        /* 状态栏 */
         .status-bar {
             background: rgba(255,255,255,0.1);
             border-radius: 10px;
-            padding: 15px 20px;
+            padding: 12px 20px;
             margin-bottom: 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
         }
         .status-bar .status {
             display: flex;
@@ -51,43 +96,51 @@
             height: 10px;
             border-radius: 50%;
             background: #4ade80;
+            animation: pulse 2s infinite;
         }
         .status-dot.offline {
             background: #ef4444;
+            animation: none;
         }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* 控制面板卡片 */
         .cards {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 20px;
         }
         .card {
             background: rgba(255,255,255,0.05);
             border-radius: 15px;
-            padding: 25px;
+            padding: 20px;
             border: 1px solid rgba(255,255,255,0.1);
         }
         .card h2 {
-            font-size: 1.2rem;
-            margin-bottom: 20px;
+            font-size: 1.1rem;
+            margin-bottom: 15px;
             display: flex;
             align-items: center;
             gap: 10px;
         }
         .card h2 .icon {
-            width: 35px;
-            height: 35px;
+            width: 32px;
+            height: 32px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.2rem;
+            font-size: 1rem;
         }
         .info-row {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 10px 0;
+            padding: 8px 0;
             border-bottom: 1px solid rgba(255,255,255,0.1);
         }
         .info-row:last-child {
@@ -95,43 +148,37 @@
         }
         .info-row .label {
             color: #8892b0;
+            font-size: 0.9rem;
         }
         .info-row .value {
             font-weight: 500;
+            font-size: 0.9rem;
         }
+
+        /* 徽章 */
         .badge {
             padding: 4px 10px;
             border-radius: 15px;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             font-weight: 600;
         }
-        .badge.success {
-            background: rgba(74, 222, 128, 0.2);
-            color: #4ade80;
-        }
-        .badge.warning {
-            background: rgba(251, 191, 36, 0.2);
-            color: #fbbf24;
-        }
-        .badge.danger {
-            background: rgba(239, 68, 68, 0.2);
-            color: #ef4444;
-        }
-        .badge.info {
-            background: rgba(59, 130, 246, 0.2);
-            color: #3b82f6;
-        }
+        .badge.success { background: rgba(74, 222, 128, 0.2); color: #4ade80; }
+        .badge.warning { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+        .badge.danger { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        .badge.info { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+
+        /* 按钮 */
         .btn {
-            padding: 10px 20px;
+            padding: 10px 18px;
             border: none;
             border-radius: 8px;
             cursor: pointer;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             font-weight: 500;
             transition: all 0.2s;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
         }
         .btn:disabled {
             opacity: 0.5;
@@ -141,161 +188,304 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: #fff;
         }
-        .btn-primary:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-        }
         .btn-danger {
             background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
             color: #fff;
-        }
-        .btn-danger:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(239, 68, 68, 0.4);
         }
         .btn-success {
             background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
             color: #fff;
         }
-        .btn-success:hover:not(:disabled) {
+        .btn:hover:not(:disabled) {
             transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(74, 222, 128, 0.4);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.3);
         }
         .btn-group {
             display: flex;
             gap: 10px;
-            margin-top: 15px;
+            margin-top: 12px;
         }
+
+        /* 日志区域 */
         .log-area {
             background: rgba(0,0,0,0.3);
             border-radius: 8px;
-            padding: 15px;
-            margin-top: 15px;
-            max-height: 150px;
+            padding: 12px;
+            max-height: 120px;
             overflow-y: auto;
-            font-family: monospace;
-            font-size: 0.85rem;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.8rem;
         }
         .log-entry {
-            padding: 3px 0;
+            padding: 2px 0;
             color: #8892b0;
         }
-        .log-entry.success {
-            color: #4ade80;
+        .log-entry.success { color: #4ade80; }
+        .log-entry.error { color: #ef4444; }
+
+        /* WebRTC 播放器 */
+        .player-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
         }
-        .log-entry.error {
-            color: #ef4444;
+        .video-wrapper {
+            position: relative;
+            background: #000;
+            border-radius: 15px;
+            overflow: hidden;
+            aspect-ratio: 16/9;
         }
+        .video-wrapper video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .video-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,0.7);
+            color: #8892b0;
+            font-size: 1.2rem;
+        }
+        .video-overlay.hidden {
+            display: none;
+        }
+        .video-controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .video-stats {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .stat-item {
+            background: rgba(255,255,255,0.05);
+            padding: 10px 15px;
+            border-radius: 8px;
+        }
+        .stat-item .stat-label {
+            color: #8892b0;
+            font-size: 0.75rem;
+            margin-bottom: 3px;
+        }
+        .stat-item .stat-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        /* WebRTC 连接状态 */
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 15px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+        }
+        .connection-status.connected { background: rgba(74, 222, 128, 0.1); }
+        .connection-status.connecting { background: rgba(251, 191, 36, 0.1); }
+        .connection-status.disconnected { background: rgba(239, 68, 68, 0.1); }
+
+        /* 页脚 */
         .footer {
             text-align: center;
             margin-top: 30px;
+            padding: 15px;
             color: #8892b0;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
         }
-        .footer a {
-            color: #667eea;
-            text-decoration: none;
-        }
+
+        /* 响应式 */
         @media (max-width: 640px) {
-            .cards {
-                grid-template-columns: 1fr;
-            }
-            .btn-group {
-                flex-direction: column;
-            }
+            .container { padding: 10px; }
+            header h1 { font-size: 1.4rem; }
+            .tabs { flex-direction: column; }
+            .tab-btn { padding: 10px; }
+            .cards { grid-template-columns: 1fr; }
+            .btn-group { flex-direction: column; }
+            .video-controls { flex-direction: column; align-items: stretch; }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🎥 AIPC 控制面板</h1>
-            <p>RV1106 边缘 AI 相机管理界面</p>
+            <h1>🎥 AIPC</h1>
+            <p>RV1106 边缘 AI 相机</p>
         </header>
 
+        <!-- 标签页导航 -->
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('dashboard')">
+                📊 控制面板
+            </button>
+            <button class="tab-btn" onclick="switchTab('player')">
+                ▶️ 实时预览
+            </button>
+        </div>
+
+        <!-- 状态栏 -->
         <div class="status-bar">
             <div class="status">
                 <div class="status-dot" id="statusDot"></div>
                 <span id="statusText">正在连接...</span>
             </div>
-            <span id="lastUpdate">-</span>
+            <span id="lastUpdate" style="color: #8892b0; font-size: 0.85rem;">-</span>
         </div>
 
-        <div class="cards">
-            <!-- RTSP 卡片 -->
-            <div class="card">
-                <h2><span class="icon">📡</span> RTSP 推流</h2>
-                <div class="info-row">
-                    <span class="label">状态</span>
-                    <span class="badge" id="rtspStatus">-</span>
+        <!-- 控制面板标签页 -->
+        <div id="tab-dashboard" class="tab-content active">
+            <div class="cards">
+                <!-- RTSP 卡片 -->
+                <div class="card">
+                    <h2><span class="icon">📡</span> RTSP 推流</h2>
+                    <div class="info-row">
+                        <span class="label">状态</span>
+                        <span class="badge" id="rtspStatus">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">URL</span>
+                        <span class="value" id="rtspUrl" style="font-size: 0.8rem;">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">发送帧数</span>
+                        <span class="value" id="rtspFrames">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">发送数据</span>
+                        <span class="value" id="rtspBytes">-</span>
+                    </div>
                 </div>
-                <div class="info-row">
-                    <span class="label">URL</span>
-                    <span class="value" id="rtspUrl">-</span>
+
+                <!-- WebRTC 卡片 -->
+                <div class="card">
+                    <h2><span class="icon">🌐</span> WebRTC</h2>
+                    <div class="info-row">
+                        <span class="label">服务状态</span>
+                        <span class="badge" id="webrtcStatus">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">启用</span>
+                        <span class="value" id="webrtcEnabled">-</span>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-success" id="btnWebrtcStart" onclick="webrtcServiceStart()">▶ 启动服务</button>
+                        <button class="btn btn-danger" id="btnWebrtcStop" onclick="webrtcServiceStop()">⏹ 停止服务</button>
+                    </div>
                 </div>
-                <div class="info-row">
-                    <span class="label">发送帧数</span>
-                    <span class="value" id="rtspFrames">-</span>
+
+                <!-- 录制卡片 -->
+                <div class="card">
+                    <h2><span class="icon">⏺</span> 视频录制</h2>
+                    <div class="info-row">
+                        <span class="label">状态</span>
+                        <span class="badge" id="recordStatus">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">输出目录</span>
+                        <span class="value" id="recordDir" style="font-size: 0.8rem;">-</span>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-success" id="btnRecordStart" onclick="recordStart()">⏺ 开始录制</button>
+                        <button class="btn btn-danger" id="btnRecordStop" onclick="recordStop()">⏹ 停止录制</button>
+                    </div>
                 </div>
-                <div class="info-row">
-                    <span class="label">发送数据</span>
-                    <span class="value" id="rtspBytes">-</span>
+
+                <!-- 日志卡片 -->
+                <div class="card">
+                    <h2><span class="icon">📋</span> 操作日志</h2>
+                    <div class="log-area" id="logArea">
+                        <div class="log-entry">等待操作...</div>
+                    </div>
                 </div>
             </div>
+        </div>
 
-            <!-- WebRTC 卡片 -->
-            <div class="card">
-                <h2><span class="icon">🌐</span> WebRTC</h2>
-                <div class="info-row">
-                    <span class="label">状态</span>
-                    <span class="badge" id="webrtcStatus">-</span>
+        <!-- 实时预览标签页 -->
+        <div id="tab-player" class="tab-content">
+            <div class="player-container">
+                <!-- 视频区域 -->
+                <div class="video-wrapper">
+                    <video id="remoteVideo" autoplay playsinline muted></video>
+                    <div class="video-overlay" id="videoOverlay">
+                        <span>点击"连接"开始预览</span>
+                    </div>
                 </div>
-                <div class="info-row">
-                    <span class="label">启用</span>
-                    <span class="value" id="webrtcEnabled">-</span>
-                </div>
-                <div class="btn-group">
-                    <button class="btn btn-success" id="btnWebrtcStart" onclick="webrtcStart()">▶ 启动</button>
-                    <button class="btn btn-danger" id="btnWebrtcStop" onclick="webrtcStop()">⏹ 停止</button>
-                </div>
-            </div>
 
-            <!-- 录制卡片 -->
-            <div class="card">
-                <h2><span class="icon">⏺</span> 视频录制</h2>
-                <div class="info-row">
-                    <span class="label">状态</span>
-                    <span class="badge" id="recordStatus">-</span>
+                <!-- 控制按钮 -->
+                <div class="video-controls">
+                    <div class="connection-status disconnected" id="connStatus">
+                        <div class="status-dot offline" id="connDot"></div>
+                        <span id="connText">未连接</span>
+                    </div>
+                    <button class="btn btn-success" id="btnConnect" onclick="webrtcConnect()">▶ 连接</button>
+                    <button class="btn btn-danger" id="btnDisconnect" onclick="webrtcDisconnect()" disabled>⏹ 断开</button>
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="chkAutoReconnect">
+                        <span style="color: #8892b0; font-size: 0.85rem;">自动重连</span>
+                    </label>
                 </div>
-                <div class="info-row">
-                    <span class="label">输出目录</span>
-                    <span class="value" id="recordDir">-</span>
-                </div>
-                <div class="btn-group">
-                    <button class="btn btn-success" id="btnRecordStart" onclick="recordStart()">⏺ 开始录制</button>
-                    <button class="btn btn-danger" id="btnRecordStop" onclick="recordStop()">⏹ 停止录制</button>
-                </div>
-            </div>
 
-            <!-- 日志卡片 -->
-            <div class="card">
-                <h2><span class="icon">📋</span> 操作日志</h2>
-                <div class="log-area" id="logArea">
-                    <div class="log-entry">等待操作...</div>
+                <!-- 统计信息 -->
+                <div class="video-stats">
+                    <div class="stat-item">
+                        <div class="stat-label">分辨率</div>
+                        <div class="stat-value" id="statResolution">-</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">帧率</div>
+                        <div class="stat-value" id="statFps">- fps</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">码率</div>
+                        <div class="stat-value" id="statBitrate">- kbps</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">已接收</div>
+                        <div class="stat-value" id="statReceived">0 B</div>
+                    </div>
+                </div>
+
+                <!-- 提示信息 -->
+                <div class="card" style="margin-top: 15px; padding: 15px;">
+                    <p style="color: #8892b0; font-size: 0.85rem; margin: 0;">
+                        💡 提示：WebRTC 低延迟直连模式。如果连接失败，请确保设备和浏览器在同一局域网内。
+                    </p>
                 </div>
             </div>
         </div>
 
         <div class="footer">
-            <p>Powered by RV1106 & cpp-httplib | <a href="webrtc.html">WebRTC 播放器</a></p>
+            Powered by RV1106 & libdatachannel
         </div>
     </div>
 
     <script>
+        // =====================================================================
+        // 全局变量
+        // =====================================================================
         const API_BASE = '';
         let updateTimer = null;
+        let statsTimer = null;
+        
+        // WebRTC 相关
+        let peerConnection = null;
+        let lastBytesReceived = 0;
+        let lastStatsTime = 0;
 
-        // 格式化字节数
+        // =====================================================================
+        // 工具函数
+        // =====================================================================
         function formatBytes(bytes) {
             if (bytes === 0) return '0 B';
             const k = 1024;
@@ -304,7 +494,6 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
 
-        // 添加日志
         function addLog(message, type = '') {
             const logArea = document.getElementById('logArea');
             const entry = document.createElement('div');
@@ -313,14 +502,27 @@
             entry.textContent = `[${time}] ${message}`;
             logArea.appendChild(entry);
             logArea.scrollTop = logArea.scrollHeight;
-            
-            // 保持最多 50 条日志
             while (logArea.children.length > 50) {
                 logArea.removeChild(logArea.firstChild);
             }
         }
 
+        // =====================================================================
+        // 标签页切换
+        // =====================================================================
+        function switchTab(tabId) {
+            // 更新按钮状态
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            // 更新内容显示
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            document.getElementById('tab-' + tabId).classList.add('active');
+        }
+
+        // =====================================================================
         // API 调用
+        // =====================================================================
         async function apiCall(method, endpoint, body = null) {
             try {
                 const options = {
@@ -328,20 +530,19 @@
                     headers: { 'Content-Type': 'application/json' }
                 };
                 if (body) options.body = JSON.stringify(body);
-                
                 const response = await fetch(API_BASE + endpoint, options);
-                const data = await response.json();
-                return data;
+                return await response.json();
             } catch (error) {
                 console.error('API Error:', error);
                 return { success: false, message: error.message };
             }
         }
 
-        // 更新状态
+        // =====================================================================
+        // 状态更新
+        // =====================================================================
         async function updateStatus() {
             try {
-                // 获取系统状态
                 const status = await apiCall('GET', '/api/status');
                 
                 if (status.success) {
@@ -352,39 +553,39 @@
                     
                     // RTSP 状态
                     if (data.rtsp) {
-                        const rtspStatus = document.getElementById('rtspStatus');
+                        const el = document.getElementById('rtspStatus');
                         if (data.rtsp.valid) {
-                            rtspStatus.textContent = '运行中';
-                            rtspStatus.className = 'badge success';
+                            el.textContent = '运行中';
+                            el.className = 'badge success';
                         } else {
-                            rtspStatus.textContent = '已禁用';
-                            rtspStatus.className = 'badge warning';
+                            el.textContent = '已禁用';
+                            el.className = 'badge warning';
                         }
                     }
                     
                     // WebRTC 状态
                     if (data.webrtc) {
-                        const webrtcStatus = document.getElementById('webrtcStatus');
+                        const el = document.getElementById('webrtcStatus');
                         document.getElementById('webrtcEnabled').textContent = data.webrtc.enabled ? '是' : '否';
                         if (data.webrtc.running) {
-                            webrtcStatus.textContent = '运行中';
-                            webrtcStatus.className = 'badge success';
+                            el.textContent = '运行中';
+                            el.className = 'badge success';
                         } else {
-                            webrtcStatus.textContent = '已停止';
-                            webrtcStatus.className = 'badge warning';
+                            el.textContent = '已停止';
+                            el.className = 'badge warning';
                         }
                     }
                     
                     // 录制状态
                     if (data.recording) {
-                        const recordStatus = document.getElementById('recordStatus');
+                        const el = document.getElementById('recordStatus');
                         document.getElementById('recordDir').textContent = data.recording.output_dir || '-';
                         if (data.recording.active) {
-                            recordStatus.textContent = '录制中';
-                            recordStatus.className = 'badge danger';
+                            el.textContent = '录制中';
+                            el.className = 'badge danger';
                         } else {
-                            recordStatus.textContent = '待机';
-                            recordStatus.className = 'badge info';
+                            el.textContent = '待机';
+                            el.className = 'badge info';
                         }
                     }
                 } else {
@@ -392,7 +593,7 @@
                     document.getElementById('statusText').textContent = '连接失败';
                 }
 
-                // 获取 RTSP 详细状态
+                // RTSP 详细状态
                 const rtspDetail = await apiCall('GET', '/api/rtsp/status');
                 if (rtspDetail.success && rtspDetail.data) {
                     document.getElementById('rtspUrl').textContent = rtspDetail.data.url || '-';
@@ -404,34 +605,34 @@
             } catch (error) {
                 document.getElementById('statusDot').classList.add('offline');
                 document.getElementById('statusText').textContent = '连接错误';
-                console.error('Update error:', error);
             }
         }
 
-        // WebRTC 控制
-        async function webrtcStart() {
-            addLog('正在启动 WebRTC...');
+        // =====================================================================
+        // 控制面板操作
+        // =====================================================================
+        async function webrtcServiceStart() {
+            addLog('正在启动 WebRTC 服务...');
             const result = await apiCall('POST', '/api/webrtc/start');
             if (result.success) {
-                addLog('WebRTC 启动成功', 'success');
+                addLog('WebRTC 服务启动成功', 'success');
             } else {
-                addLog('WebRTC 启动失败: ' + result.message, 'error');
+                addLog('WebRTC 服务启动失败: ' + result.message, 'error');
             }
             updateStatus();
         }
 
-        async function webrtcStop() {
-            addLog('正在停止 WebRTC...');
+        async function webrtcServiceStop() {
+            addLog('正在停止 WebRTC 服务...');
             const result = await apiCall('POST', '/api/webrtc/stop');
             if (result.success) {
-                addLog('WebRTC 已停止', 'success');
+                addLog('WebRTC 服务已停止', 'success');
             } else {
-                addLog('WebRTC 停止失败: ' + result.message, 'error');
+                addLog('WebRTC 服务停止失败: ' + result.message, 'error');
             }
             updateStatus();
         }
 
-        // 录制控制
         async function recordStart() {
             addLog('正在开始录制...');
             const result = await apiCall('POST', '/api/record/start');
@@ -454,12 +655,220 @@
             updateStatus();
         }
 
+        // =====================================================================
+        // WebRTC 播放器
+        // =====================================================================
+        function updateConnectionStatus(state) {
+            const status = document.getElementById('connStatus');
+            const dot = document.getElementById('connDot');
+            const text = document.getElementById('connText');
+            
+            status.className = 'connection-status ' + state;
+            
+            switch(state) {
+                case 'connected':
+                    dot.classList.remove('offline');
+                    text.textContent = '已连接';
+                    document.getElementById('videoOverlay').classList.add('hidden');
+                    break;
+                case 'connecting':
+                    dot.classList.add('offline');
+                    text.textContent = '连接中...';
+                    break;
+                case 'disconnected':
+                default:
+                    dot.classList.add('offline');
+                    text.textContent = '未连接';
+                    document.getElementById('videoOverlay').classList.remove('hidden');
+                    document.getElementById('videoOverlay').querySelector('span').textContent = '点击"连接"开始预览';
+            }
+        }
+
+        async function webrtcConnect() {
+            if (peerConnection) {
+                webrtcDisconnect();
+            }
+
+            updateConnectionStatus('connecting');
+            document.getElementById('btnConnect').disabled = true;
+            document.getElementById('btnDisconnect').disabled = false;
+            addLog('正在建立 WebRTC 连接...');
+
+            try {
+                // 获取 WebRTC offer
+                const offerResp = await apiCall('POST', '/api/webrtc/offer');
+                if (!offerResp.success) {
+                    throw new Error(offerResp.message || '获取 offer 失败');
+                }
+
+                const { sdp, ice_servers } = offerResp.data;
+
+                // 创建 PeerConnection
+                const config = {
+                    iceServers: ice_servers || [{ urls: 'stun:stun.l.google.com:19302' }]
+                };
+                peerConnection = new RTCPeerConnection(config);
+
+                // 处理 ICE candidate
+                peerConnection.onicecandidate = async (event) => {
+                    if (event.candidate) {
+                        // 发送 ICE candidate 到服务器
+                        await apiCall('POST', '/api/webrtc/ice', {
+                            candidate: event.candidate.candidate,
+                            sdpMid: event.candidate.sdpMid,
+                            sdpMLineIndex: event.candidate.sdpMLineIndex
+                        });
+                    }
+                };
+
+                // 处理连接状态变化
+                peerConnection.onconnectionstatechange = () => {
+                    console.log('Connection state:', peerConnection.connectionState);
+                    switch (peerConnection.connectionState) {
+                        case 'connected':
+                            updateConnectionStatus('connected');
+                            addLog('WebRTC 连接成功', 'success');
+                            startStatsUpdate();
+                            break;
+                        case 'disconnected':
+                        case 'failed':
+                        case 'closed':
+                            updateConnectionStatus('disconnected');
+                            stopStatsUpdate();
+                            if (document.getElementById('chkAutoReconnect').checked && 
+                                peerConnection.connectionState !== 'closed') {
+                                addLog('连接断开，尝试重连...', 'error');
+                                setTimeout(webrtcConnect, 2000);
+                            }
+                            break;
+                    }
+                };
+
+                // 处理远程流
+                peerConnection.ontrack = (event) => {
+                    console.log('Received track:', event.track.kind);
+                    const video = document.getElementById('remoteVideo');
+                    if (event.streams && event.streams[0]) {
+                        video.srcObject = event.streams[0];
+                    }
+                };
+
+                // 设置远程描述
+                await peerConnection.setRemoteDescription(new RTCSessionDescription({
+                    type: 'offer',
+                    sdp: sdp
+                }));
+
+                // 创建并设置本地描述
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                // 发送 answer
+                const answerResp = await apiCall('POST', '/api/webrtc/answer', {
+                    sdp: answer.sdp
+                });
+
+                if (!answerResp.success) {
+                    throw new Error(answerResp.message || '发送 answer 失败');
+                }
+
+            } catch (error) {
+                console.error('WebRTC connect error:', error);
+                addLog('WebRTC 连接失败: ' + error.message, 'error');
+                updateConnectionStatus('disconnected');
+                document.getElementById('btnConnect').disabled = false;
+                document.getElementById('btnDisconnect').disabled = true;
+            }
+        }
+
+        function webrtcDisconnect() {
+            stopStatsUpdate();
+            
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+
+            const video = document.getElementById('remoteVideo');
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+
+            updateConnectionStatus('disconnected');
+            document.getElementById('btnConnect').disabled = false;
+            document.getElementById('btnDisconnect').disabled = true;
+            
+            // 重置统计
+            document.getElementById('statResolution').textContent = '-';
+            document.getElementById('statFps').textContent = '- fps';
+            document.getElementById('statBitrate').textContent = '- kbps';
+            document.getElementById('statReceived').textContent = '0 B';
+            
+            addLog('WebRTC 已断开');
+        }
+
+        // 统计信息更新
+        function startStatsUpdate() {
+            lastBytesReceived = 0;
+            lastStatsTime = Date.now();
+            statsTimer = setInterval(updateVideoStats, 1000);
+        }
+
+        function stopStatsUpdate() {
+            if (statsTimer) {
+                clearInterval(statsTimer);
+                statsTimer = null;
+            }
+        }
+
+        async function updateVideoStats() {
+            if (!peerConnection) return;
+
+            try {
+                const stats = await peerConnection.getStats();
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        // 分辨率
+                        if (report.frameWidth && report.frameHeight) {
+                            document.getElementById('statResolution').textContent = 
+                                `${report.frameWidth}x${report.frameHeight}`;
+                        }
+                        
+                        // 帧率
+                        if (report.framesPerSecond) {
+                            document.getElementById('statFps').textContent = 
+                                report.framesPerSecond.toFixed(1) + ' fps';
+                        }
+                        
+                        // 码率
+                        const now = Date.now();
+                        const bytesReceived = report.bytesReceived || 0;
+                        if (lastStatsTime > 0) {
+                            const timeDiff = (now - lastStatsTime) / 1000;
+                            const bytesDiff = bytesReceived - lastBytesReceived;
+                            const bitrate = (bytesDiff * 8 / timeDiff / 1000).toFixed(0);
+                            document.getElementById('statBitrate').textContent = bitrate + ' kbps';
+                        }
+                        lastBytesReceived = bytesReceived;
+                        lastStatsTime = now;
+                        
+                        // 已接收
+                        document.getElementById('statReceived').textContent = formatBytes(bytesReceived);
+                    }
+                });
+            } catch (e) {
+                console.error('Stats error:', e);
+            }
+        }
+
+        // =====================================================================
         // 初始化
+        // =====================================================================
         document.addEventListener('DOMContentLoaded', () => {
             addLog('控制面板已加载');
             updateStatus();
-            // 每 2 秒更新一次状态
-            updateTimer = setInterval(updateStatus, 2000);
+            updateTimer = setInterval(updateStatus, 3000);
         });
     </script>
 </body>

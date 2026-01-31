@@ -147,6 +147,41 @@ void WebRTCThread::OnError(ErrorCallback callback) {
 }
 
 // ============================================================================
+// HTTP 信令模式实现
+// ============================================================================
+
+std::string WebRTCThread::CreateOfferForHttp() {
+    if (!webrtc_) {
+        LOG_ERROR("WebRTC 系统未初始化");
+        return "";
+    }
+    return webrtc_->CreateOfferForHttp();
+}
+
+bool WebRTCThread::SetAnswerFromHttp(const std::string& sdp) {
+    if (!webrtc_) {
+        LOG_ERROR("WebRTC 系统未初始化");
+        return false;
+    }
+    return webrtc_->SetAnswerFromHttp(sdp);
+}
+
+bool WebRTCThread::AddIceCandidateFromHttp(const std::string& candidate, const std::string& mid) {
+    if (!webrtc_) {
+        LOG_ERROR("WebRTC 系统未初始化");
+        return false;
+    }
+    return webrtc_->AddIceCandidateFromHttp(candidate, mid);
+}
+
+std::vector<std::pair<std::string, std::string>> WebRTCThread::GetLocalIceCandidates() {
+    if (!webrtc_) {
+        return {};
+    }
+    return webrtc_->GetLocalIceCandidates();
+}
+
+// ============================================================================
 // 全局实例管理实现
 // ============================================================================
 

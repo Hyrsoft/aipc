@@ -12,8 +12,11 @@
 #include "common/logger.h"
 #include "rtsp/thread_rtsp.h"
 #include "file/thread_file.h"
+#include "webrtc/thread_webrtc.h"
 #include <httplib.h>
-#include <sstream>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 // ============================================================================
 // 辅助函数
@@ -23,15 +26,14 @@
  * @brief 生成 JSON 响应
  */
 static std::string json_response(bool success, const std::string& message, 
-                                  const std::string& data = "") {
-    std::ostringstream oss;
-    oss << "{\"success\":" << (success ? "true" : "false");
-    oss << ",\"message\":\"" << message << "\"";
-    if (!data.empty()) {
-        oss << ",\"data\":" << data;
+                                  const json& data = nullptr) {
+    json response;
+    response["success"] = success;
+    response["message"] = message;
+    if (!data.is_null()) {
+        response["data"] = data;
     }
-    oss << "}";
-    return oss.str();
+    return response.dump();
 }
 
 // ============================================================================
@@ -108,38 +110,29 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     server_->Get("/api/status", [this](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        std::ostringstream data;
-        data << "{";
+        json data;
         
         // RTSP 状态
-        data << "\"rtsp\":{";
-        data << "\"enabled\":" << (stream_config_.enable_rtsp ? "true" : "false");
+        data["rtsp"]["enabled"] = stream_config_.enable_rtsp;
         if (mgr && mgr->GetRtspThread()) {
-            data << ",\"valid\":" << (mgr->GetRtspThread()->IsValid() ? "true" : "false");
+            data["rtsp"]["valid"] = mgr->GetRtspThread()->IsValid();
         }
-        data << "}";
         
         // WebRTC 状态
-        data << ",\"webrtc\":{";
-        data << "\"enabled\":" << (stream_config_.enable_webrtc ? "true" : "false");
+        data["webrtc"]["enabled"] = stream_config_.enable_webrtc;
         if (mgr && mgr->GetWebRTCThread()) {
-            data << ",\"running\":" << (mgr->GetWebRTCThread()->IsRunning() ? "true" : "false");
+            data["webrtc"]["running"] = mgr->GetWebRTCThread()->IsRunning();
         }
-        data << "}";
         
         // 录制状态
-        data << ",\"recording\":{";
-        data << "\"enabled\":" << (stream_config_.enable_file ? "true" : "false");
+        data["recording"]["enabled"] = stream_config_.enable_file;
         if (mgr && mgr->GetFileThread()) {
             auto* ft = mgr->GetFileThread();
-            data << ",\"active\":" << (ft->IsRecording() ? "true" : "false");
-            data << ",\"output_dir\":\"" << stream_config_.mp4_config.outputDir << "\"";
+            data["recording"]["active"] = ft->IsRecording();
+            data["recording"]["output_dir"] = stream_config_.mp4_config.outputDir;
         }
-        data << "}";
         
-        data << "}";
-        
-        res.set_content(json_response(true, "ok", data.str()), "application/json");
+        res.set_content(json_response(true, "ok", data), "application/json");
     });
 
     // ========================================================================
@@ -154,14 +147,12 @@ void HttpApi::SetupRoutes() {
         
         auto* rtsp = mgr->GetRtspThread();
         auto stats = rtsp->GetStats();
-        std::ostringstream data;
-        data << "{";
-        data << "\"valid\":" << (rtsp->IsValid() ? "true" : "false");
-        data << ",\"url\":\"" << rtsp->GetUrl() << "\"";
-        data << ",\"frames_sent\":" << stats.framesSent;
-        data << ",\"bytes_sent\":" << stats.bytesSent;
-        data << "}";
-        res.set_content(json_response(true, "ok", data.str()), "application/json");
+        json data;
+        data["valid"] = rtsp->IsValid();
+        data["url"] = rtsp->GetUrl();
+        data["frames_sent"] = stats.framesSent;
+        data["bytes_sent"] = stats.bytesSent;
+        res.set_content(json_response(true, "ok", data), "application/json");
     });
 
     // ========================================================================
@@ -205,6 +196,109 @@ void HttpApi::SetupRoutes() {
     });
 
     // ========================================================================
+    // WebRTC HTTP 信令 API（用于网页直连）
+    // ========================================================================
+    
+    // 创建 Offer - 设备生成 SDP Offer
+    server_->Post("/api/webrtc/offer", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto* mgr = GetStreamManager();
+        if (!mgr || !mgr->GetWebRTCThread()) {
+            res.set_content(json_response(false, "WebRTC not available"), "application/json");
+            return;
+        }
+        
+        auto* webrtc = mgr->GetWebRTCThread();
+        std::string offer = webrtc->CreateOfferForHttp();
+        
+        if (offer.empty()) {
+            res.set_content(json_response(false, "Failed to create offer"), "application/json");
+            return;
+        }
+        
+        json data;
+        data["sdp"] = offer;  // nlohmann/json 自动处理转义
+        data["type"] = "offer";
+        res.set_content(json_response(true, "ok", data), "application/json");
+    });
+    
+    // 设置 Answer - 接收客户端的 SDP Answer
+    server_->Post("/api/webrtc/answer", [](const HttpRequest& req, HttpResponse& res) {
+        auto* mgr = GetStreamManager();
+        if (!mgr || !mgr->GetWebRTCThread()) {
+            res.set_content(json_response(false, "WebRTC not available"), "application/json");
+            return;
+        }
+        
+        try {
+            json body = json::parse(req.body);
+            std::string sdp = body.value("sdp", "");
+            
+            if (sdp.empty()) {
+                res.set_content(json_response(false, "Missing sdp field"), "application/json");
+                return;
+            }
+            
+            auto* webrtc = mgr->GetWebRTCThread();
+            if (webrtc->SetAnswerFromHttp(sdp)) {
+                res.set_content(json_response(true, "Answer set"), "application/json");
+            } else {
+                res.set_content(json_response(false, "Failed to set answer"), "application/json");
+            }
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
+    });
+    
+    // 添加 ICE 候选
+    server_->Post("/api/webrtc/ice", [](const HttpRequest& req, HttpResponse& res) {
+        auto* mgr = GetStreamManager();
+        if (!mgr || !mgr->GetWebRTCThread()) {
+            res.set_content(json_response(false, "WebRTC not available"), "application/json");
+            return;
+        }
+        
+        try {
+            json body = json::parse(req.body);
+            std::string candidate = body.value("candidate", "");
+            std::string mid = body.value("sdpMid", "");
+            
+            if (candidate.empty()) {
+                // 可能是 ICE 收集完成信号
+                res.set_content(json_response(true, "ICE gathering complete"), "application/json");
+                return;
+            }
+            
+            auto* webrtc = mgr->GetWebRTCThread();
+            if (webrtc->AddIceCandidateFromHttp(candidate, mid)) {
+                res.set_content(json_response(true, "ICE candidate added"), "application/json");
+            } else {
+                res.set_content(json_response(false, "Failed to add ICE candidate"), "application/json");
+            }
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
+    });
+    
+    // 获取本地 ICE 候选列表
+    server_->Get("/api/webrtc/ice", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto* mgr = GetStreamManager();
+        if (!mgr || !mgr->GetWebRTCThread()) {
+            res.set_content(json_response(false, "WebRTC not available"), "application/json");
+            return;
+        }
+        
+        auto* webrtc = mgr->GetWebRTCThread();
+        auto candidates = webrtc->GetLocalIceCandidates();
+        
+        json data = json::array();
+        for (const auto& [candidate, mid] : candidates) {
+            data.push_back({{"candidate", candidate}, {"sdpMid", mid}});
+        }
+        
+        res.set_content(json_response(true, "ok", data), "application/json");
+    });
+
+    // ========================================================================
     // 录制控制 API
     // ========================================================================
     server_->Get("/api/record/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
@@ -215,9 +309,9 @@ void HttpApi::SetupRoutes() {
         }
         
         auto* ft = mgr->GetFileThread();
-        std::ostringstream data;
-        data << "{\"recording\":" << (ft->IsRecording() ? "true" : "false") << "}";
-        res.set_content(json_response(true, "ok", data.str()), "application/json");
+        json data;
+        data["recording"] = ft->IsRecording();
+        res.set_content(json_response(true, "ok", data), "application/json");
     });
     
     server_->Post("/api/record/start", [](const HttpRequest& /*req*/, HttpResponse& res) {

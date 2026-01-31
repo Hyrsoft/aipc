@@ -792,3 +792,124 @@ void WebRTCSystem::InvokeErrorCallback(WebRTCError error, const std::string& mes
     }
 }
 
+// ============================================================================
+// HTTP 信令模式实现
+// ============================================================================
+
+std::string WebRTCSystem::CreateOfferForHttp() {
+    LOG_INFO("[HTTP] 创建 Offer...");
+
+    // 清理之前的连接
+    if (peer_connection_) {
+        Cleanup();
+    }
+
+    http_mode_.store(true);
+    pending_local_sdp_.clear();
+    {
+        std::lock_guard<std::mutex> lock(local_ice_mutex_);
+        local_ice_candidates_.clear();
+    }
+
+    try {
+        CreatePeerConnection();
+        CreateVideoTrack(true);  // SendOnly
+        // SetupDataChannel();  // 暂时不需要 DataChannel
+
+        SetState(WebRTCState::kSdpConnecting);
+
+        // 设置回调来捕获本地描述
+        std::mutex sdp_mutex;
+        std::condition_variable sdp_cv;
+        bool sdp_ready = false;
+        std::string local_sdp;
+
+        peer_connection_->onLocalDescription([&](rtc::Description desc) {
+            std::lock_guard<std::mutex> lock(sdp_mutex);
+            local_sdp = std::string(desc);
+            sdp_ready = true;
+            sdp_cv.notify_one();
+            LOG_INFO("[HTTP] 本地描述已生成");
+        });
+
+        // 重新设置 ICE 候选回调以收集本地候选
+        peer_connection_->onLocalCandidate([this](rtc::Candidate candidate) {
+            std::lock_guard<std::mutex> lock(local_ice_mutex_);
+            local_ice_candidates_.emplace_back(std::string(candidate), candidate.mid());
+            LOG_DEBUG("[HTTP] 收集到本地 ICE 候选: {}", candidate.mid());
+        });
+
+        // 生成 Offer
+        peer_connection_->setLocalDescription();
+
+        // 等待 SDP 生成
+        std::unique_lock<std::mutex> lock(sdp_mutex);
+        if (!sdp_cv.wait_for(lock, std::chrono::seconds(5), [&]{ return sdp_ready; })) {
+            LOG_ERROR("[HTTP] 等待 SDP 超时");
+            return "";
+        }
+
+        pending_local_sdp_ = local_sdp;
+        LOG_INFO("[HTTP] Offer 创建成功, 长度: {}", local_sdp.length());
+        return local_sdp;
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("[HTTP] 创建 Offer 失败: {}", e.what());
+        SetState(WebRTCState::kFailed);
+        return "";
+    }
+}
+
+bool WebRTCSystem::SetAnswerFromHttp(const std::string& sdp) {
+    LOG_INFO("[HTTP] 设置 Answer...");
+
+    if (!peer_connection_) {
+        LOG_ERROR("[HTTP] PeerConnection 不存在");
+        return false;
+    }
+
+    try {
+        rtc::Description remote_desc(sdp, rtc::Description::Type::Answer);
+        peer_connection_->setRemoteDescription(remote_desc);
+
+        sdp_exchange_completed_.store(true);
+        SetState(WebRTCState::kSdpConnected);
+
+        LOG_INFO("[HTTP] Answer 设置成功");
+        return true;
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("[HTTP] 设置 Answer 失败: {}", e.what());
+        SetState(WebRTCState::kFailed);
+        return false;
+    }
+}
+
+bool WebRTCSystem::AddIceCandidateFromHttp(const std::string& candidate, const std::string& mid) {
+    LOG_DEBUG("[HTTP] 添加远程 ICE 候选: mid={}", mid);
+
+    if (!peer_connection_) {
+        LOG_ERROR("[HTTP] PeerConnection 不存在");
+        return false;
+    }
+
+    try {
+        rtc::Candidate rtc_candidate(candidate, mid);
+        peer_connection_->addRemoteCandidate(rtc_candidate);
+        return true;
+    } catch (const std::exception& e) {
+        LOG_ERROR("[HTTP] 添加 ICE 候选失败: {}", e.what());
+        return false;
+    }
+}
+
+std::vector<std::pair<std::string, std::string>> WebRTCSystem::GetLocalIceCandidates() {
+    std::lock_guard<std::mutex> lock(local_ice_mutex_);
+    return local_ice_candidates_;
+}
+
+bool WebRTCSystem::HasPendingLocalIceCandidates() const {
+    std::lock_guard<std::mutex> lock(local_ice_mutex_);
+    return !local_ice_candidates_.empty();
+}
+
