@@ -1,8 +1,16 @@
 /**
  * @file thread_stream.h
- * @brief 流处理线程接口
+ * @brief 视频流分发管理 - 协调各个流输出路径
  *
- * 提供 RTSP/WebRTC/文件保存等流输出的统一管理接口
+ * 负责：
+ * - 管理流分发器（StreamDispatcher）
+ * - 协调 RTSP、File、WebRTC 等消费者的注册
+ * - 提供统一的启动/停止接口
+ *
+ * 各个消费者的具体实现在各自的模块中：
+ * - rtsp/thread_rtsp.h
+ * - file/thread_file.h
+ * - webrtc/thread_webrtc.h（待实现）
  *
  * @author 好软，好温暖
  * @date 2026-01-31
@@ -12,6 +20,11 @@
 
 #include <string>
 #include "rtsp/rk_rtsp.h"
+#include "file/file_saver.h"
+
+// 前向声明，避免头文件依赖
+class RtspThread;
+class FileThread;
 
 // ============================================================================
 // 流输出配置
@@ -20,91 +33,87 @@
 /**
  * @brief 流输出总配置
  */
-struct StreamOutputConfig {
-    bool enableRtsp = true;           ///< 是否启用 RTSP 推流
-    bool enableWebrtc = false;        ///< 是否启用 WebRTC 推流
-    bool enableFile = false;          ///< 是否启用文件保存
+struct StreamConfig {
+    bool enable_rtsp = true;           ///< 是否启用 RTSP 推流
+    bool enable_file = false;          ///< 是否启用文件保存
+    bool enable_webrtc = false;        ///< 是否启用 WebRTC（待实现）
     
-    RtspConfig rtspConfig;            ///< RTSP 配置
-    std::string filePath;             ///< 录制文件路径
+    RtspConfig rtsp_config;            ///< RTSP 配置
+    Mp4RecordConfig mp4_config;        ///< MP4 录制配置
+    JpegCaptureConfig jpeg_config;     ///< JPEG 拍照配置
 };
 
 // ============================================================================
-// RTSP 推流接口
+// 流管理器
 // ============================================================================
 
 /**
- * @brief 初始化 RTSP 推流
+ * @brief 流管理器
  * 
- * 初始化 RTSP 服务器并注册到流分发器
- * 
- * @param config RTSP 配置
- * @return true 成功，false 失败
+ * 协调各个流输出路径，管理它们的生命周期
+ * 提供统一的控制接口
  */
-bool stream_rtsp_init(const RtspConfig& config = RtspConfig{});
+class StreamManager {
+public:
+    /**
+     * @brief 构造函数
+     * @param config 流配置
+     */
+    explicit StreamManager(const StreamConfig& config);
+    
+    ~StreamManager();
 
-/**
- * @brief 反初始化 RTSP 推流
- */
-void stream_rtsp_deinit();
+    // 禁用拷贝
+    StreamManager(const StreamManager&) = delete;
+    StreamManager& operator=(const StreamManager&) = delete;
+
+    /**
+     * @brief 启动所有已注册的流输出
+     */
+    void Start();
+
+    /**
+     * @brief 停止所有流输出
+     */
+    void Stop();
+
+    /**
+     * @brief 检查是否正在运行
+     */
+    bool IsRunning() const { return running_; }
+
+    // ========================================================================
+    // 访问各个子模块
+    // ========================================================================
+
+    RtspThread* GetRtspThread() const { return rtsp_thread_.get(); }
+    FileThread* GetFileThread() const { return file_thread_.get(); }
+
+private:
+    StreamConfig config_;
+    bool running_ = false;
+
+    std::unique_ptr<RtspThread> rtsp_thread_;
+    std::unique_ptr<FileThread> file_thread_;
+};
 
 // ============================================================================
-// WebRTC 推流接口（待实现）
+// 全局流管理器
 // ============================================================================
 
 /**
- * @brief 初始化 WebRTC 推流
- * @return true 成功，false 失败
+ * @brief 获取全局流管理器实例
  */
-bool stream_webrtc_init();
+StreamManager* GetStreamManager();
 
 /**
- * @brief 反初始化 WebRTC 推流
+ * @brief 创建全局流管理器
+ * @param config 流配置
  */
-void stream_webrtc_deinit();
-
-// ============================================================================
-// 文件保存接口（待实现）
-// ============================================================================
+void CreateStreamManager(const StreamConfig& config);
 
 /**
- * @brief 开始录制到文件
- * 
- * @param filename 文件路径
- * @return true 成功，false 失败
+ * @brief 销毁全局流管理器
  */
-bool stream_file_start(const char* filename);
+void DestroyStreamManager();
 
-/**
- * @brief 停止录制
- */
-void stream_file_stop();
-
-// ============================================================================
-// 统一流管理接口
-// ============================================================================
-
-/**
- * @brief 初始化流管理器
- * 
- * 根据配置初始化所有启用的流输出
- * 
- * @param config 流输出配置
- * @return true 成功，false 失败
- */
-bool stream_manager_init(const StreamOutputConfig& config = StreamOutputConfig{});
-
-/**
- * @brief 反初始化流管理器
- */
-void stream_manager_deinit();
-
-/**
- * @brief 启动所有流输出
- */
-void stream_manager_start();
-
-/**
- * @brief 停止所有流输出
- */
-void stream_manager_stop();

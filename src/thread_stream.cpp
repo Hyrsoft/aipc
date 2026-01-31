@@ -1,156 +1,139 @@
 /**
  * @file thread_stream.cpp
- * @brief 流处理线程 - 管理 RTSP/WebRTC/文件保存等流输出
- *
- * 实现编码流的分发和处理，支持：
- * - RTSP 推流
- * - WebRTC 推流（待实现）
- * - 文件保存（待实现）
- *
- * 架构说明：
- * - 使用 StreamDispatcher 的消费者回调模式
- * - 每个输出类型注册为独立消费者
- * - 实现零拷贝的流分发
+ * @brief 视频流分发管理实现
  *
  * @author 好软，好温暖
  * @date 2026-01-31
  */
 
-// 定义模块名，必须在 #include "logger.h" 之前
 #define LOG_TAG "stream"
 
 #include "thread_stream.h"
 #include "common/logger.h"
 #include "rkvideo/rkvideo.h"
-#include "rtsp/rk_rtsp.h"
+#include "rtsp/thread_rtsp.h"
+#include "file/thread_file.h"
+
+#include <memory>
 
 // ============================================================================
-// RTSP 推流
+// StreamManager 实现
 // ============================================================================
 
-bool stream_rtsp_init(const RtspConfig& config) {
-    LOG_INFO("Initializing RTSP streaming...");
+StreamManager::StreamManager(const StreamConfig& config)
+    : config_(config) {
     
-    // 初始化 RTSP 服务器
-    if (!rtsp_server_init(config)) {
-        LOG_ERROR("Failed to initialize RTSP server");
-        return false;
-    }
+    LOG_INFO("Creating StreamManager...");
     
-    // 注册到视频流分发器
-    // 使用 C 风格回调函数包装器
-    rkvideo_register_stream_consumer(
-        "rtsp",
-        [](EncodedStreamPtr stream, void* userData) {
-            rtsp_stream_consumer(stream, userData);
-        },
-        nullptr,
-        3  // 队列大小
-    );
-    
-    LOG_INFO("RTSP streaming initialized, URL: {}", GetRtspServer().GetUrl());
-    return true;
-}
-
-void stream_rtsp_deinit() {
-    LOG_INFO("Deinitializing RTSP streaming...");
-    rtsp_server_deinit();
-    LOG_INFO("RTSP streaming deinitialized");
-}
-
-// ============================================================================
-// WebRTC 推流（待实现）
-// ============================================================================
-
-bool stream_webrtc_init() {
-    LOG_WARN("WebRTC streaming not implemented yet");
-    // TODO: 实现 WebRTC 推流
-    // 1. 初始化 WebRTC 服务
-    // 2. 注册消费者回调
-    return false;
-}
-
-void stream_webrtc_deinit() {
-    // TODO: 实现 WebRTC 清理
-}
-
-// ============================================================================
-// 文件保存（待实现）
-// ============================================================================
-
-bool stream_file_start(const char* /* filename */) {
-    LOG_WARN("File recording not implemented yet");
-    // TODO: 实现文件保存
-    // 1. 打开文件
-    // 2. 注册消费者回调
-    return false;
-}
-
-void stream_file_stop() {
-    // TODO: 实现停止录制
-}
-
-// ============================================================================
-// 统一流管理
-// ============================================================================
-
-static StreamOutputConfig g_streamConfig;
-
-bool stream_manager_init(const StreamOutputConfig& config) {
-    g_streamConfig = config;
-    bool success = true;
-    
-    LOG_INFO("Initializing stream manager...");
-    
-    // 初始化 RTSP（如果启用）
-    if (config.enableRtsp) {
-        if (!stream_rtsp_init(config.rtspConfig)) {
-            LOG_ERROR("Failed to initialize RTSP output");
-            success = false;
+    // 创建 RTSP 线程（如果启用）
+    if (config_.enable_rtsp) {
+        rtsp_thread_ = std::make_unique<RtspThread>(config_.rtsp_config);
+        
+        if (rtsp_thread_->IsValid()) {
+            // 注册 RTSP 消费者到流分发器
+            rkvideo_register_stream_consumer(
+                "rtsp",
+                &RtspThread::StreamConsumer,
+                rtsp_thread_.get(),
+                3  // 队列大小
+            );
+            LOG_INFO("RTSP consumer registered");
+        } else {
+            LOG_ERROR("Failed to create RTSP thread");
+            rtsp_thread_.reset();
         }
     }
     
-    // 初始化 WebRTC（如果启用）
-    if (config.enableWebrtc) {
-        if (!stream_webrtc_init()) {
-            LOG_WARN("WebRTC output not available");
-            // 不算失败，继续运行
-        }
+    // 创建文件保存线程（如果启用）
+    if (config_.enable_file) {
+        FileThreadConfig file_config;
+        file_config.mp4Config = config_.mp4_config;
+        file_config.jpegConfig = config_.jpeg_config;
+        
+        file_thread_ = std::make_unique<FileThread>(file_config);
+        
+        // 注册文件消费者到流分发器
+        rkvideo_register_stream_consumer(
+            "file",
+            &FileThread::StreamConsumer,
+            file_thread_.get(),
+            5  // 队列大小稍大，避免录制丢帧
+        );
+        LOG_INFO("File consumer registered");
     }
     
-    // 初始化文件保存（如果启用）
-    if (config.enableFile && !config.filePath.empty()) {
-        if (!stream_file_start(config.filePath.c_str())) {
-            LOG_WARN("File recording not available");
-            // 不算失败，继续运行
-        }
+    // TODO: WebRTC 线程
+    if (config_.enable_webrtc) {
+        LOG_WARN("WebRTC not implemented yet");
     }
     
-    if (success) {
-        LOG_INFO("Stream manager initialized successfully");
-    }
-    
-    return success;
+    LOG_INFO("StreamManager created");
 }
 
-void stream_manager_deinit() {
-    LOG_INFO("Deinitializing stream manager...");
-    
-    stream_file_stop();
-    stream_webrtc_deinit();
-    stream_rtsp_deinit();
-    
-    LOG_INFO("Stream manager deinitialized");
+StreamManager::~StreamManager() {
+    Stop();
+    LOG_INFO("StreamManager destroyed");
 }
 
-void stream_manager_start() {
+void StreamManager::Start() {
+    if (running_) {
+        LOG_WARN("StreamManager already running");
+        return;
+    }
+    
     LOG_INFO("Starting stream outputs...");
+    
+    // 启动文件线程（如果存在）
+    if (file_thread_) {
+        file_thread_->Start();
+    }
+    
+    // 启动视频流分发器
     rkvideo_start_streaming();
+    
+    running_ = true;
     LOG_INFO("Stream outputs started");
 }
 
-void stream_manager_stop() {
+void StreamManager::Stop() {
+    if (!running_) {
+        return;
+    }
+    
     LOG_INFO("Stopping stream outputs...");
+    
+    // 停止视频流分发器
     rkvideo_stop_streaming();
+    
+    // 停止文件线程
+    if (file_thread_) {
+        file_thread_->Stop();
+    }
+    
+    running_ = false;
     LOG_INFO("Stream outputs stopped");
 }
+
+// ============================================================================
+// 全局实例管理
+// ============================================================================
+
+static std::unique_ptr<StreamManager> g_stream_manager;
+
+StreamManager* GetStreamManager() {
+    return g_stream_manager.get();
+}
+
+void CreateStreamManager(const StreamConfig& config) {
+    if (g_stream_manager) {
+        LOG_WARN("Global StreamManager already exists, destroying old one");
+        DestroyStreamManager();
+    }
+    
+    g_stream_manager = std::make_unique<StreamManager>(config);
+}
+
+void DestroyStreamManager() {
+    g_stream_manager.reset();
+}
+
