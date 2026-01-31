@@ -350,7 +350,7 @@
                 <div class="card">
                     <h2><span class="icon">📡</span> RTSP 推流</h2>
                     <div class="info-row">
-                        <span class="label">状态</span>
+                        <span class="label">服务状态</span>
                         <span class="badge" id="rtspStatus">-</span>
                     </div>
                     <div class="info-row">
@@ -364,6 +364,10 @@
                     <div class="info-row">
                         <span class="label">发送数据</span>
                         <span class="value" id="rtspBytes">-</span>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-success" id="btnRtspStart" onclick="rtspStart()">▶ 启动服务</button>
+                        <button class="btn btn-danger" id="btnRtspStop" onclick="rtspStop()">⏹ 停止服务</button>
                     </div>
                 </div>
 
@@ -482,6 +486,8 @@
         let peerConnection = null;
         let lastBytesReceived = 0;
         let lastStatsTime = 0;
+        let pendingIceCandidates = [];  // 缓冲待发送的 ICE 候选
+        let answerSent = false;         // Answer 是否已发送
 
         // =====================================================================
         // 工具函数
@@ -554,12 +560,15 @@
                     // RTSP 状态
                     if (data.rtsp) {
                         const el = document.getElementById('rtspStatus');
-                        if (data.rtsp.valid) {
+                        if (data.rtsp.running) {
                             el.textContent = '运行中';
                             el.className = 'badge success';
-                        } else {
-                            el.textContent = '已禁用';
+                        } else if (data.rtsp.valid) {
+                            el.textContent = '已停止';
                             el.className = 'badge warning';
+                        } else {
+                            el.textContent = '未启用';
+                            el.className = 'badge info';
                         }
                     }
                     
@@ -611,6 +620,28 @@
         // =====================================================================
         // 控制面板操作
         // =====================================================================
+        async function rtspStart() {
+            addLog('正在启动 RTSP 服务...');
+            const result = await apiCall('POST', '/api/rtsp/start');
+            if (result.success) {
+                addLog('RTSP 服务启动成功', 'success');
+            } else {
+                addLog('RTSP 服务启动失败: ' + result.message, 'error');
+            }
+            updateStatus();
+        }
+
+        async function rtspStop() {
+            addLog('正在停止 RTSP 服务...');
+            const result = await apiCall('POST', '/api/rtsp/stop');
+            if (result.success) {
+                addLog('RTSP 服务已停止', 'success');
+            } else {
+                addLog('RTSP 服务停止失败: ' + result.message, 'error');
+            }
+            updateStatus();
+        }
+
         async function webrtcServiceStart() {
             addLog('正在启动 WebRTC 服务...');
             const result = await apiCall('POST', '/api/webrtc/start');
@@ -693,6 +724,10 @@
             document.getElementById('btnConnect').disabled = true;
             document.getElementById('btnDisconnect').disabled = false;
             addLog('正在建立 WebRTC 连接...');
+            
+            // 重置状态
+            pendingIceCandidates = [];
+            answerSent = false;
 
             try {
                 // 获取 WebRTC offer
@@ -709,15 +744,24 @@
                 };
                 peerConnection = new RTCPeerConnection(config);
 
-                // 处理 ICE candidate
+                // 处理 ICE candidate - 缓冲直到 Answer 发送成功
                 peerConnection.onicecandidate = async (event) => {
                     if (event.candidate) {
-                        // 发送 ICE candidate 到服务器
-                        await apiCall('POST', '/api/webrtc/ice', {
-                            candidate: event.candidate.candidate,
-                            sdpMid: event.candidate.sdpMid,
-                            sdpMLineIndex: event.candidate.sdpMLineIndex
-                        });
+                        if (answerSent) {
+                            // Answer 已发送，直接发送 ICE 候选
+                            await apiCall('POST', '/api/webrtc/ice', {
+                                candidate: event.candidate.candidate,
+                                sdpMid: event.candidate.sdpMid,
+                                sdpMLineIndex: event.candidate.sdpMLineIndex
+                            });
+                        } else {
+                            // 缓冲 ICE 候选
+                            pendingIceCandidates.push({
+                                candidate: event.candidate.candidate,
+                                sdpMid: event.candidate.sdpMid,
+                                sdpMLineIndex: event.candidate.sdpMLineIndex
+                            });
+                        }
                     }
                 };
 
@@ -771,6 +815,13 @@
                 if (!answerResp.success) {
                     throw new Error(answerResp.message || '发送 answer 失败');
                 }
+                
+                // Answer 发送成功，发送缓冲的 ICE 候选
+                answerSent = true;
+                for (const candidate of pendingIceCandidates) {
+                    await apiCall('POST', '/api/webrtc/ice', candidate);
+                }
+                pendingIceCandidates = [];
 
             } catch (error) {
                 console.error('WebRTC connect error:', error);

@@ -116,6 +116,7 @@ void HttpApi::SetupRoutes() {
         data["rtsp"]["enabled"] = stream_config_.enable_rtsp;
         if (mgr && mgr->GetRtspThread()) {
             data["rtsp"]["valid"] = mgr->GetRtspThread()->IsValid();
+            data["rtsp"]["running"] = mgr->GetRtspThread()->IsRunning();
         }
         
         // WebRTC 状态
@@ -149,10 +150,51 @@ void HttpApi::SetupRoutes() {
         auto stats = rtsp->GetStats();
         json data;
         data["valid"] = rtsp->IsValid();
+        data["running"] = rtsp->IsRunning();
         data["url"] = rtsp->GetUrl();
         data["frames_sent"] = stats.framesSent;
         data["bytes_sent"] = stats.bytesSent;
         res.set_content(json_response(true, "ok", data), "application/json");
+    });
+
+    // ========================================================================
+    // RTSP 控制 API
+    // ========================================================================
+    server_->Post("/api/rtsp/start", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto* mgr = GetStreamManager();
+        if (!mgr || !mgr->GetRtspThread()) {
+            res.set_content(json_response(false, "RTSP not available"), "application/json");
+            return;
+        }
+        
+        auto* rtsp = mgr->GetRtspThread();
+        if (rtsp->IsRunning()) {
+            res.set_content(json_response(true, "RTSP already running"), "application/json");
+            return;
+        }
+        
+        if (rtsp->Start()) {
+            res.set_content(json_response(true, "RTSP started"), "application/json");
+        } else {
+            res.set_content(json_response(false, "Failed to start RTSP"), "application/json");
+        }
+    });
+    
+    server_->Post("/api/rtsp/stop", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto* mgr = GetStreamManager();
+        if (!mgr || !mgr->GetRtspThread()) {
+            res.set_content(json_response(false, "RTSP not available"), "application/json");
+            return;
+        }
+        
+        auto* rtsp = mgr->GetRtspThread();
+        if (!rtsp->IsRunning()) {
+            res.set_content(json_response(true, "RTSP already stopped"), "application/json");
+            return;
+        }
+        
+        rtsp->Stop();
+        res.set_content(json_response(true, "RTSP stopped"), "application/json");
     });
 
     // ========================================================================

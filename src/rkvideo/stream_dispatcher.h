@@ -136,23 +136,24 @@ private:
         LOG_DEBUG("Fetch loop started for VENC channel {}", venc_chn_id_);
         
         uint64_t frameCount = 0;
-        uint64_t errorCount = 0;
+        uint64_t consecutiveErrors = 0;
         
         while (running_) {
             // 从 VENC 获取编码流（零拷贝，shared_ptr 管理生命周期）
             auto stream = acquire_encoded_stream(venc_chn_id_, 1000);  // 1秒超时
             
             if (!stream) {
-                errorCount++;
-                if (errorCount % 5 == 1) {  // 每5次错误打印一次
-                    LOG_WARN("Failed to get stream from VENC channel {} (error #{})", 
-                             venc_chn_id_, errorCount);
+                consecutiveErrors++;
+                // 连续错误 > 3 次且每 10 次打印一次警告
+                if (consecutiveErrors > 3 && consecutiveErrors % 10 == 0) {
+                    LOG_WARN("VENC channel {} consecutive errors: {}", 
+                             venc_chn_id_, consecutiveErrors);
                 }
                 continue;
             }
             
             frameCount++;
-            errorCount = 0;  // 重置错误计数
+            consecutiveErrors = 0;  // 重置错误计数
             
             // 打印帧信息
             if (frameCount <= 5 || frameCount % 30 == 0) {

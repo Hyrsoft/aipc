@@ -98,13 +98,8 @@ void StreamManager::Start() {
         file_thread_->Start();
     }
     
-    // 启动 WebRTC 线程（如果存在）
-    if (webrtc_thread_) {
-        if (!webrtc_thread_->Start()) {
-            LOG_WARN("WebRTC thread failed to start (signaling server may not be available)");
-            // 不视为致命错误，允许继续运行其他流
-        }
-    }
+    // 注意：RTSP 和 WebRTC 默认不自动启动，需要通过 API 手动启动
+    // 这样可以避免在没有客户端连接时浪费资源
     
     // 启动视频流分发器
     rkvideo_start_streaming();
@@ -122,6 +117,11 @@ void StreamManager::Stop() {
     
     // 停止视频流分发器
     rkvideo_stop_streaming();
+    
+    // 停止 RTSP 线程
+    if (rtsp_thread_) {
+        rtsp_thread_->Stop();
+    }
     
     // 停止文件线程
     if (file_thread_) {

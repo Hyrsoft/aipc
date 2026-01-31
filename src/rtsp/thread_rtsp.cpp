@@ -39,6 +39,31 @@ RtspThread::~RtspThread() {
     }
 }
 
+bool RtspThread::Start() {
+    if (!valid_) {
+        LOG_ERROR("RTSP server not initialized, cannot start");
+        return false;
+    }
+    
+    if (running_) {
+        LOG_WARN("RTSP streaming already running");
+        return true;
+    }
+    
+    running_ = true;
+    LOG_INFO("RTSP streaming started");
+    return true;
+}
+
+void RtspThread::Stop() {
+    if (!running_) {
+        return;
+    }
+    
+    running_ = false;
+    LOG_INFO("RTSP streaming stopped");
+}
+
 std::string RtspThread::GetUrl() const {
     return GetRtspServer().GetUrl();
 }
@@ -47,8 +72,13 @@ RtspServer::Stats RtspThread::GetStats() const {
     return GetRtspServer().GetStats();
 }
 
-void RtspThread::StreamConsumer(EncodedStreamPtr stream, void* /* user_data */) {
-    rtsp_stream_consumer(stream, nullptr);
+void RtspThread::StreamConsumer(EncodedStreamPtr stream, void* user_data) {
+    auto* self = static_cast<RtspThread*>(user_data);
+    
+    // 只有在运行状态下才推送帧
+    if (self && self->running_) {
+        rtsp_stream_consumer(stream, nullptr);
+    }
 }
 
 // ============================================================================

@@ -11,6 +11,7 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include <mutex>
 
 #include "rk_rtsp.h"
 
@@ -44,6 +45,22 @@ public:
     bool IsValid() const { return valid_; }
 
     /**
+     * @brief 启动 RTSP 流推送（开始消费视频帧）
+     * @return 是否启动成功
+     */
+    bool Start();
+
+    /**
+     * @brief 停止 RTSP 流推送（停止消费视频帧）
+     */
+    void Stop();
+
+    /**
+     * @brief 检查是否正在运行（推送视频帧）
+     */
+    bool IsRunning() const { return running_; }
+
+    /**
      * @brief 获取 RTSP URL
      */
     std::string GetUrl() const;
@@ -55,12 +72,14 @@ public:
 
     /**
      * @brief 流消费者回调（用于注册到 StreamDispatcher）
+     * 只有在 running_ 状态下才会推送帧
      */
     static void StreamConsumer(EncodedStreamPtr stream, void* user_data);
 
 private:
     RtspConfig config_;
     bool valid_ = false;
+    std::atomic<bool> running_{false};  ///< 是否正在推送视频帧
 };
 
 // ============================================================================
