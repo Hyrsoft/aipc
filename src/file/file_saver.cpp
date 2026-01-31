@@ -196,21 +196,16 @@ bool Mp4Recorder::CreateOutputFile(const std::string& filepath) {
         }
     }
     
-    if (avformat_write_header(ofmt_ctx, nullptr) < 0) {
-        LOG_ERROR("Error writing header to: {}", filepath);
-        avio_closep(&ofmt_ctx->pb);
-        avcodec_free_context(&codec_ctx);
-        avformat_free_context(ofmt_ctx);
-        return false;
-    }
+    // 不在这里写入 header，等待第一个关键帧设置 extradata 后再写
     
     format_ctx_ = ofmt_ctx;
     codec_ctx_ = codec_ctx;
     current_file_path_ = filepath;
     first_pts_ = 0;
     stats_ = Stats{};
+    header_written_ = false;  // 标记 header 尚未写入
     
-    LOG_INFO("Created output file: {}", filepath);
+    LOG_INFO("Created output file (waiting for keyframe): {}", filepath);
     return true;
 }
 
@@ -219,7 +214,11 @@ void Mp4Recorder::CloseOutputFile() {
     
     if (format_ctx_) {
         AVFormatContext* ofmt_ctx = static_cast<AVFormatContext*>(format_ctx_);
-        av_write_trailer(ofmt_ctx);
+        
+        // 只有在 header 已写入时才写 trailer
+        if (header_written_) {
+            av_write_trailer(ofmt_ctx);
+        }
         
         if (!(ofmt_ctx->oformat->flags & AVFMT_NOFILE)) {
             avio_closep(&ofmt_ctx->pb);
@@ -242,6 +241,7 @@ void Mp4Recorder::CloseOutputFile() {
     }
     
     extradata_set_ = false;
+    header_written_ = false;
 }
 
 bool Mp4Recorder::SetExtradataFromStream(const uint8_t* data, size_t size) {
@@ -385,13 +385,30 @@ bool Mp4Recorder::WriteFrame(const EncodedStreamPtr& stream) {
                         stream->pstPack->DataType.enH265EType == H265E_NALU_IDRSLICE ||
                         stream->pstPack->DataType.enH265EType == H265E_NALU_ISLICE);
     
-    // 在首个关键帧时提取 SPS/PPS 设置 extradata（不持有锁）
-    if (!extradata_set_ && is_keyframe) {
-        if (SetExtradataFromStream(static_cast<uint8_t*>(data), stream->pstPack->u32Len)) {
-            extradata_set_ = true;
-        } else {
-            LOG_WARN("Failed to set extradata, MP4 may not play correctly");
+    // 等待第一个关键帧，从中提取 SPS/PPS 并写入 header
+    if (!header_written_) {
+        if (!is_keyframe) {
+            // 跳过非关键帧，等待关键帧
+            LOG_DEBUG("Waiting for keyframe to start recording...");
+            return true;
         }
+        
+        // 从关键帧中提取 SPS/PPS 设置 extradata
+        if (!SetExtradataFromStream(static_cast<uint8_t*>(data), stream->pstPack->u32Len)) {
+            LOG_ERROR("Failed to extract SPS/PPS from keyframe");
+            return false;
+        }
+        extradata_set_ = true;
+        
+        // 现在写入 header
+        AVFormatContext* ofmt_ctx = static_cast<AVFormatContext*>(format_ctx_);
+        if (avformat_write_header(ofmt_ctx, nullptr) < 0) {
+            LOG_ERROR("Error writing header");
+            return false;
+        }
+        header_written_ = true;
+        first_pts_ = stream->pstPack->u64PTS;
+        LOG_INFO("Header written, recording started from keyframe");
     }
     
     std::lock_guard<std::mutex> lock(mutex_);
@@ -408,9 +425,6 @@ bool Mp4Recorder::WriteFrame(const EncodedStreamPtr& stream) {
         flags |= AV_PKT_FLAG_KEY;
     }
     
-    if (first_pts_ == 0) {
-        first_pts_ = stream->pstPack->u64PTS;
-    }
     uint64_t relative_pts = (stream->pstPack->u64PTS - first_pts_) / 1000;
     
     AVPacket packet = {};

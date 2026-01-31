@@ -99,6 +99,7 @@ if [ -x "/oem/usr/bin/RkLunch-stop.sh" ]; then
 fi
 
 # 启动应用
+# 注意：HTTP 服务器已内置于 aipc 应用中，会自动提供 Web UI (端口 8080)
 if [ "$DAEMON_MODE" -eq 1 ]; then
     echo "以后台模式启动..."
     nohup "./${APP_NAME}" $EXTRA_ARGS > "$LOG_FILE" 2>&1 &
@@ -117,8 +118,10 @@ fi
 
 echo ""
 echo "服务信息:"
+echo "  HTTP API:   http://<设备IP>:8080/api/status"
+echo "  控制面板:   http://<设备IP>:8080/admin.html"
+echo "  WebRTC:     http://<设备IP>:8080/index.html"
 echo "  RTSP 流:    rtsp://<设备IP>:554/live/0"
-echo "  WebRTC:     http://<设备IP>:8080"
 echo "  信令服务:   ws://<设备IP>:8000"
 echo ""
 echo "=================================================="

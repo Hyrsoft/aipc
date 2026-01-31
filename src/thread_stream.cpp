@@ -66,19 +66,15 @@ StreamManager::StreamManager(const StreamConfig& config)
     if (config_.enable_webrtc) {
         webrtc_thread_ = std::make_unique<WebRTCThread>(config_.webrtc_config);
         
-        if (webrtc_thread_->IsValid()) {
-            // 注册 WebRTC 消费者到流分发器
-            rkvideo_register_stream_consumer(
-                "webrtc",
-                &WebRTCThread::StreamConsumer,
-                webrtc_thread_.get(),
-                3  // 队列大小
-            );
-            LOG_INFO("WebRTC consumer registered");
-        } else {
-            LOG_ERROR("Failed to create WebRTC thread");
-            webrtc_thread_.reset();
-        }
+        // WebRTC 线程需要在 Start() 中才会连接信令服务器
+        // 这里只注册消费者，在 Start() 中启动
+        rkvideo_register_stream_consumer(
+            "webrtc",
+            &WebRTCThread::StreamConsumer,
+            webrtc_thread_.get(),
+            3  // 队列大小
+        );
+        LOG_INFO("WebRTC consumer registered (will connect on Start)");
     }
     
     LOG_INFO("StreamManager created");
@@ -104,7 +100,10 @@ void StreamManager::Start() {
     
     // 启动 WebRTC 线程（如果存在）
     if (webrtc_thread_) {
-        webrtc_thread_->Start();
+        if (!webrtc_thread_->Start()) {
+            LOG_WARN("WebRTC thread failed to start (signaling server may not be available)");
+            // 不视为致命错误，允许继续运行其他流
+        }
     }
     
     // 启动视频流分发器

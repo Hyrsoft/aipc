@@ -76,6 +76,11 @@ public:
     bool IsValid() const { return valid_; }
 
     /**
+     * @brief 检查是否正在运行
+     */
+    bool IsRunning() const { return valid_; }
+
+    /**
      * @brief 检查是否已连接
      */
     bool IsConnected() const;

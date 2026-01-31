@@ -69,7 +69,8 @@ set(OPENSSL_LIBRARIES "${OPENSSL_SSL_LIBRARY};${OPENSSL_CRYPTO_LIBRARY}" CACHE S
 # 添加第三方库
 # ========================================
 
-# spdlog (header-only 模式)
+# spdlog (静态库模式 - 强制静态链接，避免嵌入式设备上的动态库问题)
+set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "Build spdlog as static library" FORCE)
 add_subdirectory(${SPDLOG_PATH} ${CMAKE_BINARY_DIR}/spdlog)
 
 # cpp-httplib (header-only)

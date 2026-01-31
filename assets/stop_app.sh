@@ -100,6 +100,8 @@ fi
 # 清理 PID 文件
 rm -f "$PID_FILE"
 
+# 注意：HTTP 服务器已内置于 aipc 应用中，无需单独停止
+
 # 验证进程已停止
 sleep 1
 if kill -0 "$PID" 2>/dev/null; then

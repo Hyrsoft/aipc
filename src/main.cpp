@@ -7,6 +7,8 @@
  * - WebRTC: http://<device_ip>:8080 (需要信令服务器)
  * - 文件录制: /root/record/
  *
+ * HTTP API: 见 http.h
+ *
  * @author 好软，好温暖
  * @date 2026-01-31
  */
@@ -19,13 +21,33 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include <unistd.h>
+#include <linux/limits.h>
 #include "common/logger.h"
 #include "rkvideo/rkvideo.h"
 #include "thread_stream.h"
-#include "file/thread_file.h"
+#include "http.h"
 
 // 全局退出标志
 static std::atomic<bool> g_running{true};
+
+// 全局 HTTP API 实例
+static std::unique_ptr<HttpApi> g_http_api;
+
+// 获取可执行文件所在目录
+static std::string get_exe_dir() {
+    char path[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len != -1) {
+        path[len] = '\0';
+        std::string exe_path(path);
+        size_t pos = exe_path.rfind('/');
+        if (pos != std::string::npos) {
+            return exe_path.substr(0, pos);
+        }
+    }
+    return ".";
+}
 
 // 信号处理函数
 static void signal_handler(int sig) {
@@ -34,11 +56,15 @@ static void signal_handler(int sig) {
 }
 
 // 打印启动信息
-static void print_startup_info(const StreamConfig& config) {
+static void print_startup_info(const StreamConfig& config, int http_port) {
     LOG_INFO("===========================================");
     LOG_INFO("       AIPC - Edge AI Camera");
     LOG_INFO("===========================================");
     LOG_INFO("");
+    
+    LOG_INFO("HTTP API Server:");
+    LOG_INFO("  URL: http://<device_ip>:{}", http_port);
+    LOG_INFO("  Web UI: http://<device_ip>:{}/", http_port);
     
     if (config.enable_rtsp) {
         LOG_INFO("RTSP Stream:");
@@ -49,7 +75,6 @@ static void print_startup_info(const StreamConfig& config) {
     if (config.enable_webrtc) {
         LOG_INFO("WebRTC Stream:");
         LOG_INFO("  Signaling: {}", config.webrtc_config.signaling_url);
-        LOG_INFO("  Web UI: http://<device_ip>:8080");
     }
     
     if (config.enable_file) {
@@ -60,6 +85,18 @@ static void print_startup_info(const StreamConfig& config) {
     LOG_INFO("");
     LOG_INFO("Press Ctrl+C to stop...");
     LOG_INFO("===========================================");
+}
+
+// 打印 API 帮助信息
+static void print_api_info() {
+    LOG_INFO("All services running. Use HTTP API to control or press Ctrl+C to stop.");
+    LOG_INFO("  GET  /api/status         - Get system status");
+    LOG_INFO("  GET  /api/rtsp/status    - Get RTSP status");
+    LOG_INFO("  POST /api/webrtc/start   - Start WebRTC");
+    LOG_INFO("  POST /api/webrtc/stop    - Stop WebRTC");
+    LOG_INFO("  GET  /api/record/status  - Get recording status");
+    LOG_INFO("  POST /api/record/start   - Start recording");
+    LOG_INFO("  POST /api/record/stop    - Stop recording");
 }
 
 int main(int argc, char* argv[]) {
@@ -103,11 +140,26 @@ int main(int argc, char* argv[]) {
     stream_config.webrtc_config.webrtc_config.video.height = 1080;
     stream_config.webrtc_config.webrtc_config.video.fps = 30;
     
-    // 文件保存配置 - 默认禁用，可通过命令行参数启用
-    stream_config.enable_file = false;
+    // 文件保存配置 - 默认启用
+    stream_config.enable_file = true;
     stream_config.mp4_config.outputDir = "/root/record";
     
-    // 简单命令行参数解析
+    // ========================================================================
+    // HTTP API 配置
+    // ========================================================================
+    std::string exe_dir = get_exe_dir();
+    LOG_DEBUG("Executable directory: {}", exe_dir);
+    
+    HttpApiConfig http_config;
+    http_config.host = "0.0.0.0";
+    http_config.port = 8080;
+    // www 目录与 bin 目录同级，所以使用 ../www
+    http_config.static_dir = exe_dir + "/../www";
+    http_config.thread_pool_size = 2;
+
+    // ========================================================================
+    // 命令行参数解析
+    // ========================================================================
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--record" || arg == "-r") {
@@ -133,7 +185,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ========================================================================
-    // 创建流管理器（需要在 rkvideo_init 之前，以便注册消费者）
+    // 创建流管理器
     // ========================================================================
     CreateStreamManager(stream_config);
     
@@ -143,10 +195,28 @@ int main(int argc, char* argv[]) {
     }
 
     // ========================================================================
+    // 创建并启动 HTTP API
+    // ========================================================================
+    g_http_api = std::make_unique<HttpApi>();
+    
+    if (!g_http_api->Init(http_config, stream_config)) {
+        LOG_ERROR("Failed to initialize HTTP API!");
+        DestroyStreamManager();
+        return -1;
+    }
+    
+    if (!g_http_api->Start()) {
+        LOG_ERROR("Failed to start HTTP API!");
+        DestroyStreamManager();
+        return -1;
+    }
+
+    // ========================================================================
     // 初始化 rkvideo 模块
     // ========================================================================
     if (rkvideo_init() != 0) {
         LOG_ERROR("Failed to initialize rkvideo module!");
+        g_http_api->Stop();
         DestroyStreamManager();
         return -1;
     }
@@ -155,10 +225,11 @@ int main(int argc, char* argv[]) {
     GetStreamManager()->Start();
 
     // 打印启动信息
-    print_startup_info(stream_config);
+    print_startup_info(stream_config, http_config.port);
+    print_api_info();
 
     // ========================================================================
-    // 主循环
+    // 主循环 - 等待退出信号
     // ========================================================================
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -168,6 +239,12 @@ int main(int argc, char* argv[]) {
     // 清理资源
     // ========================================================================
     LOG_INFO("Shutting down AIPC...");
+    
+    // 停止 HTTP API
+    if (g_http_api) {
+        g_http_api->Stop();
+        g_http_api.reset();
+    }
     
     // 停止并销毁流管理器
     DestroyStreamManager();

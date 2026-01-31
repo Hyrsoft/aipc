@@ -11,6 +11,7 @@ add_subdirectory(rkvideo)
 add_subdirectory(rtsp)
 add_subdirectory(webrtc)
 add_subdirectory(file)
+add_subdirectory(httpserver)
 
 # ========================================
 # aipc 可执行文件
@@ -19,6 +20,7 @@ add_subdirectory(file)
 set(AIPC_SOURCES
     main.cpp
     thread_stream.cpp
+    http.cpp
 )
 
 # 创建可执行文件
@@ -35,10 +37,11 @@ target_include_directories(aipc
 target_link_libraries(aipc
     PRIVATE
         common
-        rtsp_lib      # rtsp_lib 依赖 sample_comm
-        file_lib      # file_lib 依赖 FFmpeg 和 rkvideo
-        webrtc_lib    # WebRTC 模块
-        rkvideo       # rkvideo 也依赖 sample_comm，放后面确保符号解析
+        httpserver_lib  # HTTP 服务器模块
+        rtsp_lib        # rtsp_lib 依赖 sample_comm
+        file_lib        # file_lib 依赖 FFmpeg 和 rkvideo
+        webrtc_lib      # WebRTC 模块
+        rkvideo         # rkvideo 也依赖 sample_comm，放后面确保符号解析
         spdlog::spdlog
         httplib
 )
