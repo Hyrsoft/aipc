@@ -9,3 +9,6 @@ cmake-build-*/
 build/
 
 bin/
+
+# 参考项目
+rockit-test/

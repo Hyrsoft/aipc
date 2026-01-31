@@ -1,132 +1,105 @@
 cmake_minimum_required(VERSION 3.15)
-project(aipc)
-add_definitions(-DRV1106_1103)
+project(aipc VERSION 1.0.0 LANGUAGES C CXX)
+
+# ========================================
+# 全局编译设置
+# ========================================
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# opencv-mobile
-set(OpenCV_DIR "./thirdparty/luckfox_pico_rkmpi_example/lib/uclibc/lib/cmake/opencv4")
-find_package(OpenCV REQUIRED)
+# 当编译选项为Debug时，启用调试符号
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
 
-#Thread
-set(THREADS_PREFER_PTHREAD_FLAG ON)
-find_package(Threads REQUIRED)
+# ========================================
+# spdlog 编译时日志级别控制
+# ========================================
+# 设置此选项可在编译时完全移除低于该级别的日志代码（零开销）
+# 定义日志等级常量
+set(LOG_LEVEL_TRACE    0)
+set(LOG_LEVEL_DEBUG    1)
+set(LOG_LEVEL_INFO     2)
+set(LOG_LEVEL_WARN     3)
+set(LOG_LEVEL_ERROR    4)
+set(LOG_LEVEL_CRITICAL 5)
+set(LOG_LEVEL_OFF      6)
 
-# 设置 RPATH
-set(CMAKE_INSTALL_RPATH "/oem/usr/lib")
-set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+# 根据构建类型自动设置默认日志等级
+# Debug 模式下默认 DEBUG，Release 模式下默认 INFO
+if(NOT DEFINED SPDLOG_ACTIVE_LEVEL)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(SPDLOG_ACTIVE_LEVEL ${LOG_LEVEL_DEBUG} CACHE STRING "Compile-time log level")
+    else()
+        set(SPDLOG_ACTIVE_LEVEL ${LOG_LEVEL_INFO} CACHE STRING "Compile-time log level")
+    endif()
+endif()
 
-# luckfox rkmpi
-set(LUCKFOX_RKMPI_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example/include")
-set(LUCKFOX_RKMPI_UCLIBC_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example/lib/uclibc")
+add_compile_definitions(SPDLOG_ACTIVE_LEVEL=${SPDLOG_ACTIVE_LEVEL})
 
-# libdatachannel(webrtc)
-# 配置 libdatachannel 选项 - 关键步骤，避免编译不必要的测试和示例
-set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
-set(NO_TESTS ON CACHE BOOL "" FORCE)
-set(NO_BENCHMARKS ON CACHE BOOL "" FORCE)
-# 根据 RV1106 开启/关闭相应选项
-set(USE_NICE OFF CACHE BOOL "" FORCE) 
-set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)
+# 针对嵌入式环境的优化编译选项
+add_compile_options(-ffunction-sections -fdata-sections)
+add_link_options(-Wl,--gc-sections)
 
-add_subdirectory(thirdparty/libdatachannel)
+# ========================================
+# 第三方库路径（全局可用）
+# ========================================
+set(LUCKFOX_MPI_PATH ${CMAKE_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example CACHE PATH "Luckfox MPI library path")
+set(SPDLOG_PATH ${CMAKE_SOURCE_DIR}/thirdparty/spdlog CACHE PATH "spdlog library path")
+set(CPP_HTTPLIB_PATH ${CMAKE_SOURCE_DIR}/thirdparty/cpp-httplib CACHE PATH "cpp-httplib library path")
+set(LIBDATACHANNEL_PATH ${CMAKE_SOURCE_DIR}/thirdparty/libdatachannel CACHE PATH "libdatachannel library path")
 
-# spdlog
-set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
-set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
-set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
-add_subdirectory(thirdparty/spdlog EXCLUDE_FROM_ALL)
+# ========================================
+# 添加第三方库
+# ========================================
 
-# Collect source files
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
-        "src/*.c"
-        "src/*.cpp"
-        "src/*.cc"
+# spdlog (header-only 模式)
+add_subdirectory(${SPDLOG_PATH} ${CMAKE_BINARY_DIR}/spdlog)
+
+# cpp-httplib (header-only)
+add_library(httplib INTERFACE)
+target_include_directories(httplib INTERFACE ${CPP_HTTPLIB_PATH})
+
+# libdatachannel (如需要可启用)
+# add_subdirectory(${LIBDATACHANNEL_PATH} ${CMAKE_BINARY_DIR}/libdatachannel)
+
+# ========================================
+# 添加源代码子目录
+# ========================================
+add_subdirectory(src)
+
+# ========================================
+# 安装配置
+# ========================================
+# 安装可执行文件
+install(TARGETS aipc
+    RUNTIME DESTINATION bin
 )
 
-add_executable(${PROJECT_NAME} ${SOURCES})
-
-add_compile_options(-g -Wall
-        -DISP_HW_V30 -DRKPLATFORM=ON -DARCH64=OFF
-        -DROCKIVA -DUAPI2
-        -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
+# 安装资源文件
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/
+    DESTINATION share/${PROJECT_NAME}
+    FILES_MATCHING 
+    PATTERN "*.sh"
+    PATTERN "*.rknn"
+    PATTERN "*.txt"
+    PATTERN "*.png"
+    PATTERN "*.jpg"
 )
 
-target_include_directories(${PROJECT_NAME} PRIVATE
-        ${OpenCV_INCLUDE_DIRS}
-
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/comm
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/rtsp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/utils
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/webrtc
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/rkmpi
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/vi
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/venc
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/http
-
-        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libdatachannel/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libdatachannel/deps/json/single_include
-        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/cpp-httplib
-
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rknn
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}/librga
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/uAPI2
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/common
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/xcore
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/algos
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/iq_parser
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/iq_parser_v2
-        ${LUCKFOX_RKMPI_INCLUDE_DIR}/rkaiq/smartIr
+# 安装 web 资源
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/www/
+    DESTINATION share/${PROJECT_NAME}/www
 )
 
-target_link_directories(${PROJECT_NAME} PRIVATE
-        ${OpenCV_LIB_DIR}
-        ${LUCKFOX_RKMPI_UCLIBC_LIB_DIR}
-)
-
-target_link_libraries(${PROJECT_NAME}
-        ${OpenCV_LIBS}
-        rknnmrt
-        Threads::Threads
-        rockiva
-        sample_comm
-        rockit
-        rockchip_mpp
-        rkaiq
-        pthread
-        rtsp
-        rga
-        datachannel
-        spdlog::spdlog_header_only
-)
-
-# Install
-install(TARGETS ${PROJECT_NAME}
-        DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/bin
-        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-)
-
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/model
-        DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/bin
-        DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-        FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
-)
-
-
-
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/www
-        DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/bin
-        DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-        FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
-)
-
-install(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/start_app.sh
-        DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/bin
-        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
-)
+# ========================================
+# 输出配置信息
+# ========================================
+message(STATUS "========================================")
+message(STATUS "Project: ${PROJECT_NAME} v${PROJECT_VERSION}")
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "spdlog compile-time log level: ${SPDLOG_ACTIVE_LEVEL} (0=TRACE, 2=INFO, 6=OFF)")
+message(STATUS "========================================")
