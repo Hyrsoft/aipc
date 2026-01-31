@@ -369,21 +369,14 @@ void Mp4Recorder::StopRecording() {
     LOG_INFO("Stopped recording");
 }
 
-bool Mp4Recorder::WriteFrame(const EncodedStreamPtr& stream) {
-    if (state_ != RecordState::kRecording || !stream || !stream->pstPack) {
+bool Mp4Recorder::WriteFrame(const EncodedFramePtr& frame) {
+    if (state_ != RecordState::kRecording || !frame || frame->data.empty()) {
         return false;
     }
     
-    void* data = RK_MPI_MB_Handle2VirAddr(stream->pstPack->pMbBlk);
-    if (!data || stream->pstPack->u32Len == 0) {
-        LOG_WARN("Invalid frame data");
-        return false;
-    }
-    
-    bool is_keyframe = (stream->pstPack->DataType.enH264EType == H264E_NALU_IDRSLICE ||
-                        stream->pstPack->DataType.enH264EType == H264E_NALU_ISLICE ||
-                        stream->pstPack->DataType.enH265EType == H265E_NALU_IDRSLICE ||
-                        stream->pstPack->DataType.enH265EType == H265E_NALU_ISLICE);
+    const uint8_t* data = frame->data.data();
+    size_t size = frame->data.size();
+    bool is_keyframe = frame->isKeyFrame;
     
     // 等待第一个关键帧，从中提取 SPS/PPS 并写入 header
     if (!header_written_) {
@@ -394,7 +387,7 @@ bool Mp4Recorder::WriteFrame(const EncodedStreamPtr& stream) {
         }
         
         // 从关键帧中提取 SPS/PPS 设置 extradata
-        if (!SetExtradataFromStream(static_cast<uint8_t*>(data), stream->pstPack->u32Len)) {
+        if (!SetExtradataFromStream(data, size)) {
             LOG_ERROR("Failed to extract SPS/PPS from keyframe");
             return false;
         }
@@ -407,7 +400,7 @@ bool Mp4Recorder::WriteFrame(const EncodedStreamPtr& stream) {
             return false;
         }
         header_written_ = true;
-        first_pts_ = stream->pstPack->u64PTS;
+        first_pts_ = frame->pts;
         LOG_INFO("Header written, recording started from keyframe");
     }
     
@@ -425,11 +418,11 @@ bool Mp4Recorder::WriteFrame(const EncodedStreamPtr& stream) {
         flags |= AV_PKT_FLAG_KEY;
     }
     
-    uint64_t relative_pts = (stream->pstPack->u64PTS - first_pts_) / 1000;
+    uint64_t relative_pts = (frame->pts - first_pts_) / 1000;
     
     AVPacket packet = {};
-    packet.data = static_cast<uint8_t*>(data);
-    packet.size = stream->pstPack->u32Len;
+    packet.data = const_cast<uint8_t*>(data);
+    packet.size = static_cast<int>(size);
     packet.pts = av_rescale_q(relative_pts, AVRational{1, 1000}, video_stream->time_base);
     packet.dts = packet.pts;
     packet.stream_index = video_stream->index;
@@ -445,7 +438,7 @@ bool Mp4Recorder::WriteFrame(const EncodedStreamPtr& stream) {
     }
     
     stats_.frames_written++;
-    stats_.bytes_written += stream->pstPack->u32Len;
+    stats_.bytes_written += size;
     stats_.duration_sec = static_cast<double>(relative_pts) / 1000.0;
     
     // 检查限制

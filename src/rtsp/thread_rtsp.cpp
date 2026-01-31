@@ -72,12 +72,12 @@ RtspServer::Stats RtspThread::GetStats() const {
     return GetRtspServer().GetStats();
 }
 
-void RtspThread::StreamConsumer(EncodedStreamPtr stream, void* user_data) {
+void RtspThread::StreamConsumer(EncodedFramePtr frame, void* user_data) {
     auto* self = static_cast<RtspThread*>(user_data);
     
     // 只有在运行状态下才推送帧
-    if (self && self->running_) {
-        rtsp_stream_consumer(stream, nullptr);
+    if (self && self->running_ && frame) {
+        GetRtspServer().SendVideoFrame(frame);
     }
 }
 

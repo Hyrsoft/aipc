@@ -10,6 +10,7 @@
 #include "common/logger.h"
 
 #include <rtc/rtc.hpp>
+#include <rtc/frameinfo.hpp>
 #include <rtc/h264rtppacketizer.hpp>
 #include <rtc/rtcpsrreporter.hpp>
 #include <rtc/rtcpreceivingsession.hpp>
@@ -215,21 +216,26 @@ void WebRTCSystem::SendVideoData(const uint8_t* data, size_t size, uint64_t time
         return;
     }
 
-    // 帧率控制
-    auto now = std::chrono::steady_clock::now();
-    if (last_video_send_time_ != std::chrono::steady_clock::time_point{}) {
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now - last_video_send_time_);
-        int interval_ms = 1000 / config_.video.fps;
-        if (elapsed.count() < interval_ms) {
-            return;
-        }
-    }
-    last_video_send_time_ = now;
+    // 帧率控制（可选，编码器已经按帧率输出）
+    // auto now = std::chrono::steady_clock::now();
+    // if (last_video_send_time_ != std::chrono::steady_clock::time_point{}) {
+    //     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+    //         now - last_video_send_time_);
+    //     int interval_ms = 1000 / config_.video.fps;
+    //     if (elapsed.count() < interval_ms) {
+    //         return;
+    //     }
+    // }
+    // last_video_send_time_ = now;
 
     try {
-        auto sample_time = std::chrono::microseconds(timestamp);
-        video_track_->send(reinterpret_cast<const std::byte*>(data), size);
+        // 将微秒时间戳转换为秒，供 RTP 时间戳计算使用
+        // RTP 时间戳使用 90kHz 时钟，libdatachannel 会自动计算
+        auto sample_time = std::chrono::duration<double>(timestamp / 1000000.0);
+        rtc::FrameInfo frame_info(sample_time);
+        
+        video_track_->sendFrame(
+            reinterpret_cast<const std::byte*>(data), size, frame_info);
 
         // 更新统计
         {

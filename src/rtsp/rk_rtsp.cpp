@@ -110,26 +110,18 @@ void RtspServer::Deinit() {
              stats_.framesSent, stats_.bytesSent, stats_.errors);
 }
 
-bool RtspServer::SendVideoFrame(const EncodedStreamPtr& stream) {
-    if (!initialized_ || !stream || !stream->pstPack) {
-        LOG_WARN("SendVideoFrame: invalid state or stream");
+bool RtspServer::SendVideoFrame(const EncodedFramePtr& frame) {
+    if (!initialized_ || !frame || frame->data.empty()) {
+        LOG_WARN("SendVideoFrame: invalid state or frame");
         return false;
     }
 
-    // 从 MPI buffer 获取虚拟地址
-    void* data = RK_MPI_MB_Handle2VirAddr(stream->pstPack->pMbBlk);
-    if (!data) {
-        LOG_ERROR("Failed to get virtual address from MB handle");
-        stats_.errors++;
-        return false;
-    }
-
-    LOG_TRACE("SendVideoFrame: len={}, pts={}", stream->pstPack->u32Len, stream->pstPack->u64PTS);
+    LOG_TRACE("SendVideoFrame: len={}, pts={}", frame->data.size(), frame->pts);
 
     return SendVideoData(
-        static_cast<const uint8_t*>(data),
-        stream->pstPack->u32Len,
-        stream->pstPack->u64PTS
+        frame->data.data(),
+        static_cast<int>(frame->data.size()),
+        frame->pts
     );
 }
 
@@ -200,8 +192,4 @@ bool rtsp_server_init(const RtspConfig& config) {
 
 void rtsp_server_deinit() {
     GetRtspServer().Deinit();
-}
-
-void rtsp_stream_consumer(EncodedStreamPtr stream, void* /* userData */) {
-    GetRtspServer().SendVideoFrame(stream);
 }

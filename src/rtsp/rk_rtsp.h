@@ -16,11 +16,8 @@
 #include <atomic>
 #include <memory>
 
-// RKMPI 头文件
-#include "rk_mpi_venc.h"
-
-// 前向声明编码流智能指针类型
-using EncodedStreamPtr = std::shared_ptr<VENC_STREAM_S>;
+// 媒体缓冲区类型定义
+#include "common/media_buffer.h"
 
 // ============================================================================
 // RTSP 配置参数
@@ -69,12 +66,12 @@ public:
     void Deinit();
 
     /**
-     * @brief 发送编码后的视频帧
+     * @brief 发送编码后的视频帧（拷贝模式）
      * 
-     * @param stream 编码流智能指针（来自 StreamDispatcher）
+     * @param frame 编码帧智能指针（来自 StreamDispatcher）
      * @return true 成功，false 失败
      */
-    bool SendVideoFrame(const EncodedStreamPtr& stream);
+    bool SendVideoFrame(const EncodedFramePtr& frame);
 
     /**
      * @brief 发送原始视频数据
@@ -156,13 +153,3 @@ bool rtsp_server_init(const RtspConfig& config = RtspConfig{});
  * @brief 反初始化全局 RTSP 服务器
  */
 void rtsp_server_deinit();
-
-/**
- * @brief 获取 RTSP 流消费者回调
- * 
- * 用于注册到 StreamDispatcher 的回调函数
- * 
- * @param stream 编码流
- * @param userData 用户数据（未使用）
- */
-void rtsp_stream_consumer(EncodedStreamPtr stream, void* userData);

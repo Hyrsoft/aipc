@@ -113,15 +113,15 @@ public:
     // ========================================================================
 
     /**
-     * @brief 处理编码流帧
-     * @param stream 编码流
+     * @brief 处理编码帧
+     * @param frame 编码帧
      */
-    void OnEncodedStream(const EncodedStreamPtr& stream);
+    void OnEncodedFrame(const EncodedFramePtr& frame);
 
     /**
      * @brief 获取流消费者回调（用于注册到 StreamDispatcher）
      */
-    static void StreamConsumer(EncodedStreamPtr stream, void* user_data);
+    static void StreamConsumer(EncodedFramePtr frame, void* user_data);
 
 private:
     FileThreadConfig config_;

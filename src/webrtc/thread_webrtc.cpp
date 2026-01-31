@@ -111,27 +111,19 @@ WebRTCStats WebRTCThread::GetStats() const {
     return webrtc_ ? webrtc_->GetStats() : WebRTCStats{};
 }
 
-void WebRTCThread::StreamConsumer(EncodedStreamPtr stream, void* user_data) {
+void WebRTCThread::StreamConsumer(EncodedFramePtr frame, void* user_data) {
     auto* self = static_cast<WebRTCThread*>(user_data);
     if (self) {
-        self->SendVideoFrame(stream);
+        self->SendVideoFrame(frame);
     }
 }
 
-void WebRTCThread::SendVideoFrame(const EncodedStreamPtr& stream) {
-    if (!IsConnected() || !stream || !stream->pstPack) {
+void WebRTCThread::SendVideoFrame(const EncodedFramePtr& frame) {
+    if (!IsConnected() || !frame || frame->data.empty()) {
         return;
     }
 
-    // 获取视频数据
-    const uint8_t* data = static_cast<const uint8_t*>(
-        RK_MPI_MB_Handle2VirAddr(stream->pstPack->pMbBlk));
-    uint32_t len = stream->pstPack->u32Len;
-    uint64_t pts = stream->pstPack->u64PTS;
-
-    if (data && len > 0) {
-        webrtc_->SendVideoData(data, len, pts);
-    }
+    webrtc_->SendVideoData(frame->data.data(), frame->data.size(), frame->pts);
 }
 
 void WebRTCThread::OnStateChanged(StateCallback callback) {

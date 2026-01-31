@@ -98,13 +98,13 @@ public:
     /**
      * @brief 流消费者回调（用于注册到 StreamDispatcher）
      */
-    static void StreamConsumer(EncodedStreamPtr stream, void* user_data);
+    static void StreamConsumer(EncodedFramePtr frame, void* user_data);
 
     /**
      * @brief 发送视频帧
-     * @param stream 编码后的视频流
+     * @param frame 编码后的视频帧
      */
-    void SendVideoFrame(const EncodedStreamPtr& stream);
+    void SendVideoFrame(const EncodedFramePtr& frame);
 
     // ========================================================================
     // 回调设置

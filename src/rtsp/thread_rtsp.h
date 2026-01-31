@@ -74,7 +74,7 @@ public:
      * @brief 流消费者回调（用于注册到 StreamDispatcher）
      * 只有在 running_ 状态下才会推送帧
      */
-    static void StreamConsumer(EncodedStreamPtr stream, void* user_data);
+    static void StreamConsumer(EncodedFramePtr frame, void* user_data);
 
 private:
     RtspConfig config_;

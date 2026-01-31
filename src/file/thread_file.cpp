@@ -96,17 +96,17 @@ Mp4Recorder::Stats FileThread::GetRecordStats() const {
 // 流消费者接口
 // ============================================================================
 
-void FileThread::OnEncodedStream(const EncodedStreamPtr& stream) {
+void FileThread::OnEncodedFrame(const EncodedFramePtr& frame) {
     // 如果正在录制，写入帧
-    if (mp4_recorder_ && mp4_recorder_->IsRecording()) {
-        mp4_recorder_->WriteFrame(stream);
+    if (mp4_recorder_ && mp4_recorder_->IsRecording() && frame) {
+        mp4_recorder_->WriteFrame(frame);
     }
 }
 
-void FileThread::StreamConsumer(EncodedStreamPtr stream, void* user_data) {
+void FileThread::StreamConsumer(EncodedFramePtr frame, void* user_data) {
     FileThread* self = static_cast<FileThread*>(user_data);
     if (self) {
-        self->OnEncodedStream(stream);
+        self->OnEncodedFrame(frame);
     }
 }
 

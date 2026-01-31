@@ -20,8 +20,8 @@
 // ============================================================================
 
 struct VideoConfig {
-    int width = 1920;
-    int height = 1080;
+    int width = 720;
+    int height = 480;
     int frameRate = 30;
     int bitRate = 10 * 1024;  // kbps
 };
@@ -53,9 +53,11 @@ int rkvideo_deinit();
 // ============================================================================
 
 /**
- * @brief 流消费者回调类型
+ * @brief 流消费者回调类型（使用拷贝后的帧数据）
+ * 
+ * 每个消费者收到的是独立的数据拷贝，互不影响
  */
-using VideoStreamCallback = void(*)(EncodedStreamPtr stream, void* userData);
+using VideoStreamCallback = void(*)(EncodedFramePtr frame, void* userData);
 
 /**
  * @brief 注册编码流消费者
@@ -66,7 +68,7 @@ using VideoStreamCallback = void(*)(EncodedStreamPtr stream, void* userData);
  * @param queueSize 队列大小（背压控制）
  */
 void rkvideo_register_stream_consumer(const char* name, VideoStreamCallback callback, 
-                                       void* userData, int queueSize = 3);
+                                       void* userData, int queueSize = 5);
 
 /**
  * @brief 启动流分发

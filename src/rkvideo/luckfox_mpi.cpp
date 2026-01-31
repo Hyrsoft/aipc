@@ -66,7 +66,7 @@ int vi_dev_init() {
 
 int vi_chn_init(int channelId, int width, int height) {
 	int ret;
-	int buf_cnt = 4;  // 增加 buffer 数量
+	int buf_cnt = 4;  // buffer 数量
 	// VI init
 	VI_CHN_ATTR_S vi_chn_attr;
 	memset(&vi_chn_attr, 0, sizeof(vi_chn_attr));
@@ -77,8 +77,11 @@ int vi_chn_init(int channelId, int width, int height) {
 	vi_chn_attr.stSize.u32Height = height;
 	vi_chn_attr.enPixelFormat = RK_FMT_YUV420SP;
 	vi_chn_attr.enCompressMode = COMPRESS_MODE_NONE; // COMPRESS_AFBC_16x16;
-	// 关键：当 VI 绑定到 VENC 时，u32Depth 必须小于 u32BufCount
-	// 设为 0 表示完全绑定模式，VI 帧直接送到 VENC
+	// u32Depth 配置说明：
+	// - 0: 纯绑定模式，VI 帧直接送到下游，不能 GetChnFrame
+	// - >0: 可以 GetChnFrame，但绑定时必须 < u32BufCount
+	// 通道 0 绑定到 VENC，设为 0
+	// 通道 1 用于 AI 推理，可能需要 GetChnFrame，但目前未使用
 	vi_chn_attr.u32Depth = 0;
 	ret = RK_MPI_VI_SetChnAttr(0, channelId, &vi_chn_attr);
 	ret |= RK_MPI_VI_EnableChn(0, channelId);

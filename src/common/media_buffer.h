@@ -23,6 +23,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <cstdio>
+#include <chrono>
 
 // RKMPI 头文件
 #include "rk_mpi_sys.h"
@@ -175,6 +176,23 @@ inline EncodedStreamPtr acquire_encoded_stream(RK_S32 chn_id, RK_S32 timeout_ms 
     
     RK_S32 ret = RK_MPI_VENC_GetStream(chn_id, stream, timeout_ms);
     if (ret != RK_SUCCESS) {
+        // 常见错误码：
+        // RK_ERR_VENC_BUF_EMPTY (0xa0098004) - 缓冲区空，超时返回
+        // RK_ERR_VENC_ILLEGAL_PARAM - 参数错误
+        // RK_ERR_VENC_NOTREADY - 通道未准备好
+        static uint64_t last_error_log_time = 0;
+        static RK_S32 last_error_code = 0;
+        uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        
+        // 每5秒或错误码变化时打印一次错误详情
+        if (ret != last_error_code || now - last_error_log_time > 5000) {
+            // 使用 printf 避免 LOG_* 依赖
+            fprintf(stderr, "[media_buffer] VENC GetStream failed: ret=0x%x, chn=%d\n", ret, chn_id);
+            last_error_log_time = now;
+            last_error_code = ret;
+        }
+        
         delete stream->pstPack;
         delete stream;
         return nullptr;

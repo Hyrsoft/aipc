@@ -18,11 +18,8 @@
 #include <memory>
 #include <mutex>
 
-// RKMPI 头文件
-#include "rk_mpi_venc.h"
-
-// 前向声明
-using EncodedStreamPtr = std::shared_ptr<VENC_STREAM_S>;
+// 媒体缓冲区类型定义
+#include "common/media_buffer.h"
 
 // ============================================================================
 // 配置结构体
@@ -90,10 +87,10 @@ public:
 
     /**
      * @brief 写入编码帧（由流消费者回调调用）
-     * @param stream 编码流智能指针
+     * @param frame 编码帧智能指针
      * @return true 成功，false 失败
      */
-    bool WriteFrame(const EncodedStreamPtr& stream);
+    bool WriteFrame(const EncodedFramePtr& frame);
 
     /**
      * @brief 获取当前录制状态
