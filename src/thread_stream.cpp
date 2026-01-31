@@ -48,7 +48,6 @@ StreamManager::StreamManager(const StreamConfig& config)
     if (config_.enable_file) {
         FileThreadConfig file_config;
         file_config.mp4Config = config_.mp4_config;
-        file_config.jpegConfig = config_.jpeg_config;
         
         file_thread_ = std::make_unique<FileThread>(file_config);
         

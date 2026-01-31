@@ -21,9 +21,6 @@ FileThread::FileThread(const FileThreadConfig& config)
     // 创建 MP4 录制器
     mp4_recorder_ = std::make_unique<Mp4Recorder>(config_.mp4Config);
     
-    // 创建 JPEG 拍照器
-    jpeg_capturer_ = std::make_unique<JpegCapturer>(config_.jpegConfig);
-    
     LOG_INFO("FileThread created");
 }
 
@@ -39,12 +36,6 @@ void FileThread::Start() {
     }
     
     running_ = true;
-    
-    // 启动 JPEG 处理线程
-    if (jpeg_capturer_ && jpeg_capturer_->IsValid()) {
-        jpeg_thread_ = std::thread(&FileThread::JpegProcessThread, this);
-    }
-    
     LOG_INFO("FileThread started");
 }
 
@@ -60,24 +51,8 @@ void FileThread::Stop() {
         mp4_recorder_->StopRecording();
     }
     
-    // 停止线程
     running_ = false;
-    
-    if (jpeg_thread_.joinable()) {
-        jpeg_thread_.join();
-    }
-    
     LOG_INFO("FileThread stopped");
-}
-
-void FileThread::JpegProcessThread() {
-    LOG_DEBUG("JPEG process thread started");
-    
-    if (jpeg_capturer_) {
-        jpeg_capturer_->ProcessLoop(running_);
-    }
-    
-    LOG_DEBUG("JPEG process thread exited");
 }
 
 // ============================================================================
@@ -115,33 +90,6 @@ Mp4Recorder::Stats FileThread::GetRecordStats() const {
         return mp4_recorder_->GetStats();
     }
     return {};
-}
-
-// ============================================================================
-// 拍照控制接口
-// ============================================================================
-
-bool FileThread::TakeSnapshot(const std::string& filename) {
-    if (!jpeg_capturer_ || !jpeg_capturer_->IsValid()) {
-        LOG_ERROR("JPEG capturer not valid");
-        return false;
-    }
-    
-    return jpeg_capturer_->TakeSnapshot(filename);
-}
-
-std::string FileThread::GetLastPhotoPath() const {
-    if (jpeg_capturer_) {
-        return jpeg_capturer_->GetLastPhotoPath();
-    }
-    return "";
-}
-
-uint64_t FileThread::GetPhotoCount() const {
-    if (jpeg_capturer_) {
-        return jpeg_capturer_->GetCompletedCount();
-    }
-    return 0;
 }
 
 // ============================================================================
@@ -187,4 +135,3 @@ void DestroyFileThread() {
         g_file_thread.reset();
     }
 }
-

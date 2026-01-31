@@ -40,7 +40,6 @@ struct StreamConfig {
     
     RtspConfig rtsp_config;            ///< RTSP 配置
     Mp4RecordConfig mp4_config;        ///< MP4 录制配置
-    JpegCaptureConfig jpeg_config;     ///< JPEG 拍照配置
 };
 
 // ============================================================================

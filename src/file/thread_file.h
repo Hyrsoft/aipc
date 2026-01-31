@@ -1,10 +1,9 @@
 /**
  * @file thread_file.h
- * @brief 文件保存线程 - 管理视频录制和拍照
+ * @brief 文件保存线程 - 管理视频录制
  *
  * 独立的线程模块，负责：
  * - MP4 视频录制的启停控制
- * - JPEG 拍照的触发和处理
  * - 预留控制接口供 WebSocket/HTTP API 调用
  *
  * @author 好软，好温暖
@@ -27,7 +26,6 @@
 
 struct FileThreadConfig {
     Mp4RecordConfig mp4Config;        ///< MP4 录制配置
-    JpegCaptureConfig jpegConfig;     ///< JPEG 拍照配置
 };
 
 // ============================================================================
@@ -38,7 +36,6 @@ enum class FileCommand {
     kNone,
     kStartRecording,
     kStopRecording,
-    kTakeSnapshot,
 };
 
 // ============================================================================
@@ -112,27 +109,6 @@ public:
     Mp4Recorder::Stats GetRecordStats() const;
 
     // ========================================================================
-    // 拍照控制接口
-    // ========================================================================
-
-    /**
-     * @brief 触发拍照
-     * @param filename 可选的文件名
-     * @return true 成功，false 失败
-     */
-    bool TakeSnapshot(const std::string& filename = "");
-
-    /**
-     * @brief 获取最后一张照片的路径
-     */
-    std::string GetLastPhotoPath() const;
-
-    /**
-     * @brief 获取已完成的拍照数量
-     */
-    uint64_t GetPhotoCount() const;
-
-    // ========================================================================
     // 流消费者接口（供 StreamDispatcher 调用）
     // ========================================================================
 
@@ -148,15 +124,11 @@ public:
     static void StreamConsumer(EncodedStreamPtr stream, void* user_data);
 
 private:
-    void JpegProcessThread();
-
     FileThreadConfig config_;
     
     std::unique_ptr<Mp4Recorder> mp4_recorder_;
-    std::unique_ptr<JpegCapturer> jpeg_capturer_;
     
     std::atomic<bool> running_{false};
-    std::thread jpeg_thread_;
 };
 
 // ============================================================================
@@ -180,4 +152,3 @@ void CreateFileThread(const FileThreadConfig& config);
  * @brief 销毁全局文件线程实例
  */
 void DestroyFileThread();
-

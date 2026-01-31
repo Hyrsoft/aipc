@@ -63,6 +63,58 @@ static bool EnsureDirectory(const std::string& dir) {
     return false;
 }
 
+/**
+ * @brief 在 H.264 Annex B 流中查找 NAL 单元
+ * @param data 数据指针
+ * @param size 数据大小
+ * @param start 输出：NAL 起始位置（不含 start code）
+ * @param nal_size 输出：NAL 大小
+ * @param offset 搜索起始偏移
+ * @return 下一个 NAL 的搜索偏移，如果没有找到返回 size
+ */
+static size_t FindNalUnit(const uint8_t* data, size_t size, 
+                          const uint8_t** start, size_t* nal_size, 
+                          size_t offset = 0) {
+    // 查找 start code (0x000001 或 0x00000001)
+    size_t i = offset;
+    while (i + 3 < size) {
+        if (data[i] == 0 && data[i + 1] == 0) {
+            if (data[i + 2] == 1) {
+                // 0x000001
+                *start = data + i + 3;
+                break;
+            } else if (data[i + 2] == 0 && i + 4 < size && data[i + 3] == 1) {
+                // 0x00000001
+                *start = data + i + 4;
+                break;
+            }
+        }
+        i++;
+    }
+    
+    if (i + 3 >= size) {
+        *start = nullptr;
+        *nal_size = 0;
+        return size;
+    }
+    
+    // 查找下一个 start code 来确定 NAL 大小
+    size_t nal_start = *start - data;
+    size_t j = nal_start;
+    while (j + 3 < size) {
+        if (data[j] == 0 && data[j + 1] == 0 && 
+            (data[j + 2] == 1 || (data[j + 2] == 0 && j + 4 < size && data[j + 3] == 1))) {
+            *nal_size = j - nal_start;
+            return j;
+        }
+        j++;
+    }
+    
+    // 到末尾
+    *nal_size = size - nal_start;
+    return size;
+}
+
 // ============================================================================
 // Mp4Recorder 实现
 // ============================================================================
@@ -188,6 +240,103 @@ void Mp4Recorder::CloseOutputFile() {
                  current_file_path_, stats_.frames_written, stats_.duration_sec);
         current_file_path_.clear();
     }
+    
+    extradata_set_ = false;
+}
+
+bool Mp4Recorder::SetExtradataFromStream(const uint8_t* data, size_t size) {
+    // 从 H.264 Annex B 流中提取 SPS 和 PPS
+    // H.264 NAL 类型：7=SPS, 8=PPS
+    
+    const uint8_t* sps_data = nullptr;
+    const uint8_t* pps_data = nullptr;
+    size_t sps_size = 0;
+    size_t pps_size = 0;
+    
+    size_t offset = 0;
+    while (offset < size) {
+        const uint8_t* nal_start = nullptr;
+        size_t nal_size = 0;
+        offset = FindNalUnit(data, size, &nal_start, &nal_size, offset);
+        
+        if (!nal_start || nal_size == 0) {
+            break;
+        }
+        
+        uint8_t nal_type = nal_start[0] & 0x1F;
+        
+        if (nal_type == 7 && !sps_data) {  // SPS
+            sps_data = nal_start;
+            sps_size = nal_size;
+            LOG_DEBUG("Found SPS: {} bytes", sps_size);
+        } else if (nal_type == 8 && !pps_data) {  // PPS
+            pps_data = nal_start;
+            pps_size = nal_size;
+            LOG_DEBUG("Found PPS: {} bytes", pps_size);
+        }
+        
+        if (sps_data && pps_data) {
+            break;
+        }
+    }
+    
+    if (!sps_data || !pps_data) {
+        LOG_WARN("SPS or PPS not found in stream");
+        return false;
+    }
+    
+    // 构造 AVCC 格式的 extradata
+    // AVCC 格式：
+    // 1 byte: version (1)
+    // 1 byte: profile
+    // 1 byte: compatibility
+    // 1 byte: level
+    // 1 byte: 0xFC | (lengthSizeMinusOne & 0x03)  -> 通常是 0xFF (4字节长度)
+    // 1 byte: 0xE0 | numSPS  -> 通常是 0xE1 (1个SPS)
+    // 2 bytes: SPS length (big endian)
+    // SPS data
+    // 1 byte: numPPS -> 通常是 0x01
+    // 2 bytes: PPS length (big endian)
+    // PPS data
+    
+    size_t extradata_size = 6 + 2 + sps_size + 1 + 2 + pps_size;
+    uint8_t* extradata = static_cast<uint8_t*>(av_malloc(extradata_size + AV_INPUT_BUFFER_PADDING_SIZE));
+    if (!extradata) {
+        LOG_ERROR("Failed to allocate extradata");
+        return false;
+    }
+    memset(extradata, 0, extradata_size + AV_INPUT_BUFFER_PADDING_SIZE);
+    
+    uint8_t* p = extradata;
+    *p++ = 1;                          // version
+    *p++ = sps_data[1];                // profile
+    *p++ = sps_data[2];                // compatibility
+    *p++ = sps_data[3];                // level
+    *p++ = 0xFF;                       // 4 bytes NAL length
+    *p++ = 0xE1;                       // 1 SPS
+    *p++ = (sps_size >> 8) & 0xFF;     // SPS length high byte
+    *p++ = sps_size & 0xFF;            // SPS length low byte
+    memcpy(p, sps_data, sps_size);
+    p += sps_size;
+    *p++ = 1;                          // 1 PPS
+    *p++ = (pps_size >> 8) & 0xFF;     // PPS length high byte
+    *p++ = pps_size & 0xFF;            // PPS length low byte
+    memcpy(p, pps_data, pps_size);
+    
+    // 设置到 codecpar
+    AVFormatContext* ofmt_ctx = static_cast<AVFormatContext*>(format_ctx_);
+    AVStream* video_stream = ofmt_ctx->streams[0];
+    
+    // 释放旧的 extradata（如果有）
+    if (video_stream->codecpar->extradata) {
+        av_free(video_stream->codecpar->extradata);
+    }
+    
+    video_stream->codecpar->extradata = extradata;
+    video_stream->codecpar->extradata_size = extradata_size;
+    
+    LOG_INFO("Set H.264 extradata: SPS={} bytes, PPS={} bytes", sps_size, pps_size);
+    return true;
 }
 
 bool Mp4Recorder::StartRecording(const std::string& filename) {
@@ -225,6 +374,26 @@ bool Mp4Recorder::WriteFrame(const EncodedStreamPtr& stream) {
         return false;
     }
     
+    void* data = RK_MPI_MB_Handle2VirAddr(stream->pstPack->pMbBlk);
+    if (!data || stream->pstPack->u32Len == 0) {
+        LOG_WARN("Invalid frame data");
+        return false;
+    }
+    
+    bool is_keyframe = (stream->pstPack->DataType.enH264EType == H264E_NALU_IDRSLICE ||
+                        stream->pstPack->DataType.enH264EType == H264E_NALU_ISLICE ||
+                        stream->pstPack->DataType.enH265EType == H265E_NALU_IDRSLICE ||
+                        stream->pstPack->DataType.enH265EType == H265E_NALU_ISLICE);
+    
+    // 在首个关键帧时提取 SPS/PPS 设置 extradata（不持有锁）
+    if (!extradata_set_ && is_keyframe) {
+        if (SetExtradataFromStream(static_cast<uint8_t*>(data), stream->pstPack->u32Len)) {
+            extradata_set_ = true;
+        } else {
+            LOG_WARN("Failed to set extradata, MP4 may not play correctly");
+        }
+    }
+    
     std::lock_guard<std::mutex> lock(mutex_);
     
     if (!format_ctx_) {
@@ -234,17 +403,7 @@ bool Mp4Recorder::WriteFrame(const EncodedStreamPtr& stream) {
     AVFormatContext* ofmt_ctx = static_cast<AVFormatContext*>(format_ctx_);
     AVStream* video_stream = ofmt_ctx->streams[0];
     
-    void* data = RK_MPI_MB_Handle2VirAddr(stream->pstPack->pMbBlk);
-    if (!data || stream->pstPack->u32Len == 0) {
-        LOG_WARN("Invalid frame data");
-        return false;
-    }
-    
     int flags = 0;
-    bool is_keyframe = (stream->pstPack->DataType.enH264EType == H264E_NALU_IDRSLICE ||
-                        stream->pstPack->DataType.enH264EType == H264E_NALU_ISLICE ||
-                        stream->pstPack->DataType.enH265EType == H265E_NALU_IDRSLICE ||
-                        stream->pstPack->DataType.enH265EType == H265E_NALU_ISLICE);
     if (is_keyframe) {
         flags |= AV_PKT_FLAG_KEY;
     }
@@ -284,291 +443,3 @@ bool Mp4Recorder::WriteFrame(const EncodedStreamPtr& stream) {
     
     return true;
 }
-
-// ============================================================================
-// JpegCapturer 实现
-// ============================================================================
-
-JpegCapturer::JpegCapturer(const JpegCaptureConfig& config)
-    : config_(config) {
-    
-    if (!EnsureDirectory(config_.outputDir)) {
-        LOG_ERROR("Failed to ensure output directory");
-        return;
-    }
-    
-    // 创建 JPEG VENC 通道
-    VENC_CHN_ATTR_S enc_attr;
-    memset(&enc_attr, 0, sizeof(enc_attr));
-    
-    enc_attr.stVencAttr.enType = RK_VIDEO_ID_JPEG;
-    enc_attr.stVencAttr.enPixelFormat = RK_FMT_YUV420SP;
-    enc_attr.stVencAttr.u32MaxPicWidth = config_.width;
-    enc_attr.stVencAttr.u32MaxPicHeight = config_.height;
-    enc_attr.stVencAttr.u32PicWidth = config_.width;
-    enc_attr.stVencAttr.u32PicHeight = config_.height;
-    enc_attr.stVencAttr.u32VirWidth = config_.width;
-    enc_attr.stVencAttr.u32VirHeight = config_.height;
-    enc_attr.stVencAttr.u32StreamBufCnt = 2;
-    enc_attr.stVencAttr.u32BufSize = config_.width * config_.height;
-    
-    RK_S32 ret = RK_MPI_VENC_CreateChn(config_.vencChnId, &enc_attr);
-    if (ret != RK_SUCCESS) {
-        LOG_ERROR("Failed to create JPEG VENC channel {}: 0x{:x}", config_.vencChnId, ret);
-        return;
-    }
-    
-    // 设置 JPEG 参数
-    VENC_JPEG_PARAM_S jpeg_param;
-    memset(&jpeg_param, 0, sizeof(jpeg_param));
-    jpeg_param.u32Qfactor = config_.quality;
-    RK_MPI_VENC_SetJpegParam(config_.vencChnId, &jpeg_param);
-    
-    // 设置旋转
-    ROTATION_E rotation = ROTATION_0;
-    if (config_.rotation == 90) rotation = ROTATION_90;
-    else if (config_.rotation == 180) rotation = ROTATION_180;
-    else if (config_.rotation == 270) rotation = ROTATION_270;
-    RK_MPI_VENC_SetChnRotation(config_.vencChnId, rotation);
-    
-    valid_ = true;
-    LOG_INFO("JpegCapturer created, VENC channel: {}, output dir: {}", 
-             config_.vencChnId, config_.outputDir);
-}
-
-JpegCapturer::~JpegCapturer() {
-    if (valid_) {
-        RK_MPI_VENC_StopRecvFrame(config_.vencChnId);
-        RK_MPI_VENC_DestroyChn(config_.vencChnId);
-    }
-    LOG_INFO("JpegCapturer destroyed, {} photos taken", completed_count_.load());
-}
-
-std::string JpegCapturer::GenerateFilename() {
-    return GenerateTimestampFilename(config_.filenamePrefix);
-}
-
-bool JpegCapturer::TakeSnapshot(const std::string& filename) {
-    if (!valid_) {
-        LOG_ERROR("JpegCapturer not valid");
-        return false;
-    }
-    
-    if (pending_count_ > 0) {
-        LOG_WARN("Previous snapshot still pending");
-        return false;
-    }
-    
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pending_filename_ = filename.empty() ? GenerateFilename() : filename;
-    }
-    
-    // 触发 VENC 接收一帧
-    VENC_RECV_PIC_PARAM_S recv_param;
-    memset(&recv_param, 0, sizeof(recv_param));
-    recv_param.s32RecvPicNum = 1;
-    
-    RK_S32 ret = RK_MPI_VENC_StartRecvFrame(config_.vencChnId, &recv_param);
-    if (ret != RK_SUCCESS) {
-        LOG_ERROR("Failed to start VENC recv frame: 0x{:x}", ret);
-        return false;
-    }
-    
-    pending_count_++;
-    LOG_INFO("Snapshot triggered: {}", pending_filename_);
-    return true;
-}
-
-bool JpegCapturer::SaveJpegData(const void* data, size_t len, const std::string& filepath) {
-    FILE* fp = fopen(filepath.c_str(), "wb");
-    if (!fp) {
-        LOG_ERROR("Failed to open file for writing: {}", filepath);
-        return false;
-    }
-    
-    size_t written = fwrite(data, 1, len, fp);
-    fclose(fp);
-    
-    if (written != len) {
-        LOG_ERROR("Failed to write all data to file: {}", filepath);
-        return false;
-    }
-    
-    return true;
-}
-
-void JpegCapturer::ProcessLoop(std::atomic<bool>& running) {
-    if (!valid_) {
-        LOG_ERROR("JpegCapturer not valid, cannot start process loop");
-        return;
-    }
-    
-    LOG_DEBUG("JpegCapturer process loop started");
-    
-    // TDE 初始化
-    RK_S32 ret = RK_TDE_Open();
-    if (ret != RK_SUCCESS) {
-        LOG_ERROR("Failed to open TDE: 0x{:x}", ret);
-        return;
-    }
-    
-    // 分配目标缓冲区
-    PIC_BUF_ATTR_S dst_pic_buf_attr;
-    MB_PIC_CAL_S dst_mb_pic_cal_result;
-    MB_BLK dst_blk = nullptr;
-    
-    dst_pic_buf_attr.u32Width = config_.width;
-    dst_pic_buf_attr.u32Height = config_.height;
-    dst_pic_buf_attr.enPixelFormat = RK_FMT_YUV420SP;
-    dst_pic_buf_attr.enCompMode = COMPRESS_MODE_NONE;
-    
-    ret = RK_MPI_CAL_TDE_GetPicBufferSize(&dst_pic_buf_attr, &dst_mb_pic_cal_result);
-    if (ret != RK_SUCCESS) {
-        LOG_ERROR("Failed to get TDE buffer size: 0x{:x}", ret);
-        RK_TDE_Close();
-        return;
-    }
-    
-    ret = RK_MPI_SYS_MmzAlloc(&dst_blk, nullptr, nullptr, dst_mb_pic_cal_result.u32MBSize);
-    if (ret != RK_SUCCESS) {
-        LOG_ERROR("Failed to allocate TDE buffer: 0x{:x}", ret);
-        RK_TDE_Close();
-        return;
-    }
-    
-    // VENC 输出帧结构
-    VENC_STREAM_S frame;
-    memset(&frame, 0, sizeof(frame));
-    frame.pstPack = new VENC_PACK_S();
-    memset(frame.pstPack, 0, sizeof(VENC_PACK_S));
-    
-    while (running) {
-        if (pending_count_ <= 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
-        }
-        
-        // 从 VI 获取帧
-        VIDEO_FRAME_INFO_S vi_frame;
-        ret = RK_MPI_VI_GetChnFrame(config_.viDevId, config_.viChnId, &vi_frame, 1000);
-        if (ret != RK_SUCCESS) {
-            LOG_WARN("Failed to get VI frame: 0x{:x}", ret);
-            continue;
-        }
-        
-        // TDE 缩放处理
-        TDE_HANDLE handle = RK_TDE_BeginJob();
-        if (handle == RK_ERR_TDE_INVALID_HANDLE) {
-            LOG_ERROR("Failed to begin TDE job");
-            RK_MPI_VI_ReleaseChnFrame(config_.viDevId, config_.viChnId, &vi_frame);
-            continue;
-        }
-        
-        TDE_SURFACE_S src_surface, dst_surface;
-        TDE_RECT_S src_rect, dst_rect;
-        
-        src_surface.pMbBlk = vi_frame.stVFrame.pMbBlk;
-        src_surface.u32Width = vi_frame.stVFrame.u32Width;
-        src_surface.u32Height = vi_frame.stVFrame.u32Height;
-        src_surface.enColorFmt = RK_FMT_YUV420SP;
-        src_surface.enComprocessMode = COMPRESS_MODE_NONE;
-        
-        src_rect.s32Xpos = 0;
-        src_rect.s32Ypos = 0;
-        src_rect.u32Width = vi_frame.stVFrame.u32Width;
-        src_rect.u32Height = vi_frame.stVFrame.u32Height;
-        
-        dst_surface.pMbBlk = dst_blk;
-        dst_surface.u32Width = config_.width;
-        dst_surface.u32Height = config_.height;
-        dst_surface.enColorFmt = RK_FMT_YUV420SP;
-        dst_surface.enComprocessMode = COMPRESS_MODE_NONE;
-        
-        dst_rect.s32Xpos = 0;
-        dst_rect.s32Ypos = 0;
-        dst_rect.u32Width = config_.width;
-        dst_rect.u32Height = config_.height;
-        
-        ret = RK_TDE_QuickResize(handle, &src_surface, &src_rect, &dst_surface, &dst_rect);
-        if (ret != RK_SUCCESS) {
-            LOG_ERROR("TDE resize failed: 0x{:x}", ret);
-            RK_TDE_CancelJob(handle);
-            RK_MPI_VI_ReleaseChnFrame(config_.viDevId, config_.viChnId, &vi_frame);
-            continue;
-        }
-        
-        ret = RK_TDE_EndJob(handle, RK_FALSE, RK_TRUE, 10);
-        if (ret != RK_SUCCESS) {
-            LOG_ERROR("TDE end job failed: 0x{:x}", ret);
-            RK_TDE_CancelJob(handle);
-            RK_MPI_VI_ReleaseChnFrame(config_.viDevId, config_.viChnId, &vi_frame);
-            continue;
-        }
-        
-        RK_TDE_WaitForDone(handle);
-        
-        // 更新 VENC 通道属性
-        VENC_CHN_ATTR_S chn_attr;
-        ret = RK_MPI_VENC_GetChnAttr(config_.vencChnId, &chn_attr);
-        if (ret == RK_SUCCESS) {
-            chn_attr.stVencAttr.u32PicWidth = config_.width;
-            chn_attr.stVencAttr.u32PicHeight = config_.height;
-            RK_MPI_VENC_SetChnAttr(config_.vencChnId, &chn_attr);
-        }
-        
-        // 发送帧到 JPEG 编码器
-        VIDEO_FRAME_INFO_S dst_frame;
-        memset(&dst_frame, 0, sizeof(dst_frame));
-        dst_frame.stVFrame.pMbBlk = dst_blk;
-        dst_frame.stVFrame.u32Width = config_.width;
-        dst_frame.stVFrame.u32Height = config_.height;
-        dst_frame.stVFrame.u32VirWidth = config_.width;
-        dst_frame.stVFrame.u32VirHeight = config_.height;
-        dst_frame.stVFrame.enPixelFormat = RK_FMT_YUV420SP;
-        dst_frame.stVFrame.enCompressMode = COMPRESS_MODE_NONE;
-        
-        ret = RK_MPI_VENC_SendFrame(config_.vencChnId, &dst_frame, 1000);
-        if (ret != RK_SUCCESS) {
-            LOG_ERROR("VENC send frame failed: 0x{:x}", ret);
-            RK_MPI_VI_ReleaseChnFrame(config_.viDevId, config_.viChnId, &vi_frame);
-            continue;
-        }
-        
-        RK_MPI_VI_ReleaseChnFrame(config_.viDevId, config_.viChnId, &vi_frame);
-        
-        // 获取 JPEG 编码输出
-        ret = RK_MPI_VENC_GetStream(config_.vencChnId, &frame, 1000);
-        if (ret == RK_SUCCESS) {
-            void* jpeg_data = RK_MPI_MB_Handle2VirAddr(frame.pstPack->pMbBlk);
-            if (jpeg_data && frame.pstPack->u32Len > 0) {
-                std::string filename;
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    filename = pending_filename_;
-                }
-                std::string filepath = config_.outputDir + "/" + filename + ".jpeg";
-                
-                if (SaveJpegData(jpeg_data, frame.pstPack->u32Len, filepath)) {
-                    last_photo_path_ = filepath;
-                    completed_count_++;
-                    LOG_INFO("Saved JPEG: {}, {} bytes", filepath, frame.pstPack->u32Len);
-                }
-            }
-            
-            RK_MPI_VENC_ReleaseStream(config_.vencChnId, &frame);
-        } else {
-            LOG_ERROR("Failed to get JPEG stream: 0x{:x}", ret);
-        }
-        
-        pending_count_--;
-    }
-    
-    // 清理
-    delete frame.pstPack;
-    RK_MPI_SYS_Free(dst_blk);
-    RK_TDE_Close();
-    
-    LOG_DEBUG("JpegCapturer process loop exited");
-}
-

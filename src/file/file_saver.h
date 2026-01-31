@@ -1,6 +1,6 @@
 /**
  * @file file_saver.h
- * @brief 文件保存器 - MP4 录制和 JPEG 拍照的核心类
+ * @brief 文件保存器 - MP4 录制
  *
  * 使用纯 RAII 设计：
  * - 构造函数完成初始化
@@ -41,21 +41,6 @@ struct Mp4RecordConfig {
     int codecType = 8;                    ///< 编码类型：8=H.264, 12=H.265
     int maxDurationSec = 0;               ///< 最大录制时长（秒），0表示无限制
     int64_t maxFileSizeBytes = 0;         ///< 最大文件大小（字节），0表示无限制
-};
-
-/**
- * @brief JPEG 拍照配置
- */
-struct JpegCaptureConfig {
-    std::string outputDir = "/tmp";       ///< 输出目录
-    std::string filenamePrefix = "photo"; ///< 文件名前缀
-    int width = 1920;                     ///< 图片宽度
-    int height = 1080;                    ///< 图片高度
-    int quality = 70;                     ///< JPEG 质量（1-100）
-    int rotation = 0;                     ///< 旋转角度（0, 90, 180, 270）
-    int viDevId = 0;                      ///< VI 设备 ID
-    int viChnId = 0;                      ///< VI 通道 ID
-    int vencChnId = 1;                    ///< JPEG VENC 通道 ID（避免与 H.264 冲突）
 };
 
 /**
@@ -139,90 +124,17 @@ private:
     bool CreateOutputFile(const std::string& filepath);
     void CloseOutputFile();
     std::string GenerateFilename();
+    bool SetExtradataFromStream(const uint8_t* data, size_t size);
 
     Mp4RecordConfig config_;
     std::atomic<RecordState> state_{RecordState::kIdle};
     std::string current_file_path_;
     Stats stats_;
     uint64_t first_pts_ = 0;
+    bool extradata_set_ = false;  // 标记是否已设置 SPS/PPS
     std::mutex mutex_;
 
     // FFmpeg 上下文（使用 void* 避免头文件依赖）
     void* format_ctx_ = nullptr;
     void* codec_ctx_ = nullptr;
 };
-
-// ============================================================================
-// JPEG 拍照器类
-// ============================================================================
-
-/**
- * @brief JPEG 拍照器
- * 
- * 使用 RKMPI JPEG 编码器实现视频快照
- * RAII 设计：构造时创建 VENC 通道，析构时销毁
- */
-class JpegCapturer {
-public:
-    /**
-     * @brief 构造函数 - 创建 JPEG VENC 通道
-     * @param config 拍照配置
-     */
-    explicit JpegCapturer(const JpegCaptureConfig& config = JpegCaptureConfig{});
-    
-    ~JpegCapturer();
-
-    // 禁用拷贝
-    JpegCapturer(const JpegCapturer&) = delete;
-    JpegCapturer& operator=(const JpegCapturer&) = delete;
-
-    /**
-     * @brief 触发拍照
-     * @param filename 可选的文件名（不含路径和扩展名），为空则使用时间戳命名
-     * @return true 成功触发，false 失败
-     */
-    bool TakeSnapshot(const std::string& filename = "");
-
-    /**
-     * @brief 检查是否有待处理的拍照请求
-     */
-    bool IsPending() const { return pending_count_ > 0; }
-
-    /**
-     * @brief 获取已完成的拍照数量
-     */
-    uint64_t GetCompletedCount() const { return completed_count_; }
-
-    /**
-     * @brief 获取最后一张照片的路径
-     */
-    std::string GetLastPhotoPath() const { return last_photo_path_; }
-
-    /**
-     * @brief 检查是否初始化成功
-     */
-    bool IsValid() const { return valid_; }
-
-    /**
-     * @brief 处理循环（需要在独立线程中运行）
-     * 
-     * 从 VI 获取帧，通过 TDE 缩放，发送到 JPEG VENC 编码
-     * @param running 运行标志，设为 false 时退出循环
-     */
-    void ProcessLoop(std::atomic<bool>& running);
-
-private:
-    std::string GenerateFilename();
-    bool SaveJpegData(const void* data, size_t len, const std::string& filepath);
-
-    JpegCaptureConfig config_;
-    
-    std::atomic<int> pending_count_{0};
-    std::atomic<uint64_t> completed_count_{0};
-    std::string last_photo_path_;
-    std::string pending_filename_;
-    std::mutex mutex_;
-    
-    bool valid_ = false;
-};
-

@@ -8,6 +8,7 @@
 #include "common/logger.h"
 #include "rkvideo/rkvideo.h"
 #include "thread_stream.h"
+#include "file/thread_file.h"
 
 // 全局退出标志
 static std::atomic<bool> g_running{true};
@@ -43,12 +44,9 @@ int main() {
     stream_config.rtsp_config.port = 554;
     stream_config.rtsp_config.path = "/live/0";
     
-    // 文件保存配置（按需启用）
-    stream_config.enable_file = false;  // 设为 true 启用
-    // stream_config.mp4_config.outputDir = "/sdcard/videos";
-    // stream_config.jpeg_config.outputDir = "/sdcard/photos";
-    // stream_config.jpeg_config.viDevId = 0;
-    // stream_config.jpeg_config.viChnId = 0;
+    // 文件保存配置 - 启用录制功能
+    stream_config.enable_file = true;
+    stream_config.mp4_config.outputDir = "/root/record";
 
     // ========================================================================
     // 创建流管理器（需要在 rkvideo_init 之前，以便注册消费者）
@@ -77,21 +75,44 @@ int main() {
     LOG_INFO("Press Ctrl+C to stop...");
 
     // ========================================================================
-    // 主循环 - 这里可以添加控制逻辑
-    // 例如：WebSocket 服务、HTTP API、定时任务等
+    // 测试录制功能：10秒后录制20秒
     // ========================================================================
+    auto* file_thread = GetStreamManager()->GetFileThread();
+    
+    if (file_thread) {
+        // 等待 10 秒后开始录制
+        LOG_INFO("Will start recording in 10 seconds...");
+        for (int i = 10; i > 0 && g_running; --i) {
+            LOG_INFO("Recording starts in {} seconds...", i);
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        
+        if (g_running) {
+            // 开始录制
+            LOG_INFO("Starting MP4 recording...");
+            file_thread->StartRecording();
+            
+            // 录制 20 秒
+            for (int i = 20; i > 0 && g_running; --i) {
+                LOG_INFO("Recording... {} seconds remaining", i);
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+            
+            // 停止录制
+            LOG_INFO("Stopping recording...");
+            file_thread->StopRecording();
+            LOG_INFO("Recording stopped");
+        }
+    } else {
+        LOG_WARN("FileThread not available, recording test skipped");
+    }
+
+    // ========================================================================
+    // 主循环 - 继续运行 RTSP 服务
+    // ========================================================================
+    LOG_INFO("Recording test completed. RTSP server still running...");
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        
-        // TODO: 这里可以添加控制逻辑
-        // 例如检查 WebSocket 命令、定时拍照、自动录制等
-        //
-        // auto* file_thread = GetStreamManager()->GetFileThread();
-        // if (file_thread) {
-        //     file_thread->StartRecording();   // 开始录制
-        //     file_thread->TakeSnapshot();     // 拍照
-        //     file_thread->StopRecording();    // 停止录制
-        // }
     }
 
     // ========================================================================
