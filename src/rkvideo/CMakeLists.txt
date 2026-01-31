@@ -20,6 +20,19 @@ set(RKVIDEO_HEADERS
 set(LUCKFOX_MPI_INCLUDE_DIR ${LUCKFOX_MPI_PATH}/include CACHE PATH "Luckfox MPI include directory")
 set(LUCKFOX_MPI_LIB_DIR ${LUCKFOX_MPI_PATH}/lib/uclibc CACHE PATH "Luckfox MPI library directory")
 
+# 导出 MPI 库列表供其他模块使用
+set(LUCKFOX_MPI_LIBS
+    sample_comm
+    rockit
+    rockchip_mpp
+    rkaiq
+    rga
+    pthread
+    dl
+    CACHE INTERNAL "Luckfox MPI libraries"
+)
+
+# 本地使用的库列表
 set(MPI_LIBS 
     sample_comm
     rockit

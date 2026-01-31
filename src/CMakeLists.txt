@@ -17,6 +17,7 @@ add_subdirectory(webrtc)
 
 set(AIPC_SOURCES
     main.cpp
+    thread_stream.cpp
 )
 
 # 创建可执行文件
@@ -29,11 +30,12 @@ target_include_directories(aipc
 )
 
 # 链接静态库和第三方库
+# 注意：链接顺序很重要，被依赖的库放后面
 target_link_libraries(aipc
     PRIVATE
         common
-        rkvideo
-        # rtsp_lib      # 启用后取消注释
+        rtsp_lib      # rtsp_lib 依赖 sample_comm
+        rkvideo       # rkvideo 也依赖 sample_comm，放后面确保符号解析
         # webrtc_lib    # 启用后取消注释
         spdlog::spdlog
         httplib

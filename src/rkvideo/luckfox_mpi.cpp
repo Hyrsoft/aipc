@@ -97,7 +97,9 @@ int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType) {
 	if (enType == RK_VIDEO_ID_AVC) {
 		stAttr.stRcAttr.enRcMode = VENC_RC_MODE_H264CBR;
 		stAttr.stRcAttr.stH264Cbr.u32BitRate = 10 * 1024;
-		stAttr.stRcAttr.stH264Cbr.u32Gop = 1;
+
+		// stAttr.stRcAttr.stH264Cbr.u32Gop = 1;
+		stAttr.stRcAttr.stH264Cbr.u32Gop = 60;  // GOP=60，每2秒一个I帧（30fps）
 	} else if (enType == RK_VIDEO_ID_HEVC) {
 		stAttr.stRcAttr.enRcMode = VENC_RC_MODE_H265CBR;
 		stAttr.stRcAttr.stH265Cbr.u32BitRate = 10 * 1024;
@@ -108,7 +110,8 @@ int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType) {
 	}
 
 	stAttr.stVencAttr.enType = enType;
-	stAttr.stVencAttr.enPixelFormat = RK_FMT_RGB888;
+	// stAttr.stVencAttr.enPixelFormat = RK_FMT_RGB888
+	stAttr.stVencAttr.enPixelFormat = RK_FMT_YUV420SP;  // 与 VI 输出格式匹配
 	if (enType == RK_VIDEO_ID_AVC)
 		stAttr.stVencAttr.u32Profile = H264E_PROFILE_HIGH;
 	stAttr.stVencAttr.u32PicWidth = width;

@@ -128,12 +128,20 @@ private:
     void FetchLoop() {
         LOG_DEBUG("Fetch loop started for VENC channel {}", venc_chn_id_);
         
+        uint64_t frameCount = 0;
         while (running_) {
             // 从 VENC 获取编码流（阻塞）
             auto stream = acquire_encoded_stream(venc_chn_id_, 1000);  // 1秒超时
             
             if (!stream) {
+                LOG_WARN("Failed to get stream from VENC channel {}", venc_chn_id_);
                 continue;  // 超时或错误，继续尝试
+            }
+            
+            frameCount++;
+            if (frameCount % 30 == 1) {  // 每30帧打印一次
+                LOG_DEBUG("Got frame #{}, size={} bytes", 
+                         frameCount, stream->pstPack ? stream->pstPack->u32Len : 0);
             }
             
             // 分发给所有消费者（零拷贝，只是增加引用计数）
@@ -142,7 +150,7 @@ private:
             }
         }
         
-        LOG_DEBUG("Fetch loop exited");
+        LOG_DEBUG("Fetch loop exited, total frames: {}", frameCount);
     }
     
     /**

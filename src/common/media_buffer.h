@@ -21,6 +21,8 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
+#include <cstring>
+#include <cstdio>
 
 // RKMPI 头文件
 #include "rk_mpi_sys.h"
@@ -93,10 +95,16 @@ inline VideoFramePtr acquire_video_frame(RK_S32 dev_id, RK_S32 chn_id, RK_S32 ti
  */
 inline EncodedStreamPtr acquire_encoded_stream(RK_S32 chn_id, RK_S32 timeout_ms = -1) {
     auto stream = new VENC_STREAM_S();
+    memset(stream, 0, sizeof(VENC_STREAM_S));
     stream->pstPack = new VENC_PACK_S();
+    memset(stream->pstPack, 0, sizeof(VENC_PACK_S));
     
     RK_S32 ret = RK_MPI_VENC_GetStream(chn_id, stream, timeout_ms);
     if (ret != RK_SUCCESS) {
+        // 调试：打印错误码（仅在非超时时打印）
+        if (ret != RK_ERR_VENC_BUF_EMPTY) {
+            printf("[media_buffer] VENC GetStream failed: 0x%x\n", ret);
+        }
         delete stream->pstPack;
         delete stream;
         return nullptr;
