@@ -20,8 +20,8 @@
 // ============================================================================
 
 struct VideoConfig {
-    int width = 720;
-    int height = 480;
+    int width = 1920;
+    int height = 1080;
     int frameRate = 30;
     int bitRate = 10 * 1024;  // kbps
 };

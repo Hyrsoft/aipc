@@ -63,8 +63,14 @@ add_subdirectory(${SPDLOG_PATH} ${CMAKE_BINARY_DIR}/spdlog)
 add_library(httplib INTERFACE)
 target_include_directories(httplib INTERFACE ${CPP_HTTPLIB_PATH})
 
-# libdatachannel (如需要可启用)
-# add_subdirectory(${LIBDATACHANNEL_PATH} ${CMAKE_BINARY_DIR}/libdatachannel)
+# libdatachannel (WebRTC 支持)
+# 配置选项
+set(NO_WEBSOCKET OFF CACHE BOOL "Disable WebSocket support")
+set(NO_MEDIA ON CACHE BOOL "Disable media support")  # 我们只需要基础 WebRTC，媒体由 RKMPI 提供
+set(NO_EXAMPLES ON CACHE BOOL "Disable examples")
+set(NO_TESTS ON CACHE BOOL "Disable tests")
+set(USE_NICE OFF CACHE BOOL "Use libnice for ICE")
+add_subdirectory(${LIBDATACHANNEL_PATH} ${CMAKE_BINARY_DIR}/libdatachannel)
 
 # ========================================
 # 添加源代码子目录
@@ -74,26 +80,75 @@ add_subdirectory(src)
 # ========================================
 # 安装配置
 # ========================================
+# 设置安装前缀（默认安装到 build/install）
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "Install path prefix" FORCE)
+endif()
+
+# 安装目录设置
+set(AIPC_INSTALL_BIN_DIR "bin")
+set(AIPC_INSTALL_LIB_DIR "lib")
+set(AIPC_INSTALL_ASSETS_DIR "assets")
+set(AIPC_INSTALL_WWW_DIR "www")
+set(AIPC_INSTALL_MODEL_DIR "model")
+
 # 安装可执行文件
 install(TARGETS aipc
-    RUNTIME DESTINATION bin
+    RUNTIME DESTINATION ${AIPC_INSTALL_BIN_DIR}
 )
 
-# 安装资源文件
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/
-    DESTINATION share/${PROJECT_NAME}
+# 安装 libdatachannel 动态库（如果是动态链接）
+if(TARGET datachannel)
+    install(TARGETS datachannel
+        LIBRARY DESTINATION ${AIPC_INSTALL_LIB_DIR}
+        RUNTIME DESTINATION ${AIPC_INSTALL_BIN_DIR}
+    )
+endif()
+
+# 安装启动/停止脚本
+install(PROGRAMS 
+    ${CMAKE_SOURCE_DIR}/assets/start_app.sh
+    ${CMAKE_SOURCE_DIR}/assets/stop_app.sh
+    DESTINATION ${AIPC_INSTALL_BIN_DIR}
+)
+
+# 安装 AI 模型文件
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/model/
+    DESTINATION ${AIPC_INSTALL_MODEL_DIR}
     FILES_MATCHING 
-    PATTERN "*.sh"
     PATTERN "*.rknn"
     PATTERN "*.txt"
-    PATTERN "*.png"
-    PATTERN "*.jpg"
 )
 
-# 安装 web 资源
+# 安装 Web 资源文件
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/www/
-    DESTINATION share/${PROJECT_NAME}/www
+    DESTINATION ${AIPC_INSTALL_WWW_DIR}
+    FILES_MATCHING
+    PATTERN "*.html"
+    PATTERN "*.js"
+    PATTERN "*.css"
+    PATTERN "*.ico"
+    PATTERN "*.png"
+    PATTERN "*.jpg"
+    PATTERN "*.svg"
 )
+
+# 安装其他资源文件（图片等）
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/images/
+    DESTINATION ${AIPC_INSTALL_ASSETS_DIR}/images
+    FILES_MATCHING
+    PATTERN "*.png"
+    PATTERN "*.jpg"
+    PATTERN "*.bmp"
+)
+
+# 生成版本信息文件
+file(WRITE ${CMAKE_BINARY_DIR}/version.txt 
+    "AIPC Version: ${PROJECT_VERSION}\n"
+    "Build Type: ${CMAKE_BUILD_TYPE}\n"
+    "Build Date: ${CMAKE_CURRENT_SOURCE_DIR}\n"
+)
+install(FILES ${CMAKE_BINARY_DIR}/version.txt DESTINATION ${AIPC_INSTALL_BIN_DIR})
 
 # ========================================
 # 输出配置信息

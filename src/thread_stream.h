@@ -21,10 +21,12 @@
 #include <string>
 #include "rtsp/rk_rtsp.h"
 #include "file/file_saver.h"
+#include "webrtc/thread_webrtc.h"
 
 // 前向声明，避免头文件依赖
 class RtspThread;
 class FileThread;
+class WebRTCThread;
 
 // ============================================================================
 // 流输出配置
@@ -36,10 +38,11 @@ class FileThread;
 struct StreamConfig {
     bool enable_rtsp = true;           ///< 是否启用 RTSP 推流
     bool enable_file = false;          ///< 是否启用文件保存
-    bool enable_webrtc = false;        ///< 是否启用 WebRTC（待实现）
+    bool enable_webrtc = false;        ///< 是否启用 WebRTC
     
     RtspConfig rtsp_config;            ///< RTSP 配置
     Mp4RecordConfig mp4_config;        ///< MP4 录制配置
+    WebRTCThreadConfig webrtc_config;  ///< WebRTC 配置
 };
 
 // ============================================================================
@@ -87,6 +90,7 @@ public:
 
     RtspThread* GetRtspThread() const { return rtsp_thread_.get(); }
     FileThread* GetFileThread() const { return file_thread_.get(); }
+    WebRTCThread* GetWebRTCThread() const { return webrtc_thread_.get(); }
 
 private:
     StreamConfig config_;
@@ -94,6 +98,7 @@ private:
 
     std::unique_ptr<RtspThread> rtsp_thread_;
     std::unique_ptr<FileThread> file_thread_;
+    std::unique_ptr<WebRTCThread> webrtc_thread_;
 };
 
 // ============================================================================

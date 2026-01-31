@@ -13,6 +13,7 @@
 #include "rkvideo/rkvideo.h"
 #include "rtsp/thread_rtsp.h"
 #include "file/thread_file.h"
+#include "webrtc/thread_webrtc.h"
 
 #include <memory>
 
@@ -61,9 +62,23 @@ StreamManager::StreamManager(const StreamConfig& config)
         LOG_INFO("File consumer registered");
     }
     
-    // TODO: WebRTC 线程
+    // 创建 WebRTC 线程（如果启用）
     if (config_.enable_webrtc) {
-        LOG_WARN("WebRTC not implemented yet");
+        webrtc_thread_ = std::make_unique<WebRTCThread>(config_.webrtc_config);
+        
+        if (webrtc_thread_->IsValid()) {
+            // 注册 WebRTC 消费者到流分发器
+            rkvideo_register_stream_consumer(
+                "webrtc",
+                &WebRTCThread::StreamConsumer,
+                webrtc_thread_.get(),
+                3  // 队列大小
+            );
+            LOG_INFO("WebRTC consumer registered");
+        } else {
+            LOG_ERROR("Failed to create WebRTC thread");
+            webrtc_thread_.reset();
+        }
     }
     
     LOG_INFO("StreamManager created");
@@ -87,6 +102,11 @@ void StreamManager::Start() {
         file_thread_->Start();
     }
     
+    // 启动 WebRTC 线程（如果存在）
+    if (webrtc_thread_) {
+        webrtc_thread_->Start();
+    }
+    
     // 启动视频流分发器
     rkvideo_start_streaming();
     
@@ -107,6 +127,11 @@ void StreamManager::Stop() {
     // 停止文件线程
     if (file_thread_) {
         file_thread_->Stop();
+    }
+    
+    // 停止 WebRTC 线程
+    if (webrtc_thread_) {
+        webrtc_thread_->Stop();
     }
     
     running_ = false;

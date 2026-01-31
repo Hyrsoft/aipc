@@ -37,8 +37,8 @@ target_link_libraries(aipc
         common
         rtsp_lib      # rtsp_lib 依赖 sample_comm
         file_lib      # file_lib 依赖 FFmpeg 和 rkvideo
+        webrtc_lib    # WebRTC 模块
         rkvideo       # rkvideo 也依赖 sample_comm，放后面确保符号解析
-        # webrtc_lib    # 启用后取消注释
         spdlog::spdlog
         httplib
 )
