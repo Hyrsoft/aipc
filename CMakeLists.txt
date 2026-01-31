@@ -53,6 +53,19 @@ set(CPP_HTTPLIB_PATH ${CMAKE_SOURCE_DIR}/thirdparty/cpp-httplib CACHE PATH "cpp-
 set(LIBDATACHANNEL_PATH ${CMAKE_SOURCE_DIR}/thirdparty/libdatachannel CACHE PATH "libdatachannel library path")
 
 # ========================================
+# OpenSSL 配置（用于交叉编译）
+# ========================================
+# Buildroot 编译输出中包含 OpenSSL
+set(BUILDROOT_SYSROOT "/home/hao/projects/luckfox-pico/sysdrv/source/buildroot/buildroot-2023.02.6/output/host/arm-buildroot-linux-uclibcgnueabihf/sysroot")
+set(OPENSSL_ROOT_DIR "${BUILDROOT_SYSROOT}/usr" CACHE PATH "OpenSSL root directory" FORCE)
+set(OPENSSL_INCLUDE_DIR "${BUILDROOT_SYSROOT}/usr/include" CACHE PATH "OpenSSL include directory" FORCE)
+set(OPENSSL_CRYPTO_LIBRARY "${BUILDROOT_SYSROOT}/usr/lib/libcrypto.so" CACHE FILEPATH "OpenSSL crypto library" FORCE)
+set(OPENSSL_SSL_LIBRARY "${BUILDROOT_SYSROOT}/usr/lib/libssl.so" CACHE FILEPATH "OpenSSL SSL library" FORCE)
+# 创建 OpenSSL 导入目标，避免 find_package 搜索失败
+set(OPENSSL_FOUND TRUE CACHE BOOL "OpenSSL found" FORCE)
+set(OPENSSL_LIBRARIES "${OPENSSL_SSL_LIBRARY};${OPENSSL_CRYPTO_LIBRARY}" CACHE STRING "OpenSSL libraries" FORCE)
+
+# ========================================
 # 添加第三方库
 # ========================================
 
@@ -65,11 +78,11 @@ target_include_directories(httplib INTERFACE ${CPP_HTTPLIB_PATH})
 
 # libdatachannel (WebRTC 支持)
 # 配置选项
-set(NO_WEBSOCKET OFF CACHE BOOL "Disable WebSocket support")
-set(NO_MEDIA ON CACHE BOOL "Disable media support")  # 我们只需要基础 WebRTC，媒体由 RKMPI 提供
-set(NO_EXAMPLES ON CACHE BOOL "Disable examples")
-set(NO_TESTS ON CACHE BOOL "Disable tests")
-set(USE_NICE OFF CACHE BOOL "Use libnice for ICE")
+set(NO_WEBSOCKET OFF CACHE BOOL "Disable WebSocket support" FORCE)
+set(NO_MEDIA OFF CACHE BOOL "Disable media support" FORCE)  # 需要启用媒体支持以使用 H264RtpPacketizer
+set(NO_EXAMPLES ON CACHE BOOL "Disable examples" FORCE)
+set(NO_TESTS ON CACHE BOOL "Disable tests" FORCE)
+set(USE_NICE OFF CACHE BOOL "Use libnice for ICE" FORCE)
 add_subdirectory(${LIBDATACHANNEL_PATH} ${CMAKE_BINARY_DIR}/libdatachannel)
 
 # ========================================

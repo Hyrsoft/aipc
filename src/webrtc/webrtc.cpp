@@ -10,6 +10,9 @@
 #include "common/logger.h"
 
 #include <rtc/rtc.hpp>
+#include <rtc/h264rtppacketizer.hpp>
+#include <rtc/rtcpsrreporter.hpp>
+#include <rtc/rtcpreceivingsession.hpp>
 
 #undef LOG_TAG
 #define LOG_TAG "webrtc"

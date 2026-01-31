@@ -22,6 +22,7 @@ target_include_directories(webrtc_lib
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src        # 项目 src 根目录
         ${LIBDATACHANNEL_PATH}/include # libdatachannel 头文件
+        ${LIBDATACHANNEL_PATH}/deps/json/single_include  # nlohmann/json
         ${LUCKFOX_MPI_PATH}/include    # RKMPI 头文件
 )
 
