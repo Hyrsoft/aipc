@@ -14,8 +14,15 @@
 // 模块内部状态
 // ============================================================================
 
-static MPP_CHN_S stSrcChn, stvencChn;
+// 绑定关系：VI -> VPSS -> VENC
+static MPP_CHN_S stViChn;     // VI 通道
+static MPP_CHN_S stVpssChn0;  // VPSS Chn0（绑定到 VENC）
+static MPP_CHN_S stVencChn;   // VENC 通道
+
 static VideoConfig g_videoConfig;
+
+// 是否启用 AI 推理通道（VPSS Chn1）
+static bool g_enableAiChannel = true;
 
 // 分发器的实例
 static std::unique_ptr<StreamDispatcher> g_dispatcher;
@@ -61,37 +68,73 @@ int rkvideo_init() {
     }
     LOG_INFO("RK MPI system initialized successfully");
 
-    // vi init
+    // ==================== VI 初始化（单通道）====================
     LOG_DEBUG("Initializing VI device...");
     vi_dev_init();
 
-    // 创建两个vi通道，通道0连接venc进行编码，通道1用于NPU处理
-    LOG_DEBUG("Initializing VI channels 0 and 1...");
+    // 只创建一个 VI 通道，绑定到 VPSS
+    LOG_DEBUG("Initializing VI channel 0 ({}x{})...", width, height);
     vi_chn_init(0, width, height);
-    vi_chn_init(1, width, height);
-    LOG_INFO("VI initialized with 2 channels");
+    LOG_INFO("VI initialized with single channel");
     
-    // venc init
+    // ==================== VPSS 初始化（分流）====================
+    // VPSS Chn0: 全分辨率 -> VENC（编码流）
+    // VPSS Chn1: 全分辨率 -> User GetFrame（AI 推理，可选）
+    LOG_DEBUG("Initializing VPSS Group 0...");
+    if (g_enableAiChannel) {
+        // 启用 AI 通道：Chn0 给 VENC，Chn1 给 AI
+        s32Ret = vpss_init(0, width, height, width, height, width, height);
+    } else {
+        // 不启用 AI 通道：只有 Chn0 给 VENC
+        s32Ret = vpss_init(0, width, height, width, height, 0, 0);
+    }
+    if (s32Ret != 0) {
+        LOG_ERROR("VPSS init failed!");
+        return -1;
+    }
+    LOG_INFO("VPSS initialized with {} channels", g_enableAiChannel ? 2 : 1);
+
+    // ==================== VENC 初始化 ====================
     RK_CODEC_ID_E enCodecType = RK_VIDEO_ID_AVC;
     LOG_DEBUG("Initializing VENC with H.264 codec...");
     venc_init(0, width, height, enCodecType);
     LOG_INFO("VENC initialized successfully");
 
-    // bind vi to venc    
-    stSrcChn.enModId = RK_ID_VI;
-    stSrcChn.s32DevId = 0;
-    stSrcChn.s32ChnId = 0;
-        
-    stvencChn.enModId = RK_ID_VENC;
-    stvencChn.s32DevId = 0;
-    stvencChn.s32ChnId = 0;
-    LOG_DEBUG("Binding VI channel 0 to VENC channel 0...");
-    s32Ret = RK_MPI_SYS_Bind(&stSrcChn, &stvencChn);
+    // ==================== 绑定：VI -> VPSS -> VENC ====================
+    // 1. 绑定 VI Chn0 -> VPSS Group0 (输入)
+    stViChn.enModId = RK_ID_VI;
+    stViChn.s32DevId = 0;
+    stViChn.s32ChnId = 0;
+    
+    stVpssChn0.enModId = RK_ID_VPSS;
+    stVpssChn0.s32DevId = 0;  // VPSS Group ID
+    stVpssChn0.s32ChnId = 0;  // 这里用于绑定时指 Group，不是 Channel
+    
+    LOG_DEBUG("Binding VI Chn0 -> VPSS Group0...");
+    s32Ret = RK_MPI_SYS_Bind(&stViChn, &stVpssChn0);
     if (s32Ret != RK_SUCCESS) {
-        LOG_ERROR("Failed to bind VI to VENC, error code: {:#x}", s32Ret);
+        LOG_ERROR("Failed to bind VI to VPSS, error code: {:#x}", s32Ret);
         return -1;
     }
-    LOG_INFO("VI to VENC binding successful");
+    LOG_INFO("VI -> VPSS binding successful");
+    
+    // 2. 绑定 VPSS Chn0 -> VENC Chn0
+    stVpssChn0.enModId = RK_ID_VPSS;
+    stVpssChn0.s32DevId = 0;  // VPSS Group ID
+    stVpssChn0.s32ChnId = 0;  // VPSS Channel ID
+    
+    stVencChn.enModId = RK_ID_VENC;
+    stVencChn.s32DevId = 0;
+    stVencChn.s32ChnId = 0;
+    
+    LOG_DEBUG("Binding VPSS Chn0 -> VENC Chn0...");
+    s32Ret = RK_MPI_SYS_Bind(&stVpssChn0, &stVencChn);
+    if (s32Ret != RK_SUCCESS) {
+        LOG_ERROR("Failed to bind VPSS to VENC, error code: {:#x}", s32Ret);
+        return -1;
+    }
+    LOG_INFO("VPSS -> VENC binding successful");
+
     // 创建流分发器
     g_dispatcher = std::make_unique<StreamDispatcher>(0);
     
@@ -111,6 +154,8 @@ int rkvideo_init() {
     }
             
     LOG_INFO("rkvideo module initialized successfully");
+    LOG_INFO("Pipeline: VI -> VPSS (Chn0->VENC{}) -> H.264 Stream",
+             g_enableAiChannel ? ", Chn1->AI" : "");
     return 0;
 }
 
@@ -123,16 +168,26 @@ int rkvideo_deinit() {
         g_dispatcher.reset();
     }
 
-    LOG_DEBUG("Unbinding VI from VENC...");
-    RK_MPI_SYS_UnBind(&stSrcChn, &stvencChn);
-
-    LOG_DEBUG("Disabling VI channels...");
-    RK_MPI_VI_DisableChn(0, 0);
-    RK_MPI_VI_DisableChn(0, 1);
+    // 解除绑定（顺序与绑定相反）
+    LOG_DEBUG("Unbinding VPSS from VENC...");
+    RK_MPI_SYS_UnBind(&stVpssChn0, &stVencChn);
     
+    LOG_DEBUG("Unbinding VI from VPSS...");
+    stVpssChn0.s32ChnId = 0;  // 恢复为绑定时的值
+    RK_MPI_SYS_UnBind(&stViChn, &stVpssChn0);
+
+    // 销毁 VENC
     LOG_DEBUG("Stopping and destroying VENC...");
     RK_MPI_VENC_StopRecvFrame(0);
     RK_MPI_VENC_DestroyChn(0);
+    
+    // 销毁 VPSS
+    LOG_DEBUG("Destroying VPSS...");
+    vpss_deinit(0, g_enableAiChannel);
+
+    // 销毁 VI
+    LOG_DEBUG("Disabling VI channel 0...");
+    RK_MPI_VI_DisableChn(0, 0);
     
     LOG_DEBUG("Disabling VI device...");
     RK_MPI_VI_DisableDev(0);
@@ -192,8 +247,15 @@ void rkvideo_stop_streaming() {
 // ============================================================================
 
 VideoFramePtr rkvideo_get_vi_frame(int timeoutMs) {
-    // 从 VI 通道 1 获取原始帧（用于 AI 推理）
-    return acquire_video_frame(0, 1, timeoutMs);
+    // 从 VPSS Chn1 获取原始帧（用于 AI 推理）
+    // 新架构：VI -> VPSS Group0
+    //         ├── VPSS Chn0 -> VENC（编码流）
+    //         └── VPSS Chn1 -> User GetFrame（AI 推理）
+    if (!g_enableAiChannel) {
+        LOG_WARN("AI channel (VPSS Chn1) is not enabled!");
+        return nullptr;
+    }
+    return acquire_vpss_frame(0, VPSS_CHN1, timeoutMs);
 }
 
 const VideoConfig& rkvideo_get_config() {

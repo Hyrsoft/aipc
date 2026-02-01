@@ -27,6 +27,7 @@
 // RKMPI 头文件
 #include "rk_mpi_sys.h"
 #include "rk_mpi_vi.h"
+#include "rk_mpi_vpss.h"
 #include "rk_mpi_venc.h"
 #include "rk_mpi_mb.h"
 
@@ -78,6 +79,35 @@ inline VideoFramePtr acquire_video_frame(RK_S32 dev_id, RK_S32 chn_id, RK_S32 ti
     return VideoFramePtr(frame, [dev_id, chn_id](VIDEO_FRAME_INFO_S* p) {
         if (p) {
             RK_MPI_VI_ReleaseChnFrame(dev_id, chn_id, p);
+            delete p;
+        }
+    });
+}
+
+/**
+ * @brief 从 VPSS 通道获取原始帧并包装为智能指针
+ * 
+ * @param grp_id VPSS Group ID
+ * @param chn_id VPSS 通道 ID
+ * @param timeout_ms 超时时间（毫秒），-1 表示阻塞等待
+ * @return VideoFramePtr 成功返回帧指针，失败返回 nullptr
+ * 
+ * @note 返回的智能指针在所有引用释放后会自动调用 RK_MPI_VPSS_ReleaseChnFrame
+ */
+inline VideoFramePtr acquire_vpss_frame(RK_S32 grp_id, RK_S32 chn_id, RK_S32 timeout_ms = -1) {
+    auto frame = new VIDEO_FRAME_INFO_S();
+    
+    RK_S32 ret = RK_MPI_VPSS_GetChnFrame(grp_id, chn_id, frame, timeout_ms);
+    if (ret != RK_SUCCESS) {
+        delete frame;
+        return nullptr;
+    }
+    
+    // 创建带自定义删除器的 shared_ptr
+    // 当引用计数归零时，自动释放 MPI 资源
+    return VideoFramePtr(frame, [grp_id, chn_id](VIDEO_FRAME_INFO_S* p) {
+        if (p) {
+            RK_MPI_VPSS_ReleaseChnFrame(grp_id, chn_id, p);
             delete p;
         }
     });
