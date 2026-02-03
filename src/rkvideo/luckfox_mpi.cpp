@@ -77,8 +77,7 @@ int vi_chn_init(int channelId, int width, int height) {
 	vi_chn_attr.stSize.u32Height = height;
 	vi_chn_attr.enPixelFormat = RK_FMT_YUV420SP;
 	vi_chn_attr.enCompressMode = COMPRESS_MODE_NONE; // COMPRESS_AFBC_16x16;
-	// 关键：当 VI 绑定到 VENC 时，u32Depth 必须小于 u32BufCount
-	// 设为 0 表示完全绑定模式，VI 帧直接送到 VENC
+	// 当 VI 绑定到 VPSS 时，u32Depth 必须为 0（完全绑定模式）
 	vi_chn_attr.u32Depth = 0;
 	ret = RK_MPI_VI_SetChnAttr(0, channelId, &vi_chn_attr);
 	ret |= RK_MPI_VI_EnableChn(0, channelId);
@@ -88,6 +87,130 @@ int vi_chn_init(int channelId, int width, int height) {
 	}
 
 	return ret;
+}
+
+int vpss_init(int grpId, int inputWidth, int inputHeight,
+              int chn0Width, int chn0Height,
+              int chn1Width, int chn1Height) {
+	printf("%s: grp=%d, input=%dx%d, chn0=%dx%d, chn1=%dx%d\n", 
+	       __func__, grpId, inputWidth, inputHeight, 
+	       chn0Width, chn0Height, chn1Width, chn1Height);
+	
+	int ret;
+	
+	// ==================== VPSS Group 配置 ====================
+	VPSS_GRP_ATTR_S stVpssGrpAttr;
+	memset(&stVpssGrpAttr, 0, sizeof(VPSS_GRP_ATTR_S));
+	
+	stVpssGrpAttr.u32MaxW = inputWidth;
+	stVpssGrpAttr.u32MaxH = inputHeight;
+	stVpssGrpAttr.enPixelFormat = RK_FMT_YUV420SP;
+	stVpssGrpAttr.enCompressMode = COMPRESS_MODE_NONE;
+	stVpssGrpAttr.stFrameRate.s32SrcFrameRate = -1;
+	stVpssGrpAttr.stFrameRate.s32DstFrameRate = -1;
+	
+	ret = RK_MPI_VPSS_CreateGrp(grpId, &stVpssGrpAttr);
+	if (ret != RK_SUCCESS) {
+		printf("ERROR: RK_MPI_VPSS_CreateGrp failed! ret=0x%x\n", ret);
+		return -1;
+	}
+	
+	// ==================== VPSS Chn0 配置（给 VENC）====================
+	// u32Depth = 0: 绑定模式，帧直接送到下游模块（VENC）
+	VPSS_CHN_ATTR_S stVpssChn0Attr;
+	memset(&stVpssChn0Attr, 0, sizeof(VPSS_CHN_ATTR_S));
+	
+	stVpssChn0Attr.enChnMode = VPSS_CHN_MODE_USER;
+	stVpssChn0Attr.enCompressMode = COMPRESS_MODE_NONE;
+	stVpssChn0Attr.enDynamicRange = DYNAMIC_RANGE_SDR8;
+	stVpssChn0Attr.enPixelFormat = RK_FMT_YUV420SP;
+	stVpssChn0Attr.stFrameRate.s32SrcFrameRate = -1;
+	stVpssChn0Attr.stFrameRate.s32DstFrameRate = -1;
+	stVpssChn0Attr.u32Width = chn0Width;
+	stVpssChn0Attr.u32Height = chn0Height;
+	stVpssChn0Attr.u32Depth = 0;  // 绑定模式
+	stVpssChn0Attr.bFlip = RK_FALSE;
+	stVpssChn0Attr.bMirror = RK_FALSE;
+	stVpssChn0Attr.u32FrameBufCnt = 2;
+	
+	ret = RK_MPI_VPSS_SetChnAttr(grpId, VPSS_CHN0, &stVpssChn0Attr);
+	if (ret != RK_SUCCESS) {
+		printf("ERROR: RK_MPI_VPSS_SetChnAttr Chn0 failed! ret=0x%x\n", ret);
+		goto destroy_grp;
+	}
+	
+	ret = RK_MPI_VPSS_EnableChn(grpId, VPSS_CHN0);
+	if (ret != RK_SUCCESS) {
+		printf("ERROR: RK_MPI_VPSS_EnableChn Chn0 failed! ret=0x%x\n", ret);
+		goto destroy_grp;
+	}
+	
+	// ==================== VPSS Chn1 配置（给 AI 推理，可选）====================
+	// u32Depth > 0: 用户模式，可以通过 GetChnFrame 获取帧
+	if (chn1Width > 0 && chn1Height > 0) {
+		VPSS_CHN_ATTR_S stVpssChn1Attr;
+		memset(&stVpssChn1Attr, 0, sizeof(VPSS_CHN_ATTR_S));
+		
+		stVpssChn1Attr.enChnMode = VPSS_CHN_MODE_USER;
+		stVpssChn1Attr.enCompressMode = COMPRESS_MODE_NONE;
+		stVpssChn1Attr.enDynamicRange = DYNAMIC_RANGE_SDR8;
+		stVpssChn1Attr.enPixelFormat = RK_FMT_YUV420SP;
+		stVpssChn1Attr.stFrameRate.s32SrcFrameRate = -1;
+		stVpssChn1Attr.stFrameRate.s32DstFrameRate = -1;
+		stVpssChn1Attr.u32Width = chn1Width;
+		stVpssChn1Attr.u32Height = chn1Height;
+		stVpssChn1Attr.u32Depth = 2;  // 用户模式，允许 GetChnFrame
+		stVpssChn1Attr.bFlip = RK_FALSE;
+		stVpssChn1Attr.bMirror = RK_FALSE;
+		stVpssChn1Attr.u32FrameBufCnt = 2;
+		
+		ret = RK_MPI_VPSS_SetChnAttr(grpId, VPSS_CHN1, &stVpssChn1Attr);
+		if (ret != RK_SUCCESS) {
+			printf("ERROR: RK_MPI_VPSS_SetChnAttr Chn1 failed! ret=0x%x\n", ret);
+			goto disable_chn0;
+		}
+		
+		ret = RK_MPI_VPSS_EnableChn(grpId, VPSS_CHN1);
+		if (ret != RK_SUCCESS) {
+			printf("ERROR: RK_MPI_VPSS_EnableChn Chn1 failed! ret=0x%x\n", ret);
+			goto disable_chn0;
+		}
+	}
+	
+	// ==================== 启动 VPSS Group ====================
+	ret = RK_MPI_VPSS_StartGrp(grpId);
+	if (ret != RK_SUCCESS) {
+		printf("ERROR: RK_MPI_VPSS_StartGrp failed! ret=0x%x\n", ret);
+		goto disable_chns;
+	}
+	
+	printf("VPSS init success!\n");
+	return 0;
+	
+disable_chns:
+	if (chn1Width > 0 && chn1Height > 0) {
+		RK_MPI_VPSS_DisableChn(grpId, VPSS_CHN1);
+	}
+disable_chn0:
+	RK_MPI_VPSS_DisableChn(grpId, VPSS_CHN0);
+destroy_grp:
+	RK_MPI_VPSS_DestroyGrp(grpId);
+	return -1;
+}
+
+int vpss_deinit(int grpId, bool enableChn1) {
+	printf("%s: grp=%d, enableChn1=%d\n", __func__, grpId, enableChn1);
+	
+	RK_MPI_VPSS_StopGrp(grpId);
+	
+	if (enableChn1) {
+		RK_MPI_VPSS_DisableChn(grpId, VPSS_CHN1);
+	}
+	RK_MPI_VPSS_DisableChn(grpId, VPSS_CHN0);
+	
+	RK_MPI_VPSS_DestroyGrp(grpId);
+	
+	return 0;
 }
 
 int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType) {

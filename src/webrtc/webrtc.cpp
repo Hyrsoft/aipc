@@ -13,6 +13,7 @@
 #include <rtc/h264rtppacketizer.hpp>
 #include <rtc/rtcpsrreporter.hpp>
 #include <rtc/rtcpreceivingsession.hpp>
+#include <rtc/frameinfo.hpp>
 
 #undef LOG_TAG
 #define LOG_TAG "webrtc"
@@ -215,12 +216,43 @@ void WebRTCSystem::SendVideoData(const uint8_t* data, size_t size, uint64_t time
         return;
     }
 
-    // 帧率控制
+    // 检测关键帧（IDR帧）：搜索 NAL Unit Type 5 (IDR) 或 Type 7 (SPS)
+    // H.264 NAL Unit 起始码：00 00 00 01 或 00 00 01
+    bool is_keyframe = false;
+    for (size_t i = 0; i + 4 < size; i++) {
+        // 查找起始码 00 00 00 01 或 00 00 01
+        if ((data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1) ||
+            (data[i] == 0 && data[i+1] == 0 && data[i+2] == 1)) {
+            size_t nal_start = (data[i+2] == 1) ? i + 3 : i + 4;
+            if (nal_start < size) {
+                uint8_t nal_type = data[nal_start] & 0x1F;
+                // NAL Type 5 = IDR, Type 7 = SPS
+                if (nal_type == 5 || nal_type == 7) {
+                    is_keyframe = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 如果还没收到关键帧，跳过非关键帧
+    if (!keyframe_received_ && !is_keyframe) {
+        return;
+    }
+    
+    // 标记已收到关键帧
+    if (is_keyframe && !keyframe_received_) {
+        keyframe_received_ = true;
+        LOG_INFO("收到首个关键帧，开始发送视频数据");
+    }
+
+    // 帧率控制 - 使用更宽松的时间窗口避免丢帧
     auto now = std::chrono::steady_clock::now();
     if (last_video_send_time_ != std::chrono::steady_clock::time_point{}) {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             now - last_video_send_time_);
-        int interval_ms = 1000 / config_.video.fps;
+        // 允许 20% 的时间容差，避免因时间抖动丢帧
+        int interval_ms = (1000 / config_.video.fps) * 80 / 100;
         if (elapsed.count() < interval_ms) {
             return;
         }
@@ -228,8 +260,17 @@ void WebRTCSystem::SendVideoData(const uint8_t* data, size_t size, uint64_t time
     last_video_send_time_ = now;
 
     try {
-        auto sample_time = std::chrono::microseconds(timestamp);
-        video_track_->send(reinterpret_cast<const std::byte*>(data), size);
+        // 使用相对时间戳：基于第一帧的时间计算
+        // libdatachannel 需要的是帧的时间点（秒），内部会转换为 RTP 时间戳
+        if (first_video_timestamp_ == 0) {
+            first_video_timestamp_ = timestamp;
+        }
+        uint64_t relative_timestamp = timestamp - first_video_timestamp_;
+        auto sample_time = std::chrono::duration<double>(relative_timestamp / 1000000.0);
+        
+        video_track_->sendFrame(
+            reinterpret_cast<const std::byte*>(data), size,
+            rtc::FrameInfo(sample_time));
 
         // 更新统计
         {
@@ -762,6 +803,11 @@ void WebRTCSystem::Cleanup() {
         pending_ice_candidates_.clear();
     }
     sdp_exchange_completed_.store(false);
+
+    // 重置时间戳和关键帧状态
+    first_video_timestamp_ = 0;
+    last_video_send_time_ = std::chrono::steady_clock::time_point{};
+    keyframe_received_ = false;
 
     LOG_INFO("资源清理完成");
 }

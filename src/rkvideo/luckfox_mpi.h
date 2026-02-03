@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "sample_comm.h"
+#include "rk_mpi_vpss.h"
 
 #define TEST_ARGB32_PIX_SIZE 4
 #define TEST_ARGB32_RED 0xFF0000FF
@@ -32,7 +33,36 @@ RK_S32 rgn_overlay_release(int group);
 
 int vi_dev_init();
 int vi_chn_init(int channelId, int width, int height);
-int vpss_init(int VpssChn, int width, int height);
+
+/**
+ * @brief 初始化 VPSS Group 和通道
+ * 
+ * 创建 VPSS Group 0，配置两个输出通道：
+ * - Chn0: 全分辨率输出 -> 绑定到 VENC（编码流）
+ * - Chn1: 可配置分辨率输出 -> 用户 GetFrame（AI 推理）
+ * 
+ * @param grpId VPSS Group ID
+ * @param inputWidth 输入宽度（与 VI 输出一致）
+ * @param inputHeight 输入高度（与 VI 输出一致）
+ * @param chn0Width Chn0 输出宽度（给 VENC）
+ * @param chn0Height Chn0 输出高度（给 VENC）
+ * @param chn1Width Chn1 输出宽度（给 AI），可选，<=0 则不启用 Chn1
+ * @param chn1Height Chn1 输出高度（给 AI）
+ * @return 0 成功，-1 失败
+ */
+int vpss_init(int grpId, int inputWidth, int inputHeight,
+              int chn0Width, int chn0Height,
+              int chn1Width = 0, int chn1Height = 0);
+
+/**
+ * @brief 销毁 VPSS Group 和通道
+ * 
+ * @param grpId VPSS Group ID
+ * @param enableChn1 是否启用了 Chn1
+ * @return 0 成功
+ */
+int vpss_deinit(int grpId, bool enableChn1 = false);
+
 int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType);
 
 #endif
