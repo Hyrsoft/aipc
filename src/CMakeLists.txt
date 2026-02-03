@@ -10,7 +10,9 @@ add_subdirectory(common)
 add_subdirectory(rkvideo)
 add_subdirectory(rtsp)
 add_subdirectory(webrtc)
+add_subdirectory(wspreview)
 add_subdirectory(file)
+add_subdirectory(httpserver)
 
 # ========================================
 # aipc 可执行文件
@@ -19,6 +21,7 @@ add_subdirectory(file)
 set(AIPC_SOURCES
     main.cpp
     thread_stream.cpp
+    http.cpp
 )
 
 # 创建可执行文件
@@ -28,6 +31,7 @@ add_executable(aipc ${AIPC_SOURCES})
 target_include_directories(aipc
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${LIBDATACHANNEL_PATH}/deps/json/single_include  # nlohmann/json
 )
 
 # 链接静态库和第三方库
@@ -35,10 +39,12 @@ target_include_directories(aipc
 target_link_libraries(aipc
     PRIVATE
         common
-        rtsp_lib      # rtsp_lib 依赖 sample_comm
-        file_lib      # file_lib 依赖 FFmpeg 和 rkvideo
-        rkvideo       # rkvideo 也依赖 sample_comm，放后面确保符号解析
-        # webrtc_lib    # 启用后取消注释
+        httpserver_lib  # HTTP 服务器模块
+        rtsp_lib        # rtsp_lib 依赖 sample_comm
+        file_lib        # file_lib 依赖 FFmpeg 和 rkvideo
+        webrtc_lib      # WebRTC 模块
+        wspreview_lib   # WebSocket 预览模块
+        rkvideo         # rkvideo 也依赖 sample_comm，放后面确保符号解析
         spdlog::spdlog
         httplib
 )

@@ -2,10 +2,15 @@
  * @file rkvideo.h
  * @brief RK 视频模块 - 基于 Luckfox RKMPI 的视频采集与编码
  *
- * 提供：
- * - VI/VENC 模块的初始化与反初始化
- * - 编码流的分发（到 RTSP/WebRTC）
- * - 原始帧的获取（供 AI 推理使用）
+ * 数据流架构：
+ *   VI (单通道) --> VPSS Group0
+ *                    ├── VPSS Chn0 --> VENC (编码流，给 RTSP/WebRTC)
+ *                    └── VPSS Chn1 --> User GetFrame (原始帧，给 AI 推理)
+ * 
+ * 相比 VI 双通道方案的优势：
+ * - 缓冲隔离：VPSS 有独立缓冲池，AI 通道卡住不影响 VENC 编码
+ * - 硬件缩放：VPSS 可以硬件缩放到 AI 需要的分辨率，节省 CPU
+ * - 带宽节省：VI 只写一次内存
  *
  * @author 好软，好温暖
  * @date 2026-01-30
@@ -20,9 +25,9 @@
 // ============================================================================
 
 struct VideoConfig {
-    int width = 720;
-    int height = 480;
-    int frameRate = 30;
+    int width = 1920;
+    int height = 1080;
+    int frameRate = 30;     // fps
     int bitRate = 10 * 1024;  // kbps
 };
 
@@ -33,7 +38,7 @@ struct VideoConfig {
 /**
  * @brief 初始化 rkvideo 模块
  * 
- * 初始化 ISP、VI、VENC 等子系统，建立视频采集与编码链路
+ * 初始化 ISP、VI、VPSS、VENC 等子系统，建立视频采集与编码链路
  * 
  * @return 0 成功，-1 失败
  */
@@ -83,12 +88,13 @@ void rkvideo_stop_streaming();
 // ============================================================================
 
 /**
- * @brief 从 VI 通道 1 获取原始帧
+ * @brief 从 VPSS Chn1 获取原始帧（用于 AI 推理）
  * 
  * @param timeoutMs 超时时间（毫秒），-1 表示阻塞等待
  * @return VideoFramePtr 成功返回帧指针，失败返回 nullptr
  * 
  * @note 返回的智能指针会自动管理 MPI 资源释放
+ * @note 数据格式：NV12 (RK_FMT_YUV420SP)
  */
 VideoFramePtr rkvideo_get_vi_frame(int timeoutMs = -1);
 

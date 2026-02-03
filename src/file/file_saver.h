@@ -131,7 +131,8 @@ private:
     std::string current_file_path_;
     Stats stats_;
     uint64_t first_pts_ = 0;
-    bool extradata_set_ = false;  // 标记是否已设置 SPS/PPS
+    bool extradata_set_ = false;   // 标记是否已设置 SPS/PPS
+    bool header_written_ = false;  // 标记是否已写入 header
     std::mutex mutex_;
 
     // FFmpeg 上下文（使用 void* 避免头文件依赖）

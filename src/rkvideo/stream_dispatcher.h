@@ -136,23 +136,31 @@ private:
         LOG_DEBUG("Fetch loop started for VENC channel {}", venc_chn_id_);
         
         uint64_t frameCount = 0;
-        uint64_t errorCount = 0;
+        uint64_t consecutiveErrors = 0;
         
         while (running_) {
             // 从 VENC 获取编码流（零拷贝，shared_ptr 管理生命周期）
-            auto stream = acquire_encoded_stream(venc_chn_id_, 1000);  // 1秒超时
+            RK_S32 lastError = 0;
+            auto stream = acquire_encoded_stream(venc_chn_id_, 1000, &lastError);  // 1秒超时
             
             if (!stream) {
-                errorCount++;
-                if (errorCount % 5 == 1) {  // 每5次错误打印一次
-                    LOG_WARN("Failed to get stream from VENC channel {} (error #{})", 
-                             venc_chn_id_, errorCount);
+                consecutiveErrors++;
+                // 连续错误 > 3 次且每 10 次打印一次警告
+                if (consecutiveErrors > 3 && consecutiveErrors % 10 == 0) {
+                    LOG_WARN("VENC channel {} consecutive errors: {}, last error: {:#x}", 
+                             venc_chn_id_, consecutiveErrors, lastError);
+                }
+                // 如果是超时错误 (0xa0078003)，可能是上游没数据
+                if (consecutiveErrors == 30) {
+                    LOG_ERROR("VENC channel {} failed 30 times, error code: {:#x}. "
+                              "Check if camera/VI/VPSS pipeline is working.", 
+                              venc_chn_id_, lastError);
                 }
                 continue;
             }
             
             frameCount++;
-            errorCount = 0;  // 重置错误计数
+            consecutiveErrors = 0;  // 重置错误计数
             
             // 打印帧信息
             if (frameCount <= 5 || frameCount % 30 == 0) {

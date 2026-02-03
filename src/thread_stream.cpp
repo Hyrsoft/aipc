@@ -13,6 +13,8 @@
 #include "rkvideo/rkvideo.h"
 #include "rtsp/thread_rtsp.h"
 #include "file/thread_file.h"
+#include "webrtc/thread_webrtc.h"
+#include "wspreview/ws_preview.h"
 
 #include <memory>
 
@@ -61,9 +63,33 @@ StreamManager::StreamManager(const StreamConfig& config)
         LOG_INFO("File consumer registered");
     }
     
-    // TODO: WebRTC 线程
+    // 创建 WebRTC 线程（如果启用）
     if (config_.enable_webrtc) {
-        LOG_WARN("WebRTC not implemented yet");
+        webrtc_thread_ = std::make_unique<WebRTCThread>(config_.webrtc_config);
+        
+        // WebRTC 线程需要在 Start() 中才会连接信令服务器
+        // 这里只注册消费者，在 Start() 中启动
+        rkvideo_register_stream_consumer(
+            "webrtc",
+            &WebRTCThread::StreamConsumer,
+            webrtc_thread_.get(),
+            3  // 队列大小
+        );
+        LOG_INFO("WebRTC consumer registered (will connect on Start)");
+    }
+    
+    // 创建 WebSocket 预览服务器（如果启用）
+    if (config_.enable_ws_preview) {
+        ws_preview_server_ = std::make_unique<WsPreviewServer>(config_.ws_preview_config);
+        
+        // 注册 WebSocket 预览消费者到流分发器
+        rkvideo_register_stream_consumer(
+            "ws_preview",
+            &WsPreviewServer::StreamConsumer,
+            ws_preview_server_.get(),
+            3  // 队列大小
+        );
+        LOG_INFO("WebSocket preview consumer registered");
     }
     
     LOG_INFO("StreamManager created");
@@ -87,6 +113,14 @@ void StreamManager::Start() {
         file_thread_->Start();
     }
     
+    // 启动 WebSocket 预览服务器（如果存在）
+    if (ws_preview_server_) {
+        ws_preview_server_->Start();
+    }
+    
+    // 注意：RTSP 和 WebRTC 默认不自动启动，需要通过 API 手动启动
+    // 这样可以避免在没有客户端连接时浪费资源
+    
     // 启动视频流分发器
     rkvideo_start_streaming();
     
@@ -104,9 +138,24 @@ void StreamManager::Stop() {
     // 停止视频流分发器
     rkvideo_stop_streaming();
     
+    // 停止 RTSP 线程
+    if (rtsp_thread_) {
+        rtsp_thread_->Stop();
+    }
+    
     // 停止文件线程
     if (file_thread_) {
         file_thread_->Stop();
+    }
+    
+    // 停止 WebRTC 线程
+    if (webrtc_thread_) {
+        webrtc_thread_->Stop();
+    }
+    
+    // 停止 WebSocket 预览服务器
+    if (ws_preview_server_) {
+        ws_preview_server_->Stop();
     }
     
     running_ = false;

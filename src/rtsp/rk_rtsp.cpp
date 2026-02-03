@@ -124,7 +124,7 @@ bool RtspServer::SendVideoFrame(const EncodedStreamPtr& stream) {
         return false;
     }
 
-    LOG_DEBUG("SendVideoFrame: len={}, pts={}", stream->pstPack->u32Len, stream->pstPack->u64PTS);
+    LOG_TRACE("SendVideoFrame: len={}, pts={}", stream->pstPack->u32Len, stream->pstPack->u64PTS);
 
     return SendVideoData(
         static_cast<const uint8_t*>(data),
