@@ -24,15 +24,13 @@
 #include <string>
 #include <vector>
 
+#include "common/media_buffer.h"
+
 // 前向声明
 namespace rtc {
 class WebSocketServer;
 class WebSocket;
 }  // namespace rtc
-
-// VENC 流类型（避免循环依赖）
-struct rkVENC_STREAM_S;
-using EncodedStreamPtr = std::shared_ptr<rkVENC_STREAM_S>;
 
 // ============================================================================
 // 配置结构
@@ -150,7 +148,7 @@ private:
 
     // 客户端管理
     mutable std::mutex clients_mutex_;
-    std::vector<std::weak_ptr<rtc::WebSocket>> clients_;
+    std::vector<std::shared_ptr<rtc::WebSocket>> clients_;  // 使用 shared_ptr 保持对象存活
 
     // SPS/PPS 缓存（用于新客户端连接时发送）
     mutable std::mutex sps_pps_mutex_;

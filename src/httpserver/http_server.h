@@ -33,7 +33,7 @@ struct HttpServerConfig {
     int port = 8080;                   ///< 监听端口
     std::string static_dir = "";       ///< 静态文件目录（空则不提供静态文件服务）
     std::string static_mount = "/";    ///< 静态文件挂载路径
-    int thread_pool_size = 4;          ///< 线程池大小
+    int thread_pool_size = 1;          ///< 线程池大小
 };
 
 // ============================================================================

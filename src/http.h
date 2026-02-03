@@ -30,7 +30,7 @@ struct HttpApiConfig {
     std::string host = "0.0.0.0";      ///< 监听地址
     int port = 8080;                    ///< 监听端口
     std::string static_dir = "/app/www"; ///< 静态文件目录
-    int thread_pool_size = 2;           ///< 线程池大小
+    int thread_pool_size = 1;           ///< 线程池大小
 };
 
 // ============================================================================

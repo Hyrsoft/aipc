@@ -6,10 +6,6 @@
 #include "ws_preview.h"
 #include "common/logger.h"
 
-// RK MPI headers for VENC stream access
-#include "rk_mpi_mb.h"
-#include "rk_comm_venc.h"  // for VENC_STREAM_S
-
 #include <rtc/websocketserver.hpp>
 #include <rtc/websocket.hpp>
 
@@ -93,8 +89,8 @@ void WsPreviewServer::Stop() {
     // 关闭所有客户端连接
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
-        for (auto& weak_ws : clients_) {
-            if (auto ws = weak_ws.lock()) {
+        for (auto& ws : clients_) {
+            if (ws) {
                 try {
                     ws->close();
                 } catch (...) {}
@@ -120,30 +116,24 @@ uint16_t WsPreviewServer::GetPort() const {
 size_t WsPreviewServer::GetClientCount() const {
     std::lock_guard<std::mutex> lock(clients_mutex_);
     
-    // 清理已断开的客户端并计数
-    size_t count = 0;
-    for (const auto& weak_ws : clients_) {
-        if (auto ws = weak_ws.lock()) {
-            if (ws->isOpen()) {
-                count++;
-            }
-        }
-    }
-    return count;
+    // 统计活跃的客户端数量
+    return std::count_if(clients_.begin(), clients_.end(),
+        [](const std::shared_ptr<rtc::WebSocket>& ws) {
+            return ws && ws->isOpen();
+        });
 }
 
 void WsPreviewServer::OnClientConnected(std::shared_ptr<rtc::WebSocket> ws) {
     LOG_INFO("WebSocket 客户端连接, path={}", ws->path().value_or("(none)"));
 
-    // 先添加到客户端列表（保持引用）
+    // 先添加到客户端列表（使用 shared_ptr 保持连接存活）
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
         
         // 清理已断开的连接
         clients_.erase(
             std::remove_if(clients_.begin(), clients_.end(),
-                [](const std::weak_ptr<rtc::WebSocket>& w) {
-                    auto s = w.lock();
+                [](const std::shared_ptr<rtc::WebSocket>& s) {
                     return !s || !s->isOpen();
                 }),
             clients_.end());
@@ -155,6 +145,7 @@ void WsPreviewServer::OnClientConnected(std::shared_ptr<rtc::WebSocket> ws) {
             return;
         }
 
+        // 存入 shared_ptr，增加引用计数，保持连接存活
         clients_.push_back(ws);
         LOG_INFO("当前客户端数量: {}", clients_.size());
     }
@@ -176,15 +167,18 @@ void WsPreviewServer::OnClientConnected(std::shared_ptr<rtc::WebSocket> ws) {
         }
     });
 
-    ws->onClosed([this]() {
+    // 关键：onClosed 中必须从 clients_ 移除 shared_ptr，否则引用计数永远不为0
+    ws->onClosed([this, weak_ws = std::weak_ptr<rtc::WebSocket>(ws)]() {
         LOG_INFO("WebSocket 客户端断开");
-        // 清理断开的连接
+        
+        // 锁定并移除对应的 shared_ptr
         std::lock_guard<std::mutex> lock(clients_mutex_);
         clients_.erase(
             std::remove_if(clients_.begin(), clients_.end(),
-                [](const std::weak_ptr<rtc::WebSocket>& w) {
-                    auto s = w.lock();
-                    return !s || !s->isOpen();
+                [&weak_ws](const std::shared_ptr<rtc::WebSocket>& s) {
+                    // 比较指针地址是否相同，或者连接已关闭
+                    auto target = weak_ws.lock();
+                    return !s || !s->isOpen() || (target && s == target);
                 }),
             clients_.end());
     });
@@ -202,17 +196,12 @@ void WsPreviewServer::SendVideoFrame(const uint8_t* data, size_t size, uint64_t 
     // 提取 SPS/PPS（如果有）
     ExtractSpsPps(data, size);
 
-    // 获取活跃客户端
+    // 获取活跃客户端（拷贝一份以减少锁持有时间）
     std::vector<std::shared_ptr<rtc::WebSocket>> active_clients;
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
-        for (auto& weak_ws : clients_) {
-            if (auto ws = weak_ws.lock()) {
-                if (ws->isOpen()) {
-                    active_clients.push_back(ws);
-                }
-            }
-        }
+        // 直接拷贝 shared_ptr 列表，增加引用计数
+        active_clients = clients_;
     }
 
     if (active_clients.empty()) {
@@ -221,10 +210,12 @@ void WsPreviewServer::SendVideoFrame(const uint8_t* data, size_t size, uint64_t 
 
     // 发送给所有客户端
     for (auto& ws : active_clients) {
-        try {
-            ws->send(reinterpret_cast<const std::byte*>(data), size);
-        } catch (const std::exception& e) {
-            LOG_DEBUG("发送视频帧失败: {}", e.what());
+        if (ws && ws->isOpen()) {
+            try {
+                ws->send(reinterpret_cast<const std::byte*>(data), size);
+            } catch (const std::exception& e) {
+                LOG_DEBUG("发送视频帧失败: {}", e.what());
+            }
         }
     }
 
@@ -315,19 +306,14 @@ void WsPreviewServer::SendSpsPps(std::shared_ptr<rtc::WebSocket> ws) {
 
 void WsPreviewServer::StreamConsumer(EncodedStreamPtr stream, void* user_data) {
     auto* self = static_cast<WsPreviewServer*>(user_data);
-    if (!self || !stream) {
+    if (!self || !stream || !stream->pstPack) {
         return;
     }
 
-    if (!stream->pstPack) {
-        return;
-    }
-
-    // 获取视频数据
-    const uint8_t* data = static_cast<const uint8_t*>(
-        RK_MPI_MB_Handle2VirAddr(stream->pstPack->pMbBlk));
-    uint32_t len = stream->pstPack->u32Len;
-    uint64_t pts = stream->pstPack->u64PTS;
+    // 使用 media_buffer.h 中的辅助函数获取数据地址（零拷贝）
+    const uint8_t* data = static_cast<const uint8_t*>(get_stream_vir_addr(stream));
+    uint32_t len = get_stream_length(stream);
+    uint64_t pts = get_stream_pts(stream);
 
     if (data && len > 0) {
         self->SendVideoFrame(data, len, pts);
