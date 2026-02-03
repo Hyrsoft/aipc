@@ -332,6 +332,9 @@
             <button class="tab-btn" onclick="switchTab('player')">
                 ▶️ 实时预览
             </button>
+            <button class="tab-btn" onclick="switchTab('webrtc')">
+                🌐 WebRTC
+            </button>
         </div>
 
         <!-- 状态栏 -->
@@ -415,8 +418,62 @@
             </div>
         </div>
 
-        <!-- 实时预览标签页 -->
+        <!-- 实时预览标签页 (WebSocket H.264) -->
         <div id="tab-player" class="tab-content">
+            <div class="player-container">
+                <!-- 视频区域 -->
+                <div class="video-wrapper">
+                    <video id="wsVideo" autoplay playsinline muted></video>
+                    <div class="video-overlay" id="wsVideoOverlay">
+                        <span>点击"连接"开始预览</span>
+                    </div>
+                </div>
+
+                <!-- 控制按钮 -->
+                <div class="video-controls">
+                    <div class="connection-status disconnected" id="wsConnStatus">
+                        <div class="status-dot offline" id="wsConnDot"></div>
+                        <span id="wsConnText">未连接</span>
+                    </div>
+                    <button class="btn btn-success" id="btnWsConnect" onclick="wsConnect()">▶ 连接</button>
+                    <button class="btn btn-danger" id="btnWsDisconnect" onclick="wsDisconnect()" disabled>⏹ 断开</button>
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="chkWsAutoReconnect">
+                        <span style="color: #8892b0; font-size: 0.85rem;">自动重连</span>
+                    </label>
+                </div>
+
+                <!-- 统计信息 -->
+                <div class="video-stats">
+                    <div class="stat-item">
+                        <div class="stat-label">分辨率</div>
+                        <div class="stat-value" id="wsStatResolution">-</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">帧率</div>
+                        <div class="stat-value" id="wsStatFps">- fps</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">码率</div>
+                        <div class="stat-value" id="wsStatBitrate">- kbps</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">已接收</div>
+                        <div class="stat-value" id="wsStatReceived">0 B</div>
+                    </div>
+                </div>
+
+                <!-- 提示信息 -->
+                <div class="card" style="margin-top: 15px; padding: 15px;">
+                    <p style="color: #8892b0; font-size: 0.85rem; margin: 0;">
+                        💡 提示：WebSocket H.264 直接传输模式，低延迟 (~100ms)。浏览器端使用 jMuxer 进行解码播放。
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- WebRTC 标签页 (原有功能) -->
+        <div id="tab-webrtc" class="tab-content">
             <div class="player-container">
                 <!-- 视频区域 -->
                 <div class="video-wrapper">
@@ -474,6 +531,7 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/jmuxer@2.0.5/dist/jmuxer.min.js"></script>
     <script>
         // =====================================================================
         // 全局变量
@@ -488,6 +546,16 @@
         let lastStatsTime = 0;
         let pendingIceCandidates = [];  // 缓冲待发送的 ICE 候选
         let answerSent = false;         // Answer 是否已发送
+        
+        // WebSocket H.264 相关
+        let wsConnection = null;
+        let jmuxer = null;
+        let wsBytesReceived = 0;
+        let wsLastBytesReceived = 0;
+        let wsLastStatsTime = 0;
+        let wsFrameCount = 0;
+        let wsLastFrameCount = 0;
+        let wsStatsTimer = null;
 
         // =====================================================================
         // 工具函数
@@ -911,6 +979,215 @@
             } catch (e) {
                 console.error('Stats error:', e);
             }
+        }
+
+        // =====================================================================
+        // WebSocket H.264 播放器
+        // =====================================================================
+        function updateWsConnectionStatus(state) {
+            const status = document.getElementById('wsConnStatus');
+            const dot = document.getElementById('wsConnDot');
+            const text = document.getElementById('wsConnText');
+            
+            status.className = 'connection-status ' + state;
+            
+            switch(state) {
+                case 'connected':
+                    dot.classList.remove('offline');
+                    text.textContent = '已连接';
+                    document.getElementById('wsVideoOverlay').classList.add('hidden');
+                    break;
+                case 'connecting':
+                    dot.classList.add('offline');
+                    text.textContent = '连接中...';
+                    break;
+                case 'disconnected':
+                default:
+                    dot.classList.add('offline');
+                    text.textContent = '未连接';
+                    document.getElementById('wsVideoOverlay').classList.remove('hidden');
+                    document.getElementById('wsVideoOverlay').querySelector('span').textContent = '点击"连接"开始预览';
+            }
+        }
+
+        function wsConnect() {
+            if (wsConnection) {
+                wsDisconnect();
+            }
+
+            updateWsConnectionStatus('connecting');
+            document.getElementById('btnWsConnect').disabled = true;
+            document.getElementById('btnWsDisconnect').disabled = false;
+            addLog('正在建立 WebSocket 连接...');
+            
+            // 重置统计
+            wsBytesReceived = 0;
+            wsFrameCount = 0;
+
+            try {
+                // 创建 jMuxer 实例 - 注意：必须在 video 元素可见时创建
+                const videoElement = document.getElementById('wsVideo');
+                if (!videoElement) {
+                    addLog('视频元素不存在', 'error');
+                    return;
+                }
+                
+                jmuxer = new JMuxer({
+                    node: 'wsVideo',
+                    mode: 'video',
+                    flushingTime: 1,  // 立即刷新
+                    fps: 30,
+                    clearBuffer: true,  // 清除旧缓存
+                    debug: true,  // 开启调试看错误
+                    onReady: function() {
+                        console.log('jMuxer ready');
+                        addLog('jMuxer 解码器就绪', 'success');
+                    },
+                    onError: function(err) {
+                        console.error('jMuxer error:', err);
+                        // 不要因为解码错误就断开连接
+                    }
+                });
+
+                // 建立 WebSocket 连接
+                const wsUrl = `ws://${window.location.hostname}:8082`;
+                wsConnection = new WebSocket(wsUrl);
+                wsConnection.binaryType = 'arraybuffer';
+
+                wsConnection.onopen = () => {
+                    updateWsConnectionStatus('connected');
+                    addLog('WebSocket 连接成功', 'success');
+                    startWsStatsUpdate();
+                };
+
+                wsConnection.onclose = (event) => {
+                    updateWsConnectionStatus('disconnected');
+                    stopWsStatsUpdate();
+                    addLog(`WebSocket 连接已关闭, code=${event.code}, reason=${event.reason || '(无)'}`);
+                    console.log('WebSocket close event:', event);
+                    
+                    if (document.getElementById('chkWsAutoReconnect').checked) {
+                        addLog('尝试重连...');
+                        setTimeout(wsConnect, 2000);
+                    } else {
+                        document.getElementById('btnWsConnect').disabled = false;
+                        document.getElementById('btnWsDisconnect').disabled = true;
+                    }
+                };
+
+                wsConnection.onerror = (err) => {
+                    console.error('WebSocket error:', err);
+                    addLog('WebSocket 错误', 'error');
+                };
+
+                wsConnection.onmessage = (event) => {
+                    if (event.data instanceof ArrayBuffer) {
+                        const data = new Uint8Array(event.data);
+                        wsBytesReceived += data.length;
+                        wsFrameCount++;
+                        
+                        // 调试：打印前几字节看NAL类型
+                        if (wsFrameCount <= 5) {
+                            let hex = '';
+                            for (let i = 0; i < Math.min(10, data.length); i++) {
+                                hex += data[i].toString(16).padStart(2, '0') + ' ';
+                            }
+                            console.log(`Frame ${wsFrameCount}, size=${data.length}, start: ${hex}`);
+                        }
+                        
+                        // 喂给 jMuxer
+                        if (jmuxer) {
+                            try {
+                                jmuxer.feed({
+                                    video: data
+                                });
+                            } catch (e) {
+                                console.error('Feed error:', e);
+                            }
+                        }
+                    }
+                };
+
+            } catch (error) {
+                console.error('WebSocket connect error:', error);
+                addLog('WebSocket 连接失败: ' + error.message, 'error');
+                updateWsConnectionStatus('disconnected');
+                document.getElementById('btnWsConnect').disabled = false;
+                document.getElementById('btnWsDisconnect').disabled = true;
+            }
+        }
+
+        function wsDisconnect() {
+            stopWsStatsUpdate();
+            
+            if (wsConnection) {
+                wsConnection.close();
+                wsConnection = null;
+            }
+
+            if (jmuxer) {
+                jmuxer.destroy();
+                jmuxer = null;
+            }
+
+            updateWsConnectionStatus('disconnected');
+            document.getElementById('btnWsConnect').disabled = false;
+            document.getElementById('btnWsDisconnect').disabled = true;
+            
+            // 重置统计
+            document.getElementById('wsStatResolution').textContent = '-';
+            document.getElementById('wsStatFps').textContent = '- fps';
+            document.getElementById('wsStatBitrate').textContent = '- kbps';
+            document.getElementById('wsStatReceived').textContent = '0 B';
+            
+            addLog('WebSocket 已断开');
+        }
+
+        function startWsStatsUpdate() {
+            wsLastBytesReceived = 0;
+            wsLastFrameCount = 0;
+            wsLastStatsTime = Date.now();
+            wsStatsTimer = setInterval(updateWsVideoStats, 1000);
+        }
+
+        function stopWsStatsUpdate() {
+            if (wsStatsTimer) {
+                clearInterval(wsStatsTimer);
+                wsStatsTimer = null;
+            }
+        }
+
+        function updateWsVideoStats() {
+            const video = document.getElementById('wsVideo');
+            
+            // 分辨率
+            if (video.videoWidth && video.videoHeight) {
+                document.getElementById('wsStatResolution').textContent = 
+                    `${video.videoWidth}x${video.videoHeight}`;
+            }
+            
+            // 帧率 & 码率
+            const now = Date.now();
+            const timeDiff = (now - wsLastStatsTime) / 1000;
+            
+            if (timeDiff > 0) {
+                // 帧率
+                const framesDiff = wsFrameCount - wsLastFrameCount;
+                const fps = framesDiff / timeDiff;
+                document.getElementById('wsStatFps').textContent = fps.toFixed(1) + ' fps';
+                
+                // 码率
+                const bytesDiff = wsBytesReceived - wsLastBytesReceived;
+                const bitrate = (bytesDiff * 8 / timeDiff / 1000).toFixed(0);
+                document.getElementById('wsStatBitrate').textContent = bitrate + ' kbps';
+            }
+            
+            wsLastBytesReceived = wsBytesReceived;
+            wsLastFrameCount = wsFrameCount;
+            wsLastStatsTime = now;
+            
+            // 已接收
+            document.getElementById('wsStatReceived').textContent = formatBytes(wsBytesReceived);
         }
 
         // =====================================================================

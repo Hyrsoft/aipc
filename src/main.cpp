@@ -77,6 +77,11 @@ static void print_startup_info(const StreamConfig& config, int http_port) {
         LOG_INFO("  Signaling: {}", config.webrtc_config.signaling_url);
     }
     
+    if (config.enable_ws_preview) {
+        LOG_INFO("WebSocket Preview:");
+        LOG_INFO("  URL: ws://<device_ip>:{}", config.ws_preview_config.port);
+    }
+    
     if (config.enable_file) {
         LOG_INFO("Recording:");
         LOG_INFO("  Output: {}", config.mp4_config.outputDir);
@@ -144,6 +149,10 @@ int main(int argc, char* argv[]) {
     stream_config.enable_file = true;
     stream_config.mp4_config.outputDir = "/root/record";
     
+    // WebSocket 预览配置 - 默认启用
+    stream_config.enable_ws_preview = true;
+    stream_config.ws_preview_config.port = 8082;
+    
     // ========================================================================
     // HTTP API 配置
     // ========================================================================
@@ -171,13 +180,17 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--no-webrtc") {
             stream_config.enable_webrtc = false;
             LOG_INFO("WebRTC disabled via command line");
+        } else if (arg == "--no-ws-preview") {
+            stream_config.enable_ws_preview = false;
+            LOG_INFO("WebSocket preview disabled via command line");
         } else if (arg == "--help" || arg == "-h") {
             printf("Usage: %s [options]\n", argv[0]);
             printf("Options:\n");
-            printf("  --record, -r    Enable file recording\n");
-            printf("  --no-rtsp       Disable RTSP streaming\n");
-            printf("  --no-webrtc     Disable WebRTC streaming\n");
-            printf("  --help, -h      Show this help\n");
+            printf("  --record, -r      Enable file recording\n");
+            printf("  --no-rtsp         Disable RTSP streaming\n");
+            printf("  --no-webrtc       Disable WebRTC streaming\n");
+            printf("  --no-ws-preview   Disable WebSocket preview\n");
+            printf("  --help, -h        Show this help\n");
             printf("\nEnvironment variables:\n");
             printf("  SIGNALING_HOST  WebRTC signaling server host (default: 127.0.0.1)\n");
             return 0;

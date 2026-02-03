@@ -14,6 +14,7 @@
 #include "rtsp/thread_rtsp.h"
 #include "file/thread_file.h"
 #include "webrtc/thread_webrtc.h"
+#include "wspreview/ws_preview.h"
 
 #include <memory>
 
@@ -77,6 +78,20 @@ StreamManager::StreamManager(const StreamConfig& config)
         LOG_INFO("WebRTC consumer registered (will connect on Start)");
     }
     
+    // 创建 WebSocket 预览服务器（如果启用）
+    if (config_.enable_ws_preview) {
+        ws_preview_server_ = std::make_unique<WsPreviewServer>(config_.ws_preview_config);
+        
+        // 注册 WebSocket 预览消费者到流分发器
+        rkvideo_register_stream_consumer(
+            "ws_preview",
+            &WsPreviewServer::StreamConsumer,
+            ws_preview_server_.get(),
+            3  // 队列大小
+        );
+        LOG_INFO("WebSocket preview consumer registered");
+    }
+    
     LOG_INFO("StreamManager created");
 }
 
@@ -96,6 +111,11 @@ void StreamManager::Start() {
     // 启动文件线程（如果存在）
     if (file_thread_) {
         file_thread_->Start();
+    }
+    
+    // 启动 WebSocket 预览服务器（如果存在）
+    if (ws_preview_server_) {
+        ws_preview_server_->Start();
     }
     
     // 注意：RTSP 和 WebRTC 默认不自动启动，需要通过 API 手动启动
@@ -131,6 +151,11 @@ void StreamManager::Stop() {
     // 停止 WebRTC 线程
     if (webrtc_thread_) {
         webrtc_thread_->Stop();
+    }
+    
+    // 停止 WebSocket 预览服务器
+    if (ws_preview_server_) {
+        ws_preview_server_->Stop();
     }
     
     running_ = false;

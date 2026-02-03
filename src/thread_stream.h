@@ -4,13 +4,14 @@
  *
  * 负责：
  * - 管理流分发器（StreamDispatcher）
- * - 协调 RTSP、File、WebRTC 等消费者的注册
+ * - 协调 RTSP、File、WebRTC、WsPreview 等消费者的注册
  * - 提供统一的启动/停止接口
  *
  * 各个消费者的具体实现在各自的模块中：
  * - rtsp/thread_rtsp.h
  * - file/thread_file.h
- * - webrtc/thread_webrtc.h（待实现）
+ * - webrtc/thread_webrtc.h
+ * - wspreview/ws_preview.h
  *
  * @author 好软，好温暖
  * @date 2026-01-31
@@ -22,11 +23,13 @@
 #include "rtsp/rk_rtsp.h"
 #include "file/file_saver.h"
 #include "webrtc/thread_webrtc.h"
+#include "wspreview/ws_preview.h"
 
 // 前向声明，避免头文件依赖
 class RtspThread;
 class FileThread;
 class WebRTCThread;
+class WsPreviewServer;
 
 // ============================================================================
 // 流输出配置
@@ -39,10 +42,12 @@ struct StreamConfig {
     bool enable_rtsp = true;           ///< 是否启用 RTSP 推流
     bool enable_file = false;          ///< 是否启用文件保存
     bool enable_webrtc = false;        ///< 是否启用 WebRTC
+    bool enable_ws_preview = false;    ///< 是否启用 WebSocket 预览
     
     RtspConfig rtsp_config;            ///< RTSP 配置
     Mp4RecordConfig mp4_config;        ///< MP4 录制配置
     WebRTCThreadConfig webrtc_config;  ///< WebRTC 配置
+    WsPreviewConfig ws_preview_config; ///< WebSocket 预览配置
 };
 
 // ============================================================================
@@ -91,6 +96,7 @@ public:
     RtspThread* GetRtspThread() const { return rtsp_thread_.get(); }
     FileThread* GetFileThread() const { return file_thread_.get(); }
     WebRTCThread* GetWebRTCThread() const { return webrtc_thread_.get(); }
+    WsPreviewServer* GetWsPreviewServer() const { return ws_preview_server_.get(); }
 
 private:
     StreamConfig config_;
@@ -99,6 +105,7 @@ private:
     std::unique_ptr<RtspThread> rtsp_thread_;
     std::unique_ptr<FileThread> file_thread_;
     std::unique_ptr<WebRTCThread> webrtc_thread_;
+    std::unique_ptr<WsPreviewServer> ws_preview_server_;
 };
 
 // ============================================================================
