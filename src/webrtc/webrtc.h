@@ -311,6 +311,8 @@ private:
 
     // 发送控制
     std::chrono::steady_clock::time_point last_video_send_time_;
+    uint64_t first_video_timestamp_{0};  // 第一帧的时间戳，用于计算相对时间
+    bool keyframe_received_{false};      // 是否已收到关键帧
 
     // 回调函数
     mutable std::mutex callback_mutex_;

@@ -195,9 +195,10 @@ inline EncodedFramePtr acquire_encoded_frame(RK_S32 chn_id, RK_S32 timeout_ms = 
  * 
  * @param chn_id VENC 通道 ID
  * @param timeout_ms 超时时间（毫秒），-1 表示阻塞等待
+ * @param lastError 输出参数，返回最后的错误码（可选）
  * @return EncodedStreamPtr 成功返回流指针，失败返回 nullptr
  */
-inline EncodedStreamPtr acquire_encoded_stream(RK_S32 chn_id, RK_S32 timeout_ms = -1) {
+inline EncodedStreamPtr acquire_encoded_stream(RK_S32 chn_id, RK_S32 timeout_ms = -1, RK_S32* lastError = nullptr) {
     auto stream = new VENC_STREAM_S();
     memset(stream, 0, sizeof(VENC_STREAM_S));
     stream->pstPack = new VENC_PACK_S();
@@ -205,6 +206,7 @@ inline EncodedStreamPtr acquire_encoded_stream(RK_S32 chn_id, RK_S32 timeout_ms 
     
     RK_S32 ret = RK_MPI_VENC_GetStream(chn_id, stream, timeout_ms);
     if (ret != RK_SUCCESS) {
+        if (lastError) *lastError = ret;
         delete stream->pstPack;
         delete stream;
         return nullptr;
