@@ -32,6 +32,7 @@ struct ConsumerRegistration {
     std::string name;
     VideoStreamCallback callback;
     void* userData;
+    ConsumerType type;
     int queueSize;
 };
 static std::vector<ConsumerRegistration> g_pendingConsumers;
@@ -147,7 +148,8 @@ int rkvideo_init() {
                     if (reg.callback) {
                         reg.callback(stream, reg.userData);
                     }
-                }, 
+                },
+                reg.type,
                 reg.queueSize);
         }
         g_pendingConsumers.clear();
@@ -208,7 +210,7 @@ int rkvideo_deinit() {
 // ============================================================================
 
 void rkvideo_register_stream_consumer(const char* name, VideoStreamCallback callback, 
-                                       void* userData, int queueSize) {
+                                       void* userData, ConsumerType type, int queueSize) {
     std::lock_guard<std::mutex> lock(g_consumerMutex);
     
     if (g_dispatcher) {
@@ -218,14 +220,17 @@ void rkvideo_register_stream_consumer(const char* name, VideoStreamCallback call
                 if (callback) {
                     callback(stream, userData);
                 }
-            }, 
+            },
+            type,
             queueSize);
     } else {
         // 否则先存储，等初始化时再注册
-        g_pendingConsumers.push_back({name, callback, userData, queueSize});
+        g_pendingConsumers.push_back({name, callback, userData, type, queueSize});
     }
     
-    LOG_INFO("Stream consumer registered: {}", name);
+    LOG_INFO("Stream consumer registered: {} (type={})", name,
+             type == ConsumerType::Direct ? "Direct" :
+             type == ConsumerType::AsyncIO ? "AsyncIO" : "Queued");
 }
 
 void rkvideo_start_streaming() {

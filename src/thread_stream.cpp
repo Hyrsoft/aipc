@@ -25,7 +25,7 @@
 StreamManager::StreamManager(const StreamConfig& config)
     : config_(config) {
     
-    LOG_INFO("Creating StreamManager...");
+    LOG_INFO("Creating StreamManager (optimized for single-core CPU)...");
     
     // 创建 RTSP 线程（如果启用）
     if (config_.enable_rtsp) {
@@ -33,13 +33,15 @@ StreamManager::StreamManager(const StreamConfig& config)
         
         if (rtsp_thread_->IsValid()) {
             // 注册 RTSP 消费者到流分发器
+            // 使用 AsyncIO 类型，网络发送通过 asio::post 异步执行
             rkvideo_register_stream_consumer(
                 "rtsp",
                 &RtspThread::StreamConsumer,
                 rtsp_thread_.get(),
-                3  // 队列大小
+                ConsumerType::AsyncIO,  // 网络发送，投递到 IO 线程
+                3
             );
-            LOG_INFO("RTSP consumer registered");
+            LOG_INFO("RTSP consumer registered (AsyncIO mode)");
         } else {
             LOG_ERROR("Failed to create RTSP thread");
             rtsp_thread_.reset();
@@ -54,13 +56,15 @@ StreamManager::StreamManager(const StreamConfig& config)
         file_thread_ = std::make_unique<FileThread>(file_config);
         
         // 注册文件消费者到流分发器
+        // 使用 Queued 类型，文件写入需要独立线程（磁盘 I/O 延迟不可控）
         rkvideo_register_stream_consumer(
             "file",
             &FileThread::StreamConsumer,
             file_thread_.get(),
-            5  // 队列大小稍大，避免录制丢帧
+            ConsumerType::Queued,  // 文件写入，使用独立队列和线程
+            5  // 队列稍大，避免录制丢帧
         );
-        LOG_INFO("File consumer registered");
+        LOG_INFO("File consumer registered (Queued mode)");
     }
     
     // 创建 WebRTC 线程（如果启用）
@@ -68,14 +72,15 @@ StreamManager::StreamManager(const StreamConfig& config)
         webrtc_thread_ = std::make_unique<WebRTCThread>(config_.webrtc_config);
         
         // WebRTC 线程需要在 Start() 中才会连接信令服务器
-        // 这里只注册消费者，在 Start() 中启动
+        // 使用 AsyncIO 类型，网络发送通过 asio::post 异步执行
         rkvideo_register_stream_consumer(
             "webrtc",
             &WebRTCThread::StreamConsumer,
             webrtc_thread_.get(),
-            3  // 队列大小
+            ConsumerType::AsyncIO,  // 网络发送，投递到 IO 线程
+            3
         );
-        LOG_INFO("WebRTC consumer registered (will connect on Start)");
+        LOG_INFO("WebRTC consumer registered (AsyncIO mode, will connect on Start)");
     }
     
     // 创建 WebSocket 预览服务器（如果启用）
@@ -83,16 +88,18 @@ StreamManager::StreamManager(const StreamConfig& config)
         ws_preview_server_ = std::make_unique<WsPreviewServer>(config_.ws_preview_config);
         
         // 注册 WebSocket 预览消费者到流分发器
+        // 使用 AsyncIO 类型，WebSocket 发送通过 asio::post 异步执行
         rkvideo_register_stream_consumer(
             "ws_preview",
             &WsPreviewServer::StreamConsumer,
             ws_preview_server_.get(),
-            3  // 队列大小
+            ConsumerType::AsyncIO,  // 网络发送，投递到 IO 线程
+            3
         );
-        LOG_INFO("WebSocket preview consumer registered");
+        LOG_INFO("WebSocket preview consumer registered (AsyncIO mode)");
     }
     
-    LOG_INFO("StreamManager created");
+    LOG_INFO("StreamManager created with optimized consumer types");
 }
 
 StreamManager::~StreamManager() {

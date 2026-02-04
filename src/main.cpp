@@ -8,6 +8,12 @@
  * - 文件录制: /root/record/
  *
  * HTTP API: 见 http.h
+ * 
+ * 线程模型（针对单核 CPU 优化）：
+ * - Main IO Thread: asio 事件循环，处理网络发送
+ * - Video Fetch Thread: 从 VENC 获取编码流
+ * - File I/O Thread: 文件写入（如果启用录制）
+ * - HTTP Thread: HTTP API 服务（cpp-httplib）
  *
  * @author 好软，好温暖
  * @date 2026-01-31
@@ -24,6 +30,7 @@
 #include <unistd.h>
 #include <linux/limits.h>
 #include "common/logger.h"
+#include "common/asio_context.h"
 #include "rkvideo/rkvideo.h"
 #include "thread_stream.h"
 #include "http.h"
@@ -53,6 +60,9 @@ static std::string get_exe_dir() {
 static void signal_handler(int sig) {
     LOG_INFO("Received signal {}, shutting down...", sig);
     g_running = false;
+    
+    // 停止 asio IO 循环
+    aipc::IoContext::Instance().Stop();
 }
 
 // 打印启动信息
@@ -242,11 +252,16 @@ int main(int argc, char* argv[]) {
     print_api_info();
 
     // ========================================================================
-    // 主循环 - 等待退出信号
+    // 主事件循环 - 使用 asio 替代 sleep 循环
     // ========================================================================
-    while (g_running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+    LOG_INFO("Starting main IO event loop (optimized for single-core CPU)...");
+    
+    // 在主线程运行 asio 事件循环
+    // 所有网络消费者（RTSP、WebRTC、WebSocket）的发送操作都会投递到这里执行
+    // 这样可以消除多线程竞争，减少上下文切换
+    aipc::IoContext::Instance().Run();
+    
+    // 事件循环退出后（收到信号）开始清理
 
     // ========================================================================
     // 清理资源

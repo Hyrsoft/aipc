@@ -51,6 +51,7 @@ set(LUCKFOX_MPI_PATH ${CMAKE_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example C
 set(SPDLOG_PATH ${CMAKE_SOURCE_DIR}/thirdparty/spdlog CACHE PATH "spdlog library path")
 set(CPP_HTTPLIB_PATH ${CMAKE_SOURCE_DIR}/thirdparty/cpp-httplib CACHE PATH "cpp-httplib library path")
 set(LIBDATACHANNEL_PATH ${CMAKE_SOURCE_DIR}/thirdparty/libdatachannel CACHE PATH "libdatachannel library path")
+set(ASIO_PATH ${CMAKE_SOURCE_DIR}/thirdparty/asio CACHE PATH "Asio library path")
 
 # ========================================
 # OpenSSL 配置（用于交叉编译）
@@ -76,6 +77,16 @@ add_subdirectory(${SPDLOG_PATH} ${CMAKE_BINARY_DIR}/spdlog)
 # cpp-httplib (header-only)
 add_library(httplib INTERFACE)
 target_include_directories(httplib INTERFACE ${CPP_HTTPLIB_PATH})
+
+# Asio (header-only, standalone mode)
+add_library(asio INTERFACE)
+target_include_directories(asio INTERFACE ${ASIO_PATH}/asio/include)
+target_compile_definitions(asio INTERFACE 
+    ASIO_STANDALONE
+    ASIO_NO_DEPRECATED
+)
+# Asio 需要 pthread
+target_link_libraries(asio INTERFACE pthread)
 
 # libdatachannel (WebRTC 支持)
 # 配置选项

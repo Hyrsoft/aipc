@@ -19,6 +19,7 @@
 #pragma once
 
 #include "common/media_buffer.h"
+#include "stream_dispatcher.h"  // for ConsumerType
 
 // ============================================================================
 // 视频配置参数
@@ -68,10 +69,13 @@ using VideoStreamCallback = void(*)(EncodedStreamPtr stream, void* userData);
  * @param name 消费者名称
  * @param callback 回调函数
  * @param userData 用户数据
- * @param queueSize 队列大小（背压控制）
+ * @param type 消费者类型（AsyncIO=网络发送，Queued=文件写入）
+ * @param queueSize 队列大小（仅对 Queued 类型有效）
  */
 void rkvideo_register_stream_consumer(const char* name, VideoStreamCallback callback, 
-                                       void* userData, int queueSize = 3);
+                                       void* userData, 
+                                       ConsumerType type = ConsumerType::AsyncIO,
+                                       int queueSize = 3);
 
 /**
  * @brief 启动流分发
