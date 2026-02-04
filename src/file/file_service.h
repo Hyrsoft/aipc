@@ -1,13 +1,16 @@
 /**
- * @file thread_file.h
- * @brief 文件保存线程 - 管理视频录制
+ * @file file_service.h
+ * @brief 文件保存服务 - 管理视频录制
  *
- * 独立的线程模块，负责：
+ * 独立的服务模块，负责：
  * - MP4 视频录制的启停控制
  * - 预留控制接口供 WebSocket/HTTP API 调用
  *
+ * 作为视频编码流的消费者之一，使用 Queued 模式处理，
+ * 通过独立线程进行文件写入以避免阻塞主 IO 线程。
+ *
  * @author 好软，好温暖
- * @date 2026-01-31
+ * @date 2026-02-04
  */
 
 #pragma once
@@ -21,10 +24,10 @@
 #include "file/file_saver.h"
 
 // ============================================================================
-// 文件保存线程配置
+// 文件保存服务配置
 // ============================================================================
 
-struct FileThreadConfig {
+struct FileServiceConfig {
     Mp4RecordConfig mp4Config;        ///< MP4 录制配置
 };
 
@@ -39,28 +42,28 @@ enum class FileCommand {
 };
 
 // ============================================================================
-// 文件保存线程类
+// 文件保存服务类
 // ============================================================================
 
 /**
- * @brief 文件保存线程
+ * @brief 文件保存服务
  * 
- * 管理 MP4 录制和 JPEG 拍照的后台线程
+ * 管理 MP4 录制和 JPEG 拍照的后台服务
  * 提供异步命令接口，便于外部控制（如 WebSocket）
  */
-class FileThread {
+class FileService {
 public:
     /**
      * @brief 构造函数
-     * @param config 文件线程配置
+     * @param config 文件服务配置
      */
-    explicit FileThread(const FileThreadConfig& config);
+    explicit FileService(const FileServiceConfig& config);
     
-    ~FileThread();
+    ~FileService();
 
     // 禁用拷贝
-    FileThread(const FileThread&) = delete;
-    FileThread& operator=(const FileThread&) = delete;
+    FileService(const FileService&) = delete;
+    FileService& operator=(const FileService&) = delete;
 
     /**
      * @brief 启动文件保存线程
@@ -124,7 +127,7 @@ public:
     static void StreamConsumer(EncodedStreamPtr stream, void* user_data);
 
 private:
-    FileThreadConfig config_;
+    FileServiceConfig config_;
     
     std::unique_ptr<Mp4Recorder> mp4_recorder_;
     
@@ -132,23 +135,23 @@ private:
 };
 
 // ============================================================================
-// 全局文件线程实例（可选）
+// 全局文件服务实例（可选）
 // ============================================================================
 
 /**
- * @brief 获取全局文件线程实例（懒加载）
+ * @brief 获取全局文件服务实例（懒加载）
  * 
- * @note 如果需要多实例，直接创建 FileThread 对象
+ * @note 如果需要多实例，直接创建 FileService 对象
  */
-FileThread* GetFileThread();
+FileService* GetFileService();
 
 /**
- * @brief 创建全局文件线程实例
+ * @brief 创建全局文件服务实例
  * @param config 配置
  */
-void CreateFileThread(const FileThreadConfig& config);
+void CreateFileService(const FileServiceConfig& config);
 
 /**
- * @brief 销毁全局文件线程实例
+ * @brief 销毁全局文件服务实例
  */
-void DestroyFileThread();
+void DestroyFileService();

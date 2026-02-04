@@ -1,5 +1,5 @@
 /**
- * @file thread_stream.h
+ * @file stream_manager.h
  * @brief 视频流分发管理 - 协调各个流输出路径
  *
  * 负责：
@@ -8,13 +8,13 @@
  * - 提供统一的启动/停止接口
  *
  * 各个消费者的具体实现在各自的模块中：
- * - rtsp/thread_rtsp.h
- * - file/thread_file.h
- * - webrtc/thread_webrtc.h
+ * - rtsp/rtsp_service.h
+ * - file/file_service.h
+ * - webrtc/webrtc_service.h
  * - wspreview/ws_preview.h
  *
  * @author 好软，好温暖
- * @date 2026-01-31
+ * @date 2026-02-04
  */
 
 #pragma once
@@ -22,13 +22,13 @@
 #include <string>
 #include "rtsp/rk_rtsp.h"
 #include "file/file_saver.h"
-#include "webrtc/thread_webrtc.h"
+#include "webrtc/webrtc_service.h"
 #include "wspreview/ws_preview.h"
 
 // 前向声明，避免头文件依赖
-class RtspThread;
-class FileThread;
-class WebRTCThread;
+class RtspService;
+class FileService;
+class WebRTCService;
 class WsPreviewServer;
 
 // ============================================================================
@@ -46,7 +46,7 @@ struct StreamConfig {
     
     RtspConfig rtsp_config;            ///< RTSP 配置
     Mp4RecordConfig mp4_config;        ///< MP4 录制配置
-    WebRTCThreadConfig webrtc_config;  ///< WebRTC 配置
+    WebRTCServiceConfig webrtc_config;  ///< WebRTC 配置
     WsPreviewConfig ws_preview_config; ///< WebSocket 预览配置
 };
 
@@ -93,18 +93,18 @@ public:
     // 访问各个子模块
     // ========================================================================
 
-    RtspThread* GetRtspThread() const { return rtsp_thread_.get(); }
-    FileThread* GetFileThread() const { return file_thread_.get(); }
-    WebRTCThread* GetWebRTCThread() const { return webrtc_thread_.get(); }
+    RtspService* GetRtspService() const { return rtsp_service_.get(); }
+    FileService* GetFileService() const { return file_service_.get(); }
+    WebRTCService* GetWebRTCService() const { return webrtc_service_.get(); }
     WsPreviewServer* GetWsPreviewServer() const { return ws_preview_server_.get(); }
 
 private:
     StreamConfig config_;
     bool running_ = false;
 
-    std::unique_ptr<RtspThread> rtsp_thread_;
-    std::unique_ptr<FileThread> file_thread_;
-    std::unique_ptr<WebRTCThread> webrtc_thread_;
+    std::unique_ptr<RtspService> rtsp_service_;
+    std::unique_ptr<FileService> file_service_;
+    std::unique_ptr<WebRTCService> webrtc_service_;
     std::unique_ptr<WsPreviewServer> ws_preview_server_;
 };
 

@@ -4,12 +4,12 @@
 
 set(RTSP_SOURCES
     rk_rtsp.cpp
-    thread_rtsp.cpp
+    rtsp_service.cpp
 )
 
 set(RTSP_HEADERS
     rk_rtsp.h
-    thread_rtsp.h
+    rtsp_service.h
 )
 
 add_library(rtsp_lib STATIC ${RTSP_SOURCES} ${RTSP_HEADERS})

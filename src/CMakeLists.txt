@@ -20,7 +20,7 @@ add_subdirectory(httpserver)
 
 set(AIPC_SOURCES
     main.cpp
-    thread_stream.cpp
+    stream_manager.cpp
     http.cpp
 )
 

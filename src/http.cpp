@@ -10,9 +10,9 @@
 
 #include "http.h"
 #include "common/logger.h"
-#include "rtsp/thread_rtsp.h"
-#include "file/thread_file.h"
-#include "webrtc/thread_webrtc.h"
+#include "rtsp/rtsp_service.h"
+#include "file/file_service.h"
+#include "webrtc/webrtc_service.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
@@ -114,22 +114,22 @@ void HttpApi::SetupRoutes() {
         
         // RTSP 状态
         data["rtsp"]["enabled"] = stream_config_.enable_rtsp;
-        if (mgr && mgr->GetRtspThread()) {
-            data["rtsp"]["valid"] = mgr->GetRtspThread()->IsValid();
-            data["rtsp"]["running"] = mgr->GetRtspThread()->IsRunning();
+        if (mgr && mgr->GetRtspService()) {
+            data["rtsp"]["valid"] = mgr->GetRtspService()->IsValid();
+            data["rtsp"]["running"] = mgr->GetRtspService()->IsRunning();
         }
         
         // WebRTC 状态
         data["webrtc"]["enabled"] = stream_config_.enable_webrtc;
-        if (mgr && mgr->GetWebRTCThread()) {
-            data["webrtc"]["running"] = mgr->GetWebRTCThread()->IsRunning();
+        if (mgr && mgr->GetWebRTCService()) {
+            data["webrtc"]["running"] = mgr->GetWebRTCService()->IsRunning();
         }
         
         // 录制状态
         data["recording"]["enabled"] = stream_config_.enable_file;
-        if (mgr && mgr->GetFileThread()) {
-            auto* ft = mgr->GetFileThread();
-            data["recording"]["active"] = ft->IsRecording();
+        if (mgr && mgr->GetFileService()) {
+            auto* fs = mgr->GetFileService();
+            data["recording"]["active"] = fs->IsRecording();
             data["recording"]["output_dir"] = stream_config_.mp4_config.outputDir;
         }
         
@@ -141,12 +141,12 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     server_->Get("/api/rtsp/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetRtspThread()) {
+        if (!mgr || !mgr->GetRtspService()) {
             res.set_content(json_response(false, "RTSP not available"), "application/json");
             return;
         }
         
-        auto* rtsp = mgr->GetRtspThread();
+        auto* rtsp = mgr->GetRtspService();
         auto stats = rtsp->GetStats();
         json data;
         data["valid"] = rtsp->IsValid();
@@ -162,12 +162,12 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     server_->Post("/api/rtsp/start", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetRtspThread()) {
+        if (!mgr || !mgr->GetRtspService()) {
             res.set_content(json_response(false, "RTSP not available"), "application/json");
             return;
         }
         
-        auto* rtsp = mgr->GetRtspThread();
+        auto* rtsp = mgr->GetRtspService();
         if (rtsp->IsRunning()) {
             res.set_content(json_response(true, "RTSP already running"), "application/json");
             return;
@@ -182,12 +182,12 @@ void HttpApi::SetupRoutes() {
     
     server_->Post("/api/rtsp/stop", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetRtspThread()) {
+        if (!mgr || !mgr->GetRtspService()) {
             res.set_content(json_response(false, "RTSP not available"), "application/json");
             return;
         }
         
-        auto* rtsp = mgr->GetRtspThread();
+        auto* rtsp = mgr->GetRtspService();
         if (!rtsp->IsRunning()) {
             res.set_content(json_response(true, "RTSP already stopped"), "application/json");
             return;
@@ -202,12 +202,12 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     server_->Post("/api/webrtc/start", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetWebRTCThread()) {
+        if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
         
-        auto* webrtc = mgr->GetWebRTCThread();
+        auto* webrtc = mgr->GetWebRTCService();
         if (webrtc->IsRunning()) {
             res.set_content(json_response(true, "WebRTC already running"), "application/json");
             return;
@@ -222,12 +222,12 @@ void HttpApi::SetupRoutes() {
     
     server_->Post("/api/webrtc/stop", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetWebRTCThread()) {
+        if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
         
-        auto* webrtc = mgr->GetWebRTCThread();
+        auto* webrtc = mgr->GetWebRTCService();
         if (!webrtc->IsRunning()) {
             res.set_content(json_response(true, "WebRTC already stopped"), "application/json");
             return;
@@ -244,12 +244,12 @@ void HttpApi::SetupRoutes() {
     // 创建 Offer - 设备生成 SDP Offer
     server_->Post("/api/webrtc/offer", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetWebRTCThread()) {
+        if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
         
-        auto* webrtc = mgr->GetWebRTCThread();
+        auto* webrtc = mgr->GetWebRTCService();
         std::string offer = webrtc->CreateOfferForHttp();
         
         if (offer.empty()) {
@@ -266,7 +266,7 @@ void HttpApi::SetupRoutes() {
     // 设置 Answer - 接收客户端的 SDP Answer
     server_->Post("/api/webrtc/answer", [](const HttpRequest& req, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetWebRTCThread()) {
+        if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
@@ -280,7 +280,7 @@ void HttpApi::SetupRoutes() {
                 return;
             }
             
-            auto* webrtc = mgr->GetWebRTCThread();
+            auto* webrtc = mgr->GetWebRTCService();
             if (webrtc->SetAnswerFromHttp(sdp)) {
                 res.set_content(json_response(true, "Answer set"), "application/json");
             } else {
@@ -294,7 +294,7 @@ void HttpApi::SetupRoutes() {
     // 添加 ICE 候选
     server_->Post("/api/webrtc/ice", [](const HttpRequest& req, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetWebRTCThread()) {
+        if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
@@ -310,7 +310,7 @@ void HttpApi::SetupRoutes() {
                 return;
             }
             
-            auto* webrtc = mgr->GetWebRTCThread();
+            auto* webrtc = mgr->GetWebRTCService();
             if (webrtc->AddIceCandidateFromHttp(candidate, mid)) {
                 res.set_content(json_response(true, "ICE candidate added"), "application/json");
             } else {
@@ -324,12 +324,12 @@ void HttpApi::SetupRoutes() {
     // 获取本地 ICE 候选列表
     server_->Get("/api/webrtc/ice", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetWebRTCThread()) {
+        if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
         
-        auto* webrtc = mgr->GetWebRTCThread();
+        auto* webrtc = mgr->GetWebRTCService();
         auto candidates = webrtc->GetLocalIceCandidates();
         
         json data = json::array();
@@ -345,48 +345,48 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     server_->Get("/api/record/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetFileThread()) {
+        if (!mgr || !mgr->GetFileService()) {
             res.set_content(json_response(false, "Recording not available"), "application/json");
             return;
         }
         
-        auto* ft = mgr->GetFileThread();
+        auto* fs = mgr->GetFileService();
         json data;
-        data["recording"] = ft->IsRecording();
+        data["recording"] = fs->IsRecording();
         res.set_content(json_response(true, "ok", data), "application/json");
     });
     
     server_->Post("/api/record/start", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetFileThread()) {
+        if (!mgr || !mgr->GetFileService()) {
             res.set_content(json_response(false, "Recording not available"), "application/json");
             return;
         }
         
-        auto* ft = mgr->GetFileThread();
-        if (ft->IsRecording()) {
+        auto* fs = mgr->GetFileService();
+        if (fs->IsRecording()) {
             res.set_content(json_response(true, "Recording already in progress"), "application/json");
             return;
         }
         
-        ft->StartRecording();
+        fs->StartRecording();
         res.set_content(json_response(true, "Recording started"), "application/json");
     });
     
     server_->Post("/api/record/stop", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
-        if (!mgr || !mgr->GetFileThread()) {
+        if (!mgr || !mgr->GetFileService()) {
             res.set_content(json_response(false, "Recording not available"), "application/json");
             return;
         }
         
-        auto* ft = mgr->GetFileThread();
-        if (!ft->IsRecording()) {
+        auto* fs = mgr->GetFileService();
+        if (!fs->IsRecording()) {
             res.set_content(json_response(true, "Recording already stopped"), "application/json");
             return;
         }
         
-        ft->StopRecording();
+        fs->StopRecording();
         res.set_content(json_response(true, "Recording stopped"), "application/json");
     });
 

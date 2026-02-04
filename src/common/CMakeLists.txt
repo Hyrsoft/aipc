@@ -14,4 +14,5 @@ target_include_directories(common
 target_link_libraries(common
     INTERFACE
         spdlog::spdlog
+        asio
 )

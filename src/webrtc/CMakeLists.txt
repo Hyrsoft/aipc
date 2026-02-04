@@ -5,13 +5,13 @@
 set(WEBRTC_SOURCES
     signaling.cpp
     webrtc.cpp
-    thread_webrtc.cpp
+    webrtc_service.cpp
 )
 
 set(WEBRTC_HEADERS
     signaling.h
     webrtc.h
-    thread_webrtc.h
+    webrtc_service.h
 )
 
 add_library(webrtc_lib STATIC ${WEBRTC_SOURCES} ${WEBRTC_HEADERS})

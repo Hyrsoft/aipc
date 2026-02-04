@@ -20,7 +20,7 @@
 #include <memory>
 #include <string>
 #include "httpserver/http_server.h"
-#include "thread_stream.h"
+#include "stream_manager.h"
 
 // ============================================================================
 // HTTP API 配置

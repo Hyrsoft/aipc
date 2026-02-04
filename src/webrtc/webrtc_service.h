@@ -1,15 +1,19 @@
 /**
- * @file thread_webrtc.h
- * @brief WebRTC 推流线程 - 管理 WebRTC 连接和推流逻辑
+ * @file webrtc_service.h
+ * @brief WebRTC 推流服务 - 管理 WebRTC 连接和推流逻辑
  *
- * 与 RTSP 和 File 模块并列，作为视频流的第三条推送路径
+ * 与 RTSP 和 File 模块并列，作为视频流的第三条推送路径。
+ * 
  * 提供：
  * - WebRTC 连接管理
  * - 视频流推送到浏览器
  * - 与 StreamDispatcher 集成
  *
+ * 作为视频编码流的消费者之一，使用 AsyncIO 模式，
+ * 网络发送通过 asio::post 异步执行。
+ *
  * @author 好软，好温暖
- * @date 2026-01-31
+ * @date 2026-02-04
  */
 
 #pragma once
@@ -23,10 +27,10 @@
 #include "common/media_buffer.h"
 
 // ============================================================================
-// WebRTC 线程配置
+// WebRTC 服务配置
 // ============================================================================
 
-struct WebRTCThreadConfig {
+struct WebRTCServiceConfig {
     // 信令配置
     std::string device_id = "camera_000001";      ///< 设备 ID
     std::string signaling_url;                     ///< 信令服务器地址
@@ -36,28 +40,28 @@ struct WebRTCThreadConfig {
 };
 
 // ============================================================================
-// WebRTC 线程类
+// WebRTC 服务类
 // ============================================================================
 
 /**
- * @brief WebRTC 推流线程
+ * @brief WebRTC 推流服务
  * 
  * 管理 WebRTC 连接和推流的生命周期
  * RAII 设计：构造时初始化，析构时清理
  */
-class WebRTCThread {
+class WebRTCService {
 public:
     /**
      * @brief 构造函数
-     * @param config WebRTC 线程配置
+     * @param config WebRTC 服务配置
      */
-    explicit WebRTCThread(const WebRTCThreadConfig& config);
+    explicit WebRTCService(const WebRTCServiceConfig& config);
     
-    ~WebRTCThread();
+    ~WebRTCService();
 
     // 禁用拷贝
-    WebRTCThread(const WebRTCThread&) = delete;
-    WebRTCThread& operator=(const WebRTCThread&) = delete;
+    WebRTCService(const WebRTCService&) = delete;
+    WebRTCService& operator=(const WebRTCService&) = delete;
 
     /**
      * @brief 启动 WebRTC 服务
@@ -146,7 +150,7 @@ public:
     std::vector<std::pair<std::string, std::string>> GetLocalIceCandidates();
 
 private:
-    WebRTCThreadConfig config_;
+    WebRTCServiceConfig config_;
     bool valid_ = false;
     
     std::shared_ptr<SignalingClient> signaling_;
@@ -158,18 +162,18 @@ private:
 // ============================================================================
 
 /**
- * @brief 获取全局 WebRTC 线程实例
+ * @brief 获取全局 WebRTC 服务实例
  */
-WebRTCThread* GetWebRTCThread();
+WebRTCService* GetWebRTCService();
 
 /**
- * @brief 创建全局 WebRTC 线程实例
- * @param config WebRTC 线程配置
+ * @brief 创建全局 WebRTC 服务实例
+ * @param config WebRTC 服务配置
  */
-void CreateWebRTCThread(const WebRTCThreadConfig& config);
+void CreateWebRTCService(const WebRTCServiceConfig& config);
 
 /**
- * @brief 销毁全局 WebRTC 线程实例
+ * @brief 销毁全局 WebRTC 服务实例
  */
-void DestroyWebRTCThread();
+void DestroyWebRTCService();
 
