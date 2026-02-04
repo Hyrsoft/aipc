@@ -7,12 +7,12 @@ set(BR_SYSROOT "$ENV{HOME}/projects/luckfox-pico/sysdrv/source/buildroot/buildro
 
 set(FILE_SOURCES
     file_saver.cpp
-    thread_file.cpp
+    file_service.cpp
 )
 
 set(FILE_HEADERS
     file_saver.h
-    thread_file.h
+    file_service.h
 )
 
 add_library(file_lib STATIC ${FILE_SOURCES} ${FILE_HEADERS})

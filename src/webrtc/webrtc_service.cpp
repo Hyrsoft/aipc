@@ -1,41 +1,41 @@
 /**
- * @file thread_webrtc.cpp
- * @brief WebRTC 推流线程实现
+ * @file webrtc_service.cpp
+ * @brief WebRTC 推流服务实现
  *
  * @author 好软，好温暖
- * @date 2026-01-31
+ * @date 2026-02-04
  */
 
-#include "thread_webrtc.h"
+#include "webrtc_service.h"
 #include "common/logger.h"
 
 #undef LOG_TAG
-#define LOG_TAG "webrtc_thread"
+#define LOG_TAG "webrtc_service"
 
 // ============================================================================
 // 全局实例
 // ============================================================================
 
-static std::unique_ptr<WebRTCThread> g_webrtc_thread;
+static std::unique_ptr<WebRTCService> g_webrtc_service;
 
 // ============================================================================
-// WebRTCThread 实现
+// WebRTCService 实现
 // ============================================================================
 
-WebRTCThread::WebRTCThread(const WebRTCThreadConfig& config)
+WebRTCService::WebRTCService(const WebRTCServiceConfig& config)
     : config_(config)
 {
-    LOG_INFO("WebRTC 线程创建: device_id={}", config_.device_id);
+    LOG_INFO("WebRTC 服务创建: device_id={}", config_.device_id);
 }
 
-WebRTCThread::~WebRTCThread() {
+WebRTCService::~WebRTCService() {
     Stop();
-    LOG_INFO("WebRTC 线程销毁");
+    LOG_INFO("WebRTC 服务销毁");
 }
 
-bool WebRTCThread::Start() {
+bool WebRTCService::Start() {
     if (valid_) {
-        LOG_WARN("WebRTC 线程已启动");
+        LOG_WARN("WebRTC 服务已启动");
         return true;
     }
 
@@ -75,11 +75,11 @@ bool WebRTCThread::Start() {
     });
 
     valid_ = true;
-    LOG_INFO("WebRTC 线程启动成功");
+    LOG_INFO("WebRTC 服务启动成功");
     return true;
 }
 
-void WebRTCThread::Stop() {
+void WebRTCService::Stop() {
     if (!valid_) {
         return;
     }
@@ -96,29 +96,29 @@ void WebRTCThread::Stop() {
         signaling_.reset();
     }
 
-    LOG_INFO("WebRTC 线程已停止");
+    LOG_INFO("WebRTC 服务已停止");
 }
 
-bool WebRTCThread::IsConnected() const {
+bool WebRTCService::IsConnected() const {
     return webrtc_ && webrtc_->IsConnected();
 }
 
-WebRTCState WebRTCThread::GetState() const {
+WebRTCState WebRTCService::GetState() const {
     return webrtc_ ? webrtc_->GetState() : WebRTCState::kIdle;
 }
 
-WebRTCStats WebRTCThread::GetStats() const {
+WebRTCStats WebRTCService::GetStats() const {
     return webrtc_ ? webrtc_->GetStats() : WebRTCStats{};
 }
 
-void WebRTCThread::StreamConsumer(EncodedStreamPtr stream, void* user_data) {
-    auto* self = static_cast<WebRTCThread*>(user_data);
+void WebRTCService::StreamConsumer(EncodedStreamPtr stream, void* user_data) {
+    auto* self = static_cast<WebRTCService*>(user_data);
     if (self) {
         self->SendVideoFrame(stream);
     }
 }
 
-void WebRTCThread::SendVideoFrame(const EncodedStreamPtr& stream) {
+void WebRTCService::SendVideoFrame(const EncodedStreamPtr& stream) {
     if (!IsConnected() || !stream || !stream->pstPack) {
         return;
     }
@@ -134,13 +134,13 @@ void WebRTCThread::SendVideoFrame(const EncodedStreamPtr& stream) {
     }
 }
 
-void WebRTCThread::OnStateChanged(StateCallback callback) {
+void WebRTCService::OnStateChanged(StateCallback callback) {
     if (webrtc_) {
         webrtc_->OnStateChanged(std::move(callback));
     }
 }
 
-void WebRTCThread::OnError(ErrorCallback callback) {
+void WebRTCService::OnError(ErrorCallback callback) {
     if (webrtc_) {
         webrtc_->OnError(std::move(callback));
     }
@@ -150,7 +150,7 @@ void WebRTCThread::OnError(ErrorCallback callback) {
 // HTTP 信令模式实现
 // ============================================================================
 
-std::string WebRTCThread::CreateOfferForHttp() {
+std::string WebRTCService::CreateOfferForHttp() {
     if (!webrtc_) {
         LOG_ERROR("WebRTC 系统未初始化");
         return "";
@@ -158,7 +158,7 @@ std::string WebRTCThread::CreateOfferForHttp() {
     return webrtc_->CreateOfferForHttp();
 }
 
-bool WebRTCThread::SetAnswerFromHttp(const std::string& sdp) {
+bool WebRTCService::SetAnswerFromHttp(const std::string& sdp) {
     if (!webrtc_) {
         LOG_ERROR("WebRTC 系统未初始化");
         return false;
@@ -166,7 +166,7 @@ bool WebRTCThread::SetAnswerFromHttp(const std::string& sdp) {
     return webrtc_->SetAnswerFromHttp(sdp);
 }
 
-bool WebRTCThread::AddIceCandidateFromHttp(const std::string& candidate, const std::string& mid) {
+bool WebRTCService::AddIceCandidateFromHttp(const std::string& candidate, const std::string& mid) {
     if (!webrtc_) {
         LOG_ERROR("WebRTC 系统未初始化");
         return false;
@@ -174,7 +174,7 @@ bool WebRTCThread::AddIceCandidateFromHttp(const std::string& candidate, const s
     return webrtc_->AddIceCandidateFromHttp(candidate, mid);
 }
 
-std::vector<std::pair<std::string, std::string>> WebRTCThread::GetLocalIceCandidates() {
+std::vector<std::pair<std::string, std::string>> WebRTCService::GetLocalIceCandidates() {
     if (!webrtc_) {
         return {};
     }
@@ -185,19 +185,19 @@ std::vector<std::pair<std::string, std::string>> WebRTCThread::GetLocalIceCandid
 // 全局实例管理实现
 // ============================================================================
 
-WebRTCThread* GetWebRTCThread() {
-    return g_webrtc_thread.get();
+WebRTCService* GetWebRTCService() {
+    return g_webrtc_service.get();
 }
 
-void CreateWebRTCThread(const WebRTCThreadConfig& config) {
-    if (g_webrtc_thread) {
-        LOG_WARN("WebRTC 线程实例已存在");
+void CreateWebRTCService(const WebRTCServiceConfig& config) {
+    if (g_webrtc_service) {
+        LOG_WARN("WebRTC 服务实例已存在");
         return;
     }
-    g_webrtc_thread = std::make_unique<WebRTCThread>(config);
+    g_webrtc_service = std::make_unique<WebRTCService>(config);
 }
 
-void DestroyWebRTCThread() {
-    g_webrtc_thread.reset();
+void DestroyWebRTCService() {
+    g_webrtc_service.reset();
 }
 

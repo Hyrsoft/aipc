@@ -37,8 +37,6 @@
 #include <atomic>
 #include <functional>
 
-namespace aipc {
-
 /**
  * @brief 全局 IO Context 单例
  * 
@@ -184,5 +182,3 @@ template<typename Handler>
 inline void PostToIo(Handler&& handler) {
     IoContext::Instance().Post(std::forward<Handler>(handler));
 }
-
-}  // namespace aipc

@@ -32,7 +32,7 @@
 #include "common/logger.h"
 #include "common/asio_context.h"
 #include "rkvideo/rkvideo.h"
-#include "thread_stream.h"
+#include "stream_manager.h"
 #include "http.h"
 
 // 全局退出标志
@@ -62,7 +62,7 @@ static void signal_handler(int sig) {
     g_running = false;
     
     // 停止 asio IO 循环
-    aipc::IoContext::Instance().Stop();
+    IoContext::Instance().Stop();
 }
 
 // 打印启动信息
@@ -259,7 +259,7 @@ int main(int argc, char* argv[]) {
     // 在主线程运行 asio 事件循环
     // 所有网络消费者（RTSP、WebRTC、WebSocket）的发送操作都会投递到这里执行
     // 这样可以消除多线程竞争，减少上下文切换
-    aipc::IoContext::Instance().Run();
+    IoContext::Instance().Run();
     
     // 事件循环退出后（收到信号）开始清理
 

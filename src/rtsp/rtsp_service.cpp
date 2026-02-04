@@ -1,23 +1,23 @@
 /**
- * @file thread_rtsp.cpp
- * @brief RTSP 推流线程实现
+ * @file rtsp_service.cpp
+ * @brief RTSP 推流服务实现
  *
  * @author 好软，好温暖
- * @date 2026-01-31
+ * @date 2026-02-04
  */
 
-#define LOG_TAG "thread_rtsp"
+#define LOG_TAG "rtsp_service"
 
-#include "thread_rtsp.h"
+#include "rtsp_service.h"
 #include "common/logger.h"
 
 #include <memory>
 
 // ============================================================================
-// RtspThread 实现
+// RtspService 实现
 // ============================================================================
 
-RtspThread::RtspThread(const RtspConfig& config)
+RtspService::RtspService(const RtspConfig& config)
     : config_(config) {
     LOG_INFO("Initializing RTSP streaming...");
     
@@ -31,7 +31,7 @@ RtspThread::RtspThread(const RtspConfig& config)
     LOG_INFO("RTSP streaming initialized, URL: {}", GetRtspServer().GetUrl());
 }
 
-RtspThread::~RtspThread() {
+RtspService::~RtspService() {
     if (valid_) {
         LOG_INFO("Deinitializing RTSP streaming...");
         rtsp_server_deinit();
@@ -39,7 +39,7 @@ RtspThread::~RtspThread() {
     }
 }
 
-bool RtspThread::Start() {
+bool RtspService::Start() {
     if (!valid_) {
         LOG_ERROR("RTSP server not initialized, cannot start");
         return false;
@@ -55,7 +55,7 @@ bool RtspThread::Start() {
     return true;
 }
 
-void RtspThread::Stop() {
+void RtspService::Stop() {
     if (!running_) {
         return;
     }
@@ -64,16 +64,16 @@ void RtspThread::Stop() {
     LOG_INFO("RTSP streaming stopped");
 }
 
-std::string RtspThread::GetUrl() const {
+std::string RtspService::GetUrl() const {
     return GetRtspServer().GetUrl();
 }
 
-RtspServer::Stats RtspThread::GetStats() const {
+RtspServer::Stats RtspService::GetStats() const {
     return GetRtspServer().GetStats();
 }
 
-void RtspThread::StreamConsumer(EncodedStreamPtr stream, void* user_data) {
-    auto* self = static_cast<RtspThread*>(user_data);
+void RtspService::StreamConsumer(EncodedStreamPtr stream, void* user_data) {
+    auto* self = static_cast<RtspService*>(user_data);
     
     // 只有在运行状态下才推送帧
     if (self && self->running_) {
@@ -85,22 +85,22 @@ void RtspThread::StreamConsumer(EncodedStreamPtr stream, void* user_data) {
 // 全局实例管理
 // ============================================================================
 
-static std::unique_ptr<RtspThread> g_rtsp_thread;
+static std::unique_ptr<RtspService> g_rtsp_service;
 
-RtspThread* GetRtspThread() {
-    return g_rtsp_thread.get();
+RtspService* GetRtspService() {
+    return g_rtsp_service.get();
 }
 
-void CreateRtspThread(const RtspConfig& config) {
-    if (g_rtsp_thread) {
-        LOG_WARN("Global RtspThread already exists, destroying old one");
-        DestroyRtspThread();
+void CreateRtspService(const RtspConfig& config) {
+    if (g_rtsp_service) {
+        LOG_WARN("Global RtspService already exists, destroying old one");
+        DestroyRtspService();
     }
     
-    g_rtsp_thread = std::make_unique<RtspThread>(config);
+    g_rtsp_service = std::make_unique<RtspService>(config);
 }
 
-void DestroyRtspThread() {
-    g_rtsp_thread.reset();
+void DestroyRtspService() {
+    g_rtsp_service.reset();
 }
 

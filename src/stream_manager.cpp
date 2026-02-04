@@ -1,19 +1,19 @@
 /**
- * @file thread_stream.cpp
+ * @file stream_manager.cpp
  * @brief 视频流分发管理实现
  *
  * @author 好软，好温暖
- * @date 2026-01-31
+ * @date 2026-02-04
  */
 
 #define LOG_TAG "stream"
 
-#include "thread_stream.h"
+#include "stream_manager.h"
 #include "common/logger.h"
 #include "rkvideo/rkvideo.h"
-#include "rtsp/thread_rtsp.h"
-#include "file/thread_file.h"
-#include "webrtc/thread_webrtc.h"
+#include "rtsp/rtsp_service.h"
+#include "file/file_service.h"
+#include "webrtc/webrtc_service.h"
 #include "wspreview/ws_preview.h"
 
 #include <memory>
@@ -27,56 +27,56 @@ StreamManager::StreamManager(const StreamConfig& config)
     
     LOG_INFO("Creating StreamManager (optimized for single-core CPU)...");
     
-    // 创建 RTSP 线程（如果启用）
+    // 创建 RTSP 服务（如果启用）
     if (config_.enable_rtsp) {
-        rtsp_thread_ = std::make_unique<RtspThread>(config_.rtsp_config);
+        rtsp_service_ = std::make_unique<RtspService>(config_.rtsp_config);
         
-        if (rtsp_thread_->IsValid()) {
+        if (rtsp_service_->IsValid()) {
             // 注册 RTSP 消费者到流分发器
             // 使用 AsyncIO 类型，网络发送通过 asio::post 异步执行
             rkvideo_register_stream_consumer(
                 "rtsp",
-                &RtspThread::StreamConsumer,
-                rtsp_thread_.get(),
+                &RtspService::StreamConsumer,
+                rtsp_service_.get(),
                 ConsumerType::AsyncIO,  // 网络发送，投递到 IO 线程
                 3
             );
             LOG_INFO("RTSP consumer registered (AsyncIO mode)");
         } else {
-            LOG_ERROR("Failed to create RTSP thread");
-            rtsp_thread_.reset();
+            LOG_ERROR("Failed to create RTSP service");
+            rtsp_service_.reset();
         }
     }
     
-    // 创建文件保存线程（如果启用）
+    // 创建文件保存服务（如果启用）
     if (config_.enable_file) {
-        FileThreadConfig file_config;
+        FileServiceConfig file_config;
         file_config.mp4Config = config_.mp4_config;
         
-        file_thread_ = std::make_unique<FileThread>(file_config);
+        file_service_ = std::make_unique<FileService>(file_config);
         
         // 注册文件消费者到流分发器
         // 使用 Queued 类型，文件写入需要独立线程（磁盘 I/O 延迟不可控）
         rkvideo_register_stream_consumer(
             "file",
-            &FileThread::StreamConsumer,
-            file_thread_.get(),
+            &FileService::StreamConsumer,
+            file_service_.get(),
             ConsumerType::Queued,  // 文件写入，使用独立队列和线程
             5  // 队列稍大，避免录制丢帧
         );
         LOG_INFO("File consumer registered (Queued mode)");
     }
     
-    // 创建 WebRTC 线程（如果启用）
+    // 创建 WebRTC 服务（如果启用）
     if (config_.enable_webrtc) {
-        webrtc_thread_ = std::make_unique<WebRTCThread>(config_.webrtc_config);
+        webrtc_service_ = std::make_unique<WebRTCService>(config_.webrtc_config);
         
-        // WebRTC 线程需要在 Start() 中才会连接信令服务器
+        // WebRTC 服务需要在 Start() 中才会连接信令服务器
         // 使用 AsyncIO 类型，网络发送通过 asio::post 异步执行
         rkvideo_register_stream_consumer(
             "webrtc",
-            &WebRTCThread::StreamConsumer,
-            webrtc_thread_.get(),
+            &WebRTCService::StreamConsumer,
+            webrtc_service_.get(),
             ConsumerType::AsyncIO,  // 网络发送，投递到 IO 线程
             3
         );
@@ -115,9 +115,9 @@ void StreamManager::Start() {
     
     LOG_INFO("Starting stream outputs...");
     
-    // 启动文件线程（如果存在）
-    if (file_thread_) {
-        file_thread_->Start();
+    // 启动文件服务（如果存在）
+    if (file_service_) {
+        file_service_->Start();
     }
     
     // 启动 WebSocket 预览服务器（如果存在）
@@ -145,19 +145,19 @@ void StreamManager::Stop() {
     // 停止视频流分发器
     rkvideo_stop_streaming();
     
-    // 停止 RTSP 线程
-    if (rtsp_thread_) {
-        rtsp_thread_->Stop();
+    // 停止 RTSP 服务
+    if (rtsp_service_) {
+        rtsp_service_->Stop();
     }
     
-    // 停止文件线程
-    if (file_thread_) {
-        file_thread_->Stop();
+    // 停止文件服务
+    if (file_service_) {
+        file_service_->Stop();
     }
     
-    // 停止 WebRTC 线程
-    if (webrtc_thread_) {
-        webrtc_thread_->Stop();
+    // 停止 WebRTC 服务
+    if (webrtc_service_) {
+        webrtc_service_->Stop();
     }
     
     // 停止 WebSocket 预览服务器

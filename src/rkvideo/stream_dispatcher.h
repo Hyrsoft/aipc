@@ -1,15 +1,13 @@
 /**
  * @file stream_dispatcher.h
- * @brief 视频流分发器 - 单核优化版本
- *
- * 针对 RV1106 单核 CPU 优化的视频流分发架构。
+ * @brief 视频流分发器 
  * 
  * 设计原则：
  * - 直接分发：在 Fetch 线程中直接调用消费者回调，消除中间队列和线程
  * - 零拷贝共享：所有消费者共享同一个 VENC buffer（shared_ptr 管理）
  * - 异步投递：网络发送等耗时操作通过 asio::post 投递到 IO 线程
  *
- * 线程模型（优化后）：
+ * 线程模型：
  *   [Hardware VENC]
  *         |
  *         v
@@ -25,11 +23,6 @@
  *         v
  *   [Main IO Thread] ← asio 事件循环，处理网络发送
  *
- * 相比之前的优化：
- * - 消除 4 个分发线程（每个消费者一个）
- * - 消除 4 个阻塞队列
- * - 减少上下文切换开销
- * - 降低锁竞争
  *
  * @author 好软，好温暖
  * @date 2026-02-04
@@ -67,7 +60,7 @@ enum class ConsumerType {
 };
 
 /**
- * @brief 视频流分发器（单核优化版）
+ * @brief 视频流分发器
  * 
  * 从 VENC 获取编码流，直接分发给消费者。
  * 
@@ -285,7 +278,7 @@ private:
                 case ConsumerType::AsyncIO:
                     // 投递到 IO 线程执行（网络发送）
                     // 捕获 stream 的拷贝，增加引用计数
-                    aipc::PostToIo([callback = c.callback, stream]() {
+                    PostToIo([callback = c.callback, stream]() {
                         callback(stream);
                     });
                     break;

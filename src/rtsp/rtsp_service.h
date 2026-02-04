@@ -1,9 +1,12 @@
 /**
- * @file thread_rtsp.h
- * @brief RTSP 推流线程 - 管理 RTSP 服务器和推流逻辑
+ * @file rtsp_service.h
+ * @brief RTSP 推流服务 - 管理 RTSP 服务器和推流逻辑
+ *
+ * 提供 RTSP 视频流推送功能，与 StreamDispatcher 集成。
+ * 作为视频编码流的消费者之一，接收 H.264/H.265 编码数据并通过 RTSP 协议推送。
  *
  * @author 好软，好温暖
- * @date 2026-01-31
+ * @date 2026-02-04
  */
 
 #pragma once
@@ -16,28 +19,28 @@
 #include "rk_rtsp.h"
 
 // ============================================================================
-// RTSP 线程类
+// RTSP 服务类
 // ============================================================================
 
 /**
- * @brief RTSP 推流线程
+ * @brief RTSP 推流服务
  * 
  * 管理 RTSP 服务器的生命周期和推流逻辑
  * RAII 设计：构造时初始化服务器，析构时清理
  */
-class RtspThread {
+class RtspService {
 public:
     /**
      * @brief 构造函数 - 初始化 RTSP 服务器
      * @param config RTSP 配置
      */
-    explicit RtspThread(const RtspConfig& config = RtspConfig{});
+    explicit RtspService(const RtspConfig& config = RtspConfig{});
     
-    ~RtspThread();
+    ~RtspService();
 
     // 禁用拷贝
-    RtspThread(const RtspThread&) = delete;
-    RtspThread& operator=(const RtspThread&) = delete;
+    RtspService(const RtspService&) = delete;
+    RtspService& operator=(const RtspService&) = delete;
 
     /**
      * @brief 检查是否初始化成功
@@ -87,18 +90,18 @@ private:
 // ============================================================================
 
 /**
- * @brief 获取全局 RTSP 线程实例
+ * @brief 获取全局 RTSP 服务实例
  */
-RtspThread* GetRtspThread();
+RtspService* GetRtspService();
 
 /**
- * @brief 创建全局 RTSP 线程实例
+ * @brief 创建全局 RTSP 服务实例
  * @param config RTSP 配置
  */
-void CreateRtspThread(const RtspConfig& config);
+void CreateRtspService(const RtspConfig& config);
 
 /**
- * @brief 销毁全局 RTSP 线程实例
+ * @brief 销毁全局 RTSP 服务实例
  */
-void DestroyRtspThread();
+void DestroyRtspService();
 
