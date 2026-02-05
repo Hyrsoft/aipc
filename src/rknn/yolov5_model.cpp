@@ -156,6 +156,13 @@ int YoloV5Model::Init(const ModelConfig& config) {
         return -1;
     }
     
+    // 查询 SDK 版本信息
+    rknn_sdk_version sdk_ver;
+    ret = rknn_query(ctx_, RKNN_QUERY_SDK_VERSION, &sdk_ver, sizeof(sdk_ver));
+    if (ret == RKNN_SUCC) {
+        LOG_INFO("RKNN SDK: api={}, driver={}", sdk_ver.api_version, sdk_ver.drv_version);
+    }
+    
     // 2. 查询输入输出数量
     ret = rknn_query(ctx_, RKNN_QUERY_IN_OUT_NUM, &io_num_, sizeof(io_num_));
     if (ret != RKNN_SUCC) {

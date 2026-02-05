@@ -5,6 +5,8 @@
 
 set(RKNN_SOURCES
     ai_engine.cpp
+    ai_service.cpp
+    image_utils.cpp
     yolov5_model.cpp
     retinaface_model.cpp
 )
@@ -13,6 +15,8 @@ set(RKNN_HEADERS
     ai_types.h
     ai_model_base.h
     ai_engine.h
+    ai_service.h
+    image_utils.h
     yolov5_model.h
     retinaface_model.h
 )
@@ -23,6 +27,14 @@ set(RKNN_HEADERS
 
 # RKNN 头文件目录（包含 rknn_api.h, yolov5.h, postprocess.h 等）
 set(RKNN_INCLUDE_DIR ${LUCKFOX_MPI_INCLUDE_DIR}/rknn CACHE PATH "RKNN include directory")
+
+# RGA 头文件目录
+set(RGA_INCLUDE_DIR ${LUCKFOX_MPI_INCLUDE_DIR}/librga CACHE PATH "RGA include directory")
+
+# OpenCV-mobile 配置
+set(OPENCV_MOBILE_DIR ${CMAKE_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example)
+set(OPENCV_INCLUDE_DIR ${OPENCV_MOBILE_DIR}/include)
+set(OPENCV_LIB_DIR ${OPENCV_MOBILE_DIR}/lib/uclibc/lib)
 
 # RKNN 运行时库（librknnmrt）
 set(RKNN_LIBS
@@ -42,18 +54,24 @@ target_include_directories(rknn_lib
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${LUCKFOX_MPI_INCLUDE_DIR}          # 包含 rk_mpi_*.h
         ${RKNN_INCLUDE_DIR}                  # 包含 rknn_api.h 等
+        ${RGA_INCLUDE_DIR}                   # 包含 im2d.hpp 等
+        ${OPENCV_INCLUDE_DIR}                # OpenCV-mobile 头文件
 )
 
 # 链接库目录
 target_link_directories(rknn_lib
     PUBLIC
         ${LUCKFOX_MPI_LIB_DIR}
+        ${OPENCV_LIB_DIR}
 )
 
 # 链接依赖库
 target_link_libraries(rknn_lib
     PUBLIC
         ${RKNN_LIBS}
+        rga
+        opencv_imgproc
+        opencv_core
     PRIVATE
         common
         spdlog::spdlog

@@ -80,6 +80,16 @@ public:
     int SwitchModel(ModelType type, const ModelConfig& config);
 
     /**
+     * @brief 切换模型（简化版本）
+     *
+     * 使用已设置的模型目录自动构建模型路径
+     *
+     * @param type 目标模型类型
+     * @return 0 成功，负值失败
+     */
+    int SwitchModel(ModelType type);
+
+    /**
      * @brief 卸载当前模型
      *
      * 释放模型资源，引擎进入空闲状态
@@ -155,6 +165,18 @@ public:
     void SetVpssReconfigureCallback(VpssReconfigureCallback callback);
 
     /**
+     * @brief 设置模型目录
+     *
+     * @param dir 模型文件所在目录路径
+     */
+    void SetModelDir(const std::string& dir);
+
+    /**
+     * @brief 获取模型目录
+     */
+    const std::string& GetModelDir() const;
+
+    /**
      * @brief 获取模型需要的输入尺寸
      *
      * @param[out] width 输入宽度
@@ -183,6 +205,9 @@ private:
     /// 上一次的模型输入尺寸（用于检测尺寸变化）
     int last_input_width_ = 0;
     int last_input_height_ = 0;
+    
+    /// 模型文件目录
+    std::string model_dir_;
 };
 
 }  // namespace rknn

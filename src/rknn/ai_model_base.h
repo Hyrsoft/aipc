@@ -179,6 +179,6 @@ protected:
  * @param type 模型类型
  * @return 模型实例的智能指针，失败返回 nullptr
  */
-std::unique_ptr<AIModelBase> CreateModel(ModelType type);
+std::unique_ptr<AIModelBase> create_model(ModelType type);
 
 }  // namespace rknn

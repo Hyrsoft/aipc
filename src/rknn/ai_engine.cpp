@@ -19,7 +19,7 @@ namespace rknn {
 // 工厂函数实现
 // ============================================================================
 
-std::unique_ptr<AIModelBase> CreateModel(ModelType type) {
+std::unique_ptr<AIModelBase> create_model(ModelType type) {
     switch (type) {
         case ModelType::kYoloV5:
             return std::make_unique<YoloV5Model>();
@@ -73,7 +73,7 @@ int AIEngine::SwitchModel(ModelType type, const ModelConfig& config) {
     }
     
     // 4. 创建新模型
-    model_ = CreateModel(type);
+    model_ = create_model(type);
     if (!model_) {
         LOG_ERROR("Failed to create model: {}", ModelTypeToString(type));
         return -1;
@@ -232,6 +232,50 @@ void AIEngine::SetVpssReconfigureCallback(VpssReconfigureCallback callback) {
     std::lock_guard<std::mutex> lock(mutex_);
     vpss_callback_ = std::move(callback);
     LOG_DEBUG("VPSS reconfigure callback set");
+}
+
+void AIEngine::SetModelDir(const std::string& dir) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    model_dir_ = dir;
+    LOG_INFO("Model directory set: {}", model_dir_);
+}
+
+const std::string& AIEngine::GetModelDir() const {
+    return model_dir_;
+}
+
+int AIEngine::SwitchModel(ModelType type) {
+    // 如果是卸载模型，直接调用完整版本
+    if (type == ModelType::kNone) {
+        return SwitchModel(type, ModelConfig{});
+    }
+    
+    // 构建模型配置
+    ModelConfig config;
+    
+    switch (type) {
+        case ModelType::kYoloV5:
+            config.model_path = model_dir_ + "/yolov5.rknn";
+            config.labels_path = model_dir_ + "/coco_80_labels_list.txt";
+            config.nms_threshold = 0.45f;
+            config.conf_threshold = 0.25f;
+            break;
+            
+        case ModelType::kRetinaFace:
+            config.model_path = model_dir_ + "/retinaface.rknn";
+            config.nms_threshold = 0.4f;
+            config.conf_threshold = 0.5f;
+            break;
+            
+        default:
+            LOG_ERROR("Unsupported model type for auto-config: {}", static_cast<int>(type));
+            return -1;
+    }
+    
+    LOG_INFO("Auto-configured model: type={}, path={}", 
+             ModelTypeToString(type), config.model_path);
+    
+    return SwitchModel(type, config);
 }
 
 bool AIEngine::GetRequiredInputSize(int& width, int& height) const {

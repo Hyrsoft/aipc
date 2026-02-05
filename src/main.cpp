@@ -32,6 +32,8 @@
 #include "common/logger.h"
 #include "common/asio_context.h"
 #include "rkvideo/rkvideo.h"
+#include "rknn/ai_engine.h"
+#include "rknn/ai_service.h"
 #include "stream_manager.h"
 #include "http.h"
 
@@ -112,6 +114,8 @@ static void print_api_info() {
     LOG_INFO("  GET  /api/record/status  - Get recording status");
     LOG_INFO("  POST /api/record/start   - Start recording");
     LOG_INFO("  POST /api/record/stop    - Stop recording");
+    LOG_INFO("  GET  /api/ai/status      - Get AI model status");
+    LOG_INFO("  POST /api/ai/switch      - Switch AI model");
 }
 
 int main(int argc, char* argv[]) {
@@ -244,6 +248,31 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    // ========================================================================
+    // 初始化 AI 推理引擎（默认不加载模型）
+    // ========================================================================
+    std::string model_dir = exe_dir + "/../model";
+    LOG_INFO("AI model directory: {}", model_dir);
+    rknn::AIEngine::Instance().SetModelDir(model_dir);
+    LOG_INFO("AI Engine initialized (no model loaded by default)");
+
+    // 启动 AI 推理服务
+    rknn::AIServiceConfig ai_config;
+    ai_config.skip_frames = 2;   // 每 3 帧推理一次（减少 CPU 占用）
+    ai_config.timeout_ms = 100;
+    ai_config.enable_log = true; // 启用推理日志
+    
+    // 注册检测结果回调（目前只打印日志，后续可扩展为 OSD 叠加）
+    rknn::AIService::Instance().RegisterCallback(
+        [](const rknn::DetectionResultList& results, uint64_t timestamp) {
+            // TODO: 在视频帧上绘制检测框（需要 RGA 或软件绘制）
+            LOG_DEBUG("Detection callback: {} results at timestamp {}",
+                     results.Count(), timestamp);
+        }
+    );
+    
+    rknn::AIService::Instance().Start(ai_config);
+
     // 启动流输出
     GetStreamManager()->Start();
 
@@ -268,14 +297,27 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     LOG_INFO("Shutting down AIPC...");
     
+    // 停止 AI 推理服务
+    rknn::AIService::Instance().Stop();
+    LOG_INFO("AI Service stopped");
+    
+    // 停止 AI 推理引擎（卸载模型）
+    rknn::AIEngine::Instance().SwitchModel(rknn::ModelType::kNone);
+    LOG_INFO("AI Engine stopped");
+    
     // 停止 HTTP API
     if (g_http_api) {
         g_http_api->Stop();
         g_http_api.reset();
     }
     
-    // 停止并销毁流管理器
+    // 停止并销毁流管理器（这会停止 StreamDispatcher）
     DestroyStreamManager();
+    
+    // 给 IO 线程一点时间处理完所有待处理的任务
+    // 这样可以确保所有 EncodedStreamPtr 都被释放
+    LOG_DEBUG("Waiting for pending IO tasks to complete...");
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
     
     // 反初始化 rkvideo
     rkvideo_deinit();
