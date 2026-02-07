@@ -86,18 +86,23 @@ void WsPreviewServer::Stop() {
     LOG_INFO("停止 WebSocket 预览服务器...");
     running_.store(false);
 
-    // 关闭所有客户端连接
+    // 先拿出所有客户端 shared_ptr，释放锁后再 close
+    // 避免死锁：close() 可能同步触发 onClosed 回调，回调中会获取 clients_mutex_
+    std::vector<std::shared_ptr<rtc::WebSocket>> clients_to_close;
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
-        for (auto& ws : clients_) {
-            if (ws) {
-                try {
-                    ws->close();
-                } catch (...) {}
-            }
-        }
-        clients_.clear();
+        clients_to_close.swap(clients_);
     }
+    
+    // 在锁外关闭所有客户端
+    for (auto& ws : clients_to_close) {
+        if (ws) {
+            try {
+                ws->close();
+            } catch (...) {}
+        }
+    }
+    clients_to_close.clear();  // 释放所有 shared_ptr
 
     // 停止服务器
     if (ws_server_) {

@@ -80,11 +80,16 @@ int rkvideo_init() {
     
     // ==================== VPSS 初始化（分流）====================
     // VPSS Chn0: 全分辨率 -> VENC（编码流）
-    // VPSS Chn1: 全分辨率 -> User GetFrame（AI 推理，可选）
+    // VPSS Chn1: 缩放到低分辨率 -> User GetFrame（AI 推理，可选）
+    // 利用 VPSS 硬件缩放，将 1920x1080 缩放到 AI 需要的尺寸
+    // 避免在 CPU 上做大分辨率 OpenCV 转换
+    static const int kAiWidth = 640;
+    static const int kAiHeight = 480;
+    
     LOG_DEBUG("Initializing VPSS Group 0...");
     if (g_enableAiChannel) {
-        // 启用 AI 通道：Chn0 给 VENC，Chn1 给 AI
-        s32Ret = vpss_init(0, width, height, width, height, width, height);
+        // 启用 AI 通道：Chn0 给 VENC (全分辨率)，Chn1 给 AI (低分辨率)
+        s32Ret = vpss_init(0, width, height, width, height, kAiWidth, kAiHeight);
     } else {
         // 不启用 AI 通道：只有 Chn0 给 VENC
         s32Ret = vpss_init(0, width, height, width, height, 0, 0);
@@ -93,7 +98,9 @@ int rkvideo_init() {
         LOG_ERROR("VPSS init failed!");
         return -1;
     }
-    LOG_INFO("VPSS initialized with {} channels", g_enableAiChannel ? 2 : 1);
+    LOG_INFO("VPSS initialized with {} channels{}",
+             g_enableAiChannel ? 2 : 1,
+             g_enableAiChannel ? fmt::format(", AI channel: {}x{}", kAiWidth, kAiHeight) : "");
 
     // ==================== VENC 初始化 ====================
     RK_CODEC_ID_E enCodecType = RK_VIDEO_ID_AVC;
@@ -178,9 +185,34 @@ int rkvideo_deinit() {
     stVpssChn0.s32ChnId = 0;  // 恢复为绑定时的值
     RK_MPI_SYS_UnBind(&stViChn, &stVpssChn0);
 
-    // 销毁 VENC
-    LOG_DEBUG("Stopping and destroying VENC...");
+    // 停止 VENC 接收新帧
+    LOG_DEBUG("Stopping VENC recv...");
     RK_MPI_VENC_StopRecvFrame(0);
+    
+    // 排空 VENC 输出队列中的残留帧
+    // 如果有已 GetStream 但未 Release 的帧，DestroyChn 会死等
+    LOG_DEBUG("Draining VENC output...");
+    {
+        VENC_STREAM_S stFrame;
+        stFrame.pstPack = (VENC_PACK_S *)malloc(sizeof(VENC_PACK_S));
+        if (stFrame.pstPack) {
+            memset(stFrame.pstPack, 0, sizeof(VENC_PACK_S));
+            int drainCount = 0;
+            while (drainCount < 16) {
+                RK_S32 ret = RK_MPI_VENC_GetStream(0, &stFrame, 50);
+                if (ret != RK_SUCCESS) break;
+                RK_MPI_VENC_ReleaseStream(0, &stFrame);
+                drainCount++;
+            }
+            free(stFrame.pstPack);
+            if (drainCount > 0) {
+                LOG_DEBUG("Drained {} remaining VENC frames", drainCount);
+            }
+        }
+    }
+    
+    // 销毁 VENC
+    LOG_DEBUG("Destroying VENC...");
     RK_MPI_VENC_DestroyChn(0);
     
     // 销毁 VPSS

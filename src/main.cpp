@@ -314,10 +314,14 @@ int main(int argc, char* argv[]) {
     // 停止并销毁流管理器（这会停止 StreamDispatcher）
     DestroyStreamManager();
     
-    // 给 IO 线程一点时间处理完所有待处理的任务
-    // 这样可以确保所有 EncodedStreamPtr 都被释放
-    LOG_DEBUG("Waiting for pending IO tasks to complete...");
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // 排空 IO Context 中的待处理任务
+    // 关键：StreamDispatcher 通过 PostToIo 分发帧给网络消费者（RTSP/WebSocket/WebRTC），
+    // io_context.stop() 后这些异步回调持有 EncodedStreamPtr（VENC Buffer 的 shared_ptr），
+    // 如果不执行它们，VENC Buffer 不会被 ReleaseStream，导致 VENC DestroyChn 时
+    // 死循环打印 "wait for release buffer"。
+    // Drain() 会重新 poll 一遍 io_context，让所有 pending 的回调执行完毕并释放资源。
+    LOG_DEBUG("Draining IO context to release pending VENC buffers...");
+    IoContext::Instance().Drain();
     
     // 反初始化 rkvideo
     rkvideo_deinit();
