@@ -159,6 +159,11 @@ void AIService::InferenceLoop() {
         LetterboxInfo letterbox_info;
         int ret = processor.ConvertNV12ToModelInput(nv12_data, width, height,
                                                      model_input_buffer.data(), letterbox_info);
+        
+        // 数据已拷贝到 model_input_buffer，立即释放 VPSS 帧
+        // 归还 DMA buffer 给 VPSS 池，避免长时间占用导致资源冲突
+        frame.reset();
+        
         if (ret != 0) {
             LOG_WARN("Failed to convert NV12 to RGB: ret={}", ret);
             continue;
@@ -199,19 +204,14 @@ void AIService::InferenceLoop() {
                 LOG_INFO("Frame #{}: {} detections, {:.1f}ms",
                          frame_count, results.Count(), inference_ms);
                 
-                // 打印每个检测结果
+                // 打印每个检测结果（使用模型特定的格式）
                 for (size_t i = 0; i < results.Count(); ++i) {
-                    const auto& det = results.results[i];
-                    // 映射坐标
-                    int x1 = static_cast<int>(det.box.x);
-                    int y1 = static_cast<int>(det.box.y);
-                    int x2 = static_cast<int>(det.box.x + det.box.width);
-                    int y2 = static_cast<int>(det.box.y + det.box.height);
-                    ImageProcessor::MapCoordinates(x1, y1, letterbox_info);
-                    ImageProcessor::MapCoordinates(x2, y2, letterbox_info);
-                    
-                    LOG_DEBUG("  [{}] {} @ ({},{},{},{}) conf={:.2f}",
-                             i, det.label, x1, y1, x2, y2, det.confidence);
+                    std::string log = AIEngine::Instance().FormatResultLog(
+                        results.results[i], i,
+                        letterbox_info.scale,
+                        letterbox_info.pad_left,
+                        letterbox_info.pad_top);
+                    LOG_DEBUG("  {}", log);
                 }
             } else if (frame_count % 30 == 0) {
                 // 每 30 帧打印一次无检测日志

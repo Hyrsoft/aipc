@@ -488,4 +488,33 @@ int RetinaFaceModel::GetInputMemSize() const {
     return input_mem_ ? input_mem_->size : 0;
 }
 
+std::string RetinaFaceModel::FormatResultLog(const DetectionResult& result, size_t index,
+                                              float letterbox_scale,
+                                              int letterbox_pad_x,
+                                              int letterbox_pad_y) const {
+    // RetinaFace 特化格式：显示人脸框和关键点
+    int x1 = static_cast<int>((result.box.x - letterbox_pad_x) / letterbox_scale);
+    int y1 = static_cast<int>((result.box.y - letterbox_pad_y) / letterbox_scale);
+    int x2 = static_cast<int>((result.box.x + result.box.width - letterbox_pad_x) / letterbox_scale);
+    int y2 = static_cast<int>((result.box.y + result.box.height - letterbox_pad_y) / letterbox_scale);
+    
+    char buf[512];
+    int len = snprintf(buf, sizeof(buf), "[%zu] face @ (%d,%d,%d,%d) conf=%.1f%%",
+                       index, x1, y1, x2, y2, result.confidence * 100);
+    
+    // 添加关键点信息（如果有）
+    if (result.HasLandmarks() && result.landmarks.size() >= 5) {
+        len += snprintf(buf + len, sizeof(buf) - len, " lm:[");
+        for (size_t i = 0; i < result.landmarks.size() && i < 5; ++i) {
+            int lx = static_cast<int>((result.landmarks[i].x - letterbox_pad_x) / letterbox_scale);
+            int ly = static_cast<int>((result.landmarks[i].y - letterbox_pad_y) / letterbox_scale);
+            len += snprintf(buf + len, sizeof(buf) - len, "%s(%d,%d)",
+                           i > 0 ? "," : "", lx, ly);
+        }
+        snprintf(buf + len, sizeof(buf) - len, "]");
+    }
+    
+    return std::string(buf);
+}
+
 }  // namespace rknn

@@ -544,4 +544,20 @@ int YoloV5Model::GetInputMemSize() const {
     return input_mem_ ? input_mem_->size : 0;
 }
 
+std::string YoloV5Model::FormatResultLog(const DetectionResult& result, size_t index,
+                                          float letterbox_scale,
+                                          int letterbox_pad_x,
+                                          int letterbox_pad_y) const {
+    // YOLOv5 特化格式：显示类别名和置信度
+    int x1 = static_cast<int>((result.box.x - letterbox_pad_x) / letterbox_scale);
+    int y1 = static_cast<int>((result.box.y - letterbox_pad_y) / letterbox_scale);
+    int x2 = static_cast<int>((result.box.x + result.box.width - letterbox_pad_x) / letterbox_scale);
+    int y2 = static_cast<int>((result.box.y + result.box.height - letterbox_pad_y) / letterbox_scale);
+    
+    char buf[256];
+    snprintf(buf, sizeof(buf), "[%zu] %s @ (%d,%d,%d,%d) conf=%.1f%%",
+             index, result.label.c_str(), x1, y1, x2, y2, result.confidence * 100);
+    return std::string(buf);
+}
+
 }  // namespace rknn

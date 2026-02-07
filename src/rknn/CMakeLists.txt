@@ -4,6 +4,7 @@
 # ========================================
 
 set(RKNN_SOURCES
+    ai_model_base.cpp
     ai_engine.cpp
     ai_service.cpp
     image_utils.cpp

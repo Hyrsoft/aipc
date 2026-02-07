@@ -291,4 +291,17 @@ bool AIEngine::GetRequiredInputSize(int& width, int& height) const {
     return true;
 }
 
+std::string AIEngine::FormatResultLog(const DetectionResult& result, size_t index,
+                                       float letterbox_scale,
+                                       int letterbox_pad_x,
+                                       int letterbox_pad_y) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    if (!model_) {
+        return "";
+    }
+    
+    return model_->FormatResultLog(result, index, letterbox_scale, letterbox_pad_x, letterbox_pad_y);
+}
+
 }  // namespace rknn

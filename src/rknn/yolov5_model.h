@@ -50,6 +50,12 @@ public:
     void GetInputSize(int& width, int& height) const override;
     void* GetInputVirtAddr() const override;
     int GetInputMemSize() const override;
+    
+    /// 格式化检测结果日志（YOLOv5 特化版本）
+    std::string FormatResultLog(const DetectionResult& result, size_t index,
+                                 float letterbox_scale = 1.0f,
+                                 int letterbox_pad_x = 0,
+                                 int letterbox_pad_y = 0) const override;
 
 private:
     /// 加载标签文件

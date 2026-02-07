@@ -185,6 +185,21 @@ public:
      */
     bool GetRequiredInputSize(int& width, int& height) const;
 
+    /**
+     * @brief 格式化检测结果日志（委托给模型实现）
+     *
+     * @param result 单个检测结果
+     * @param index 结果索引
+     * @param letterbox_scale letterbox 缩放比例
+     * @param letterbox_pad_x letterbox X 方向填充
+     * @param letterbox_pad_y letterbox Y 方向填充
+     * @return 格式化的日志字符串
+     */
+    std::string FormatResultLog(const DetectionResult& result, size_t index,
+                                 float letterbox_scale = 1.0f,
+                                 int letterbox_pad_x = 0,
+                                 int letterbox_pad_y = 0) const;
+
 private:
     AIEngine();
     ~AIEngine();
