@@ -312,6 +312,26 @@ int rkvideo_reconfigure_ai_channel(int width, int height) {
     return 0;
 }
 
+int rkvideo_pause_pipeline() {
+    LOG_DEBUG("Pausing VPSS Group 0 for NPU inference...");
+    RK_S32 ret = RK_MPI_VPSS_StopGrp(0);
+    if (ret != RK_SUCCESS) {
+        LOG_ERROR("RK_MPI_VPSS_StopGrp failed: {:#x}", ret);
+        return -1;
+    }
+    return 0;
+}
+
+int rkvideo_resume_pipeline() {
+    RK_S32 ret = RK_MPI_VPSS_StartGrp(0);
+    if (ret != RK_SUCCESS) {
+        LOG_ERROR("RK_MPI_VPSS_StartGrp failed: {:#x}", ret);
+        return -1;
+    }
+    LOG_DEBUG("VPSS Group 0 resumed after NPU inference");
+    return 0;
+}
+
 const VideoConfig& rkvideo_get_config() {
     return g_videoConfig;
 }

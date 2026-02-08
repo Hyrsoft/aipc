@@ -267,7 +267,9 @@ void AIService::InferenceLoop() {
             continue;
         }
         
-        // 执行推理
+        // 执行推理（暂停 VPSS 以验证 NPU 带宽冲突假设）
+        rkvideo_pause_pipeline();
+        
         auto start = std::chrono::steady_clock::now();
         
         DetectionResultList results;
@@ -277,6 +279,8 @@ void AIService::InferenceLoop() {
                                                  results);
         
         auto end = std::chrono::steady_clock::now();
+        
+        rkvideo_resume_pipeline();
         double inference_ms = std::chrono::duration<double, std::milli>(end - start).count();
         total_inference_time += inference_ms;
         inference_count++;

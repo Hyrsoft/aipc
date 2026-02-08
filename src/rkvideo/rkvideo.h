@@ -112,6 +112,21 @@ VideoFramePtr rkvideo_get_vi_frame(int timeoutMs = -1);
 int rkvideo_reconfigure_ai_channel(int width, int height);
 
 /**
+ * @brief 暂停 VPSS 流水线（停止 VPSS Group，用于验证 NPU 带宽冲突）
+ * 
+ * @return 0 成功，负值失败
+ * @warning 会中断编码流和 AI 通道，仅用于调试验证
+ */
+int rkvideo_pause_pipeline();
+
+/**
+ * @brief 恢复 VPSS 流水线
+ * 
+ * @return 0 成功，负值失败
+ */
+int rkvideo_resume_pipeline();
+
+/**
  * @brief 获取当前视频配置
  */
 const VideoConfig& rkvideo_get_config();
