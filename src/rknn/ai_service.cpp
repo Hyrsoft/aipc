@@ -17,6 +17,18 @@
 
 #include <chrono>
 #include <cstring>
+#include <cstdio>
+#include <sys/stat.h>
+
+// 诊断模式开关：保存 VPSS 原始帧和模型输入帧到 /root/record/vpss/
+// 启用后不执行 NPU 推理，仅保存图像用于排查问题
+#define AI_DIAG_SAVE_FRAMES 0
+
+#if AI_DIAG_SAVE_FRAMES
+// 查看方式：
+//   NV12: ffplay -f rawvideo -pix_fmt nv12 -video_size WxH file.nv12
+//   RGB:  ffplay -f rawvideo -pix_fmt rgb24 -video_size WxH file.rgb
+#endif
 
 namespace rknn {
 
@@ -98,6 +110,21 @@ void AIService::InferenceLoop() {
     uint64_t skip_counter = 0;
     double total_inference_time = 0.0;
     uint64_t inference_count = 0;
+
+#if AI_DIAG_SAVE_FRAMES
+    // ========== 诊断模式 ==========
+    // 创建输出目录
+    static const char* kDiagDir = "/root/record/vpss";
+    mkdir("/root/record", 0755);
+    mkdir(kDiagDir, 0755);
+    
+    int diag_save_count = 0;
+    auto last_save_time = std::chrono::steady_clock::now();
+    static const int kDiagIntervalMs = 5000;  // 每 5 秒保存一批
+    LOG_WARN("=== AI DIAGNOSTIC MODE ENABLED ===");
+    LOG_WARN("Saving VPSS raw frames and model input to {}", kDiagDir);
+    LOG_WARN("NPU inference is DISABLED in this mode");
+#endif
     
     while (running_.load()) {
         // 检查是否有模型加载
@@ -148,13 +175,84 @@ void AIService::InferenceLoop() {
         int width = frame->stVFrame.u32Width;
         int height = frame->stVFrame.u32Height;
         void* nv12_data = get_frame_vir_addr(frame);
+#if !AI_DIAG_SAVE_FRAMES
         uint64_t timestamp = frame->stVFrame.u64PTS;
+#endif
         
         if (!nv12_data) {
             LOG_WARN("Failed to get frame virtual address");
             continue;
         }
+
+#if AI_DIAG_SAVE_FRAMES
+        // ========== 诊断模式：保存帧 ==========
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_save_time).count();
         
+        bool should_save = (elapsed >= kDiagIntervalMs);
+        
+        // 保存 VPSS 原始 NV12 帧
+        if (should_save) {
+            int nv12_size = width * (height + height / 2);
+            
+            char filename[256];
+            snprintf(filename, sizeof(filename), "%s/%03d_vpss_raw_%dx%d.nv12",
+                     kDiagDir, diag_save_count, width, height);
+            FILE* fp = fopen(filename, "wb");
+            if (fp) {
+                fwrite(nv12_data, 1, nv12_size, fp);
+                fclose(fp);
+                LOG_INFO("[DIAG] Saved VPSS raw NV12: {} ({}x{}, {} bytes)", filename, width, height, nv12_size);
+                LOG_INFO("[DIAG]   ffplay -f rawvideo -pix_fmt nv12 -video_size {}x{} {}", width, height, filename);
+            }
+        }
+        
+        // 执行 NV12 -> RGB letterbox 转换（和正常推理一样的处理）
+        LetterboxInfo letterbox_info;
+        int ret = processor.ConvertNV12ToModelInput(nv12_data, width, height,
+                                                     model_input_buffer.data(), letterbox_info);
+        
+        // 数据已拷贝，释放 VPSS 帧
+        frame.reset();
+        
+        if (ret != 0) {
+            LOG_WARN("Failed to convert NV12 to RGB: ret={}", ret);
+            continue;
+        }
+        
+        if (should_save) {
+            // 保存送给 NPU 的模型输入（RGB24 letterbox）
+            int model_w = processor.GetModelWidth();
+            int model_h = processor.GetModelHeight();
+            int rgb_size = model_w * model_h * 3;
+            
+            char filename[256];
+            snprintf(filename, sizeof(filename), "%s/%03d_model_input_%dx%d.rgb",
+                     kDiagDir, diag_save_count, model_w, model_h);
+            FILE* fp = fopen(filename, "wb");
+            if (fp) {
+                fwrite(model_input_buffer.data(), 1, rgb_size, fp);
+                fclose(fp);
+                LOG_INFO("[DIAG] Saved model input RGB: {} ({}x{}, {} bytes, scale={:.3f}, pad=({},{}))",
+                         filename, model_w, model_h, rgb_size,
+                         letterbox_info.scale, letterbox_info.pad_left, letterbox_info.pad_top);
+                LOG_INFO("[DIAG]   ffplay -f rawvideo -pix_fmt rgb24 -video_size {}x{} {}", model_w, model_h, filename);
+            }
+            
+            diag_save_count++;
+            last_save_time = now;
+            LOG_INFO("[DIAG] Batch #{} saved. Next save in {}s", diag_save_count, kDiagIntervalMs / 1000);
+        }
+        
+        // 诊断模式下跳过 NPU 推理
+        {
+            std::lock_guard<std::mutex> lock(stats_mutex_);
+            stats_.frames_processed++;
+        }
+        continue;
+        
+#else
+        // ========== 正常推理模式 ==========
         // NV12 转换为 RGB 并做 letterbox
         LetterboxInfo letterbox_info;
         int ret = processor.ConvertNV12ToModelInput(nv12_data, width, height,
@@ -162,7 +260,7 @@ void AIService::InferenceLoop() {
         
         // 数据已拷贝到 model_input_buffer，立即释放 VPSS 帧
         // 归还 DMA buffer 给 VPSS 池，避免长时间占用导致资源冲突
-        frame.reset();
+        // frame.reset();
         
         if (ret != 0) {
             LOG_WARN("Failed to convert NV12 to RGB: ret={}", ret);
@@ -228,6 +326,7 @@ void AIService::InferenceLoop() {
                 }
             }
         }
+#endif
     }
     
     // 清理

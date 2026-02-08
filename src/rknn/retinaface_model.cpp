@@ -144,6 +144,7 @@ int RetinaFaceModel::Init(const ModelConfig& config) {
     LOG_INFO("Model input num: {}, output num: {}", io_num_.n_input, io_num_.n_output);
     
     // 3. 查询输入张量属性
+    LOG_INFO("Input tensors:");
     input_attrs_ = new rknn_tensor_attr[io_num_.n_input];
     std::memset(input_attrs_, 0, io_num_.n_input * sizeof(rknn_tensor_attr));
     for (uint32_t i = 0; i < io_num_.n_input; ++i) {
@@ -153,9 +154,18 @@ int RetinaFaceModel::Init(const ModelConfig& config) {
             LOG_ERROR("rknn_query NATIVE_INPUT_ATTR failed: ret={}", ret);
             return -1;
         }
+        LOG_INFO("  [{}] index={}, n_dims={}, dims=[{}, {}, {}, {}], n_elems={}, size={}, size_with_stride={}, "
+                 "fmt={}, type={}, qnt_type={}, zp={}, scale={}",
+                 i, input_attrs_[i].index, input_attrs_[i].n_dims,
+                 input_attrs_[i].dims[0], input_attrs_[i].dims[1], 
+                 input_attrs_[i].dims[2], input_attrs_[i].dims[3],
+                 input_attrs_[i].n_elems, input_attrs_[i].size, input_attrs_[i].size_with_stride,
+                 input_attrs_[i].fmt, input_attrs_[i].type,
+                 input_attrs_[i].qnt_type, input_attrs_[i].zp, input_attrs_[i].scale);
     }
     
     // 4. 查询输出张量属性（RetinaFace 有 3 个输出：location, scores, landmarks）
+    LOG_INFO("Output tensors:");
     output_attrs_ = new rknn_tensor_attr[io_num_.n_output];
     std::memset(output_attrs_, 0, io_num_.n_output * sizeof(rknn_tensor_attr));
     for (uint32_t i = 0; i < io_num_.n_output; ++i) {
@@ -165,12 +175,20 @@ int RetinaFaceModel::Init(const ModelConfig& config) {
             LOG_ERROR("rknn_query NATIVE_OUTPUT_ATTR failed: ret={}", ret);
             return -1;
         }
-        LOG_DEBUG("Output[{}]: size={}", i, output_attrs_[i].size_with_stride);
+        LOG_INFO("  [{}] index={}, n_dims={}, dims=[{}, {}, {}, {}], n_elems={}, size={}, size_with_stride={}, "
+                 "fmt={}, type={}, qnt_type={}, zp={}, scale={}",
+                 i, output_attrs_[i].index, output_attrs_[i].n_dims,
+                 output_attrs_[i].dims[0], output_attrs_[i].dims[1], 
+                 output_attrs_[i].dims[2], output_attrs_[i].dims[3],
+                 output_attrs_[i].n_elems, output_attrs_[i].size, output_attrs_[i].size_with_stride,
+                 output_attrs_[i].fmt, output_attrs_[i].type,
+                 output_attrs_[i].qnt_type, output_attrs_[i].zp, output_attrs_[i].scale);
     }
     
     // 5. 设置输入类型为 UINT8，使用 NHWC 格式
     input_attrs_[0].type = RKNN_TENSOR_UINT8;
     input_attrs_[0].fmt = RKNN_TENSOR_NHWC;
+    LOG_INFO("Set input to UINT8/NHWC, size_with_stride={}", input_attrs_[0].size_with_stride);
     
     // 6. 创建输入内存
     input_mem_ = rknn_create_mem(ctx_, input_attrs_[0].size_with_stride);
@@ -178,12 +196,14 @@ int RetinaFaceModel::Init(const ModelConfig& config) {
         LOG_ERROR("rknn_create_mem for input failed");
         return -1;
     }
+    LOG_INFO("Created input memory: virt_addr={}, size={}", input_mem_->virt_addr, input_mem_->size);
     
     ret = rknn_set_io_mem(ctx_, input_mem_, &input_attrs_[0]);
     if (ret < 0) {
         LOG_ERROR("rknn_set_io_mem for input failed: ret={}", ret);
         return -1;
     }
+    LOG_INFO("Set input io_mem success");
     
     // 7. 创建输出内存
     for (uint32_t i = 0; i < io_num_.n_output && i < 3; ++i) {
@@ -192,6 +212,9 @@ int RetinaFaceModel::Init(const ModelConfig& config) {
             LOG_ERROR("rknn_create_mem for output[{}] failed", i);
             return -1;
         }
+        LOG_INFO("Created output[{}] memory: virt_addr={}, size={}", 
+                 i, output_mems_[i]->virt_addr, output_mems_[i]->size);
+        
         ret = rknn_set_io_mem(ctx_, output_mems_[i], &output_attrs_[i]);
         if (ret < 0) {
             LOG_ERROR("rknn_set_io_mem for output[{}] failed: ret={}", i, ret);
@@ -316,11 +339,13 @@ int RetinaFaceModel::Run() {
         return -1;
     }
     
+    LOG_DEBUG("Calling rknn_run...");
     int ret = rknn_run(ctx_, nullptr);
     if (ret < 0) {
         LOG_ERROR("rknn_run failed: ret={}", ret);
         return -1;
     }
+    LOG_DEBUG("rknn_run completed successfully");
     
     return 0;
 }
