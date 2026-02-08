@@ -1,6 +1,9 @@
 /**
  * @file image_utils.cpp
- * @brief 图像处理工具实现
+ * @brief 图像处理工具实现 - 基于 RGA 硬件加速
+ *
+ * 使用 Rockchip RGA (Raster Graphic Acceleration) 硬件进行图像处理，
+ * 避免 CPU 内存拷贝导致的 DDR 带宽瓶颈。
  *
  * @author 好软，好温暖
  * @date 2026-02-05
@@ -11,6 +14,11 @@
 #include "image_utils.h"
 #include "common/logger.h"
 
+// RGA 硬件加速库
+#include "im2d.h"
+#include "rga.h"
+
+// OpenCV-mobile (仅用于检测结果绘制)
 #include <opencv2/core/core.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
@@ -35,11 +43,18 @@ bool ImageProcessor::Init(int model_width, int model_height) {
     model_width_ = model_width;
     model_height_ = model_height;
 
-    // 预分配临时缓冲区
-    temp_rgb_buffer_.resize(model_width * model_height * 3);
+    // 预分配 RGA 中间缓冲区（用于 NV12->RGB 转换后、缩放前的全尺寸 RGB 图像）
+    // 预分配最大可能的源图像尺寸（1080p）
+    constexpr int MAX_SRC_WIDTH = 1920;
+    constexpr int MAX_SRC_HEIGHT = 1080;
+    temp_rgb_buffer_.resize(MAX_SRC_WIDTH * MAX_SRC_HEIGHT * 3);
 
     initialized_ = true;
-    LOG_INFO("ImageProcessor initialized: model size {}x{}", model_width, model_height);
+    
+    // 打印 RGA 信息
+    LOG_INFO("ImageProcessor initialized with RGA: model size {}x{}", model_width, model_height);
+    LOG_DEBUG("RGA version: {}", querystring(RGA_VERSION));
+    
     return true;
 }
 
@@ -63,15 +78,12 @@ int ImageProcessor::ConvertNV12ToModelInput(const void* nv12_data, int src_width
         return -1;
     }
 
-    // 使用 OpenCV 进行颜色转换和缩放
-    // NV12: Y 平面 + UV 交错平面
-    int nv12_height = src_height + src_height / 2;
-    cv::Mat nv12_mat(nv12_height, src_width, CV_8UC1, const_cast<void*>(nv12_data));
-    cv::Mat bgr_mat(src_height, src_width, CV_8UC3);
-
-    // NV12 (YUV420SP) -> BGR
-    cv::cvtColor(nv12_mat, bgr_mat, cv::COLOR_YUV420sp2BGR);
-
+    // ========================================
+    // 使用 RGA 硬件加速进行图像处理
+    // ========================================
+    
+    IM_STATUS status;
+    
     // 计算 letterbox 参数
     float scale_x = static_cast<float>(model_width_) / src_width;
     float scale_y = static_cast<float>(model_height_) / src_height;
@@ -79,6 +91,10 @@ int ImageProcessor::ConvertNV12ToModelInput(const void* nv12_data, int src_width
 
     int scaled_width = static_cast<int>(src_width * scale);
     int scaled_height = static_cast<int>(src_height * scale);
+    
+    // 确保尺寸是偶数（RGA 要求）
+    scaled_width = scaled_width & ~1;
+    scaled_height = scaled_height & ~1;
 
     int pad_left = (model_width_ - scaled_width) / 2;
     int pad_top = (model_height_ - scaled_height) / 2;
@@ -92,19 +108,61 @@ int ImageProcessor::ConvertNV12ToModelInput(const void* nv12_data, int src_width
     letterbox_info.dst_width = model_width_;
     letterbox_info.dst_height = model_height_;
 
-    // 缩放
-    cv::Mat scaled_mat;
-    cv::resize(bgr_mat, scaled_mat, cv::Size(scaled_width, scaled_height), 0, 0, cv::INTER_LINEAR);
+    // ========================================
+    // 步骤 1: 先用黑色填充整个输出缓冲区（letterbox 边框）
+    // ========================================
+    rga_buffer_t dst_full = wrapbuffer_virtualaddr(
+        rgb_output, model_width_, model_height_, RK_FORMAT_RGB_888);
+    
+    im_rect fill_rect = {0, 0, model_width_, model_height_};
+    status = imfill(dst_full, fill_rect, 0x00000000);  // 黑色填充
+    if (status != IM_STATUS_SUCCESS) {
+        LOG_ERROR("RGA imfill failed: {}", imStrError(status));
+        return -1;
+    }
 
-    // 创建 letterbox 图像（黑色填充）
-    cv::Mat letterbox_mat(model_height_, model_width_, CV_8UC3, cv::Scalar(0, 0, 0));
+    // ========================================
+    // 步骤 2: NV12 -> RGB 颜色转换到临时缓冲区
+    // ========================================
+    
+    // 源缓冲区：NV12 格式
+    rga_buffer_t src_nv12 = wrapbuffer_virtualaddr(
+        const_cast<void*>(nv12_data), src_width, src_height, RK_FORMAT_YCbCr_420_SP);
+    
+    // 临时缓冲区：全尺寸 RGB
+    rga_buffer_t tmp_rgb = wrapbuffer_virtualaddr(
+        temp_rgb_buffer_.data(), src_width, src_height, RK_FORMAT_RGB_888);
+    
+    // 执行颜色转换
+    status = imcvtcolor(src_nv12, tmp_rgb, 
+                        RK_FORMAT_YCbCr_420_SP, RK_FORMAT_RGB_888,
+                        IM_YUV_TO_RGB_BT601_LIMIT);
+    if (status != IM_STATUS_SUCCESS) {
+        LOG_ERROR("RGA imcvtcolor failed: {}", imStrError(status));
+        return -1;
+    }
 
-    // 将缩放后的图像复制到中心
-    cv::Rect roi(pad_left, pad_top, scaled_width, scaled_height);
-    scaled_mat.copyTo(letterbox_mat(roi));
-
-    // 复制到输出缓冲区
-    std::memcpy(rgb_output, letterbox_mat.data, model_width_ * model_height_ * 3);
+    // ========================================
+    // 步骤 3: 缩放并复制到目标 letterbox 中心区域
+    // ========================================
+    
+    // 使用 improcess 进行缩放并指定目标区域
+    // 源区域：整个临时 RGB 图像
+    im_rect src_rect = {0, 0, src_width, src_height};
+    // 目标区域：letterbox 中心
+    im_rect dst_rect = {pad_left, pad_top, scaled_width, scaled_height};
+    
+    // 空的 pat 缓冲区和区域（不使用）
+    rga_buffer_t pat = {};
+    im_rect pat_rect = {};
+    
+    // 执行缩放到指定区域
+    status = improcess(tmp_rgb, dst_full, pat, 
+                       src_rect, dst_rect, pat_rect, 0);
+    if (status != IM_STATUS_SUCCESS) {
+        LOG_ERROR("RGA improcess (resize) failed: {}", imStrError(status));
+        return -1;
+    }
 
     return 0;
 }
