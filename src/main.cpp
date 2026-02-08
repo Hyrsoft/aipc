@@ -32,6 +32,8 @@
 #include "common/logger.h"
 #include "common/asio_context.h"
 #include "rkvideo/rkvideo.h"
+#include "rknn/ai_engine.h"
+#include "rknn/ai_service.h"
 #include "stream_manager.h"
 #include "http.h"
 
@@ -112,6 +114,8 @@ static void print_api_info() {
     LOG_INFO("  GET  /api/record/status  - Get recording status");
     LOG_INFO("  POST /api/record/start   - Start recording");
     LOG_INFO("  POST /api/record/stop    - Stop recording");
+    LOG_INFO("  GET  /api/ai/status      - Get AI model status");
+    LOG_INFO("  POST /api/ai/switch      - Switch AI model");
 }
 
 int main(int argc, char* argv[]) {
@@ -244,6 +248,40 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    // ========================================================================
+    // 初始化 AI 推理引擎（默认不加载模型）
+    // ========================================================================
+    std::string model_dir = exe_dir + "/../model";
+    LOG_INFO("AI model directory: {}", model_dir);
+    rknn::AIEngine::Instance().SetModelDir(model_dir);
+    
+    // 设置 VPSS 重配置回调：当模型输入尺寸变化时，自动重配置 VPSS Chn1
+    rknn::AIEngine::Instance().SetVpssReconfigureCallback(
+        [](int width, int height) -> int {
+            LOG_INFO("VPSS reconfigure callback: {}x{}", width, height);
+            return rkvideo_reconfigure_ai_channel(width, height);
+        }
+    );
+    
+    LOG_INFO("AI Engine initialized (no model loaded by default)");
+
+    // 启动 AI 推理服务
+    rknn::AIServiceConfig ai_config;
+    ai_config.skip_frames = 2;   // 每 3 帧推理一次（减少 CPU 占用）
+    ai_config.timeout_ms = 100;
+    ai_config.enable_log = true; // 启用推理日志
+    
+    // 注册检测结果回调（目前只打印日志，后续可扩展为 OSD 叠加）
+    rknn::AIService::Instance().RegisterCallback(
+        [](const rknn::DetectionResultList& results, uint64_t timestamp) {
+            // TODO: 在视频帧上绘制检测框（需要 RGA 或软件绘制）
+            LOG_DEBUG("Detection callback: {} results at timestamp {}",
+                     results.Count(), timestamp);
+        }
+    );
+    
+    rknn::AIService::Instance().Start(ai_config);
+
     // 启动流输出
     GetStreamManager()->Start();
 
@@ -268,14 +306,31 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     LOG_INFO("Shutting down AIPC...");
     
+    // 停止 AI 推理服务
+    rknn::AIService::Instance().Stop();
+    LOG_INFO("AI Service stopped");
+    
+    // 停止 AI 推理引擎（卸载模型）
+    rknn::AIEngine::Instance().SwitchModel(rknn::ModelType::kNone);
+    LOG_INFO("AI Engine stopped");
+    
     // 停止 HTTP API
     if (g_http_api) {
         g_http_api->Stop();
         g_http_api.reset();
     }
     
-    // 停止并销毁流管理器
+    // 停止并销毁流管理器（这会停止 StreamDispatcher）
     DestroyStreamManager();
+    
+    // 排空 IO Context 中的待处理任务
+    // 关键：StreamDispatcher 通过 PostToIo 分发帧给网络消费者（RTSP/WebSocket/WebRTC），
+    // io_context.stop() 后这些异步回调持有 EncodedStreamPtr（VENC Buffer 的 shared_ptr），
+    // 如果不执行它们，VENC Buffer 不会被 ReleaseStream，导致 VENC DestroyChn 时
+    // 死循环打印 "wait for release buffer"。
+    // Drain() 会重新 poll 一遍 io_context，让所有 pending 的回调执行完毕并释放资源。
+    LOG_DEBUG("Draining IO context to release pending VENC buffers...");
+    IoContext::Instance().Drain();
     
     // 反初始化 rkvideo
     rkvideo_deinit();

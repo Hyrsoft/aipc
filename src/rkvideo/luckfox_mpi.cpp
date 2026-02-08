@@ -213,6 +213,54 @@ int vpss_deinit(int grpId, bool enableChn1) {
 	return 0;
 }
 
+int vpss_reconfigure_chn1(int grpId, int width, int height) {
+	printf("%s: grp=%d, new_size=%dx%d\n", __func__, grpId, width, height);
+
+	int ret;
+
+	// 1. 先禁用 Chn1
+	ret = RK_MPI_VPSS_DisableChn(grpId, VPSS_CHN1);
+	if (ret != RK_SUCCESS) {
+		printf("ERROR: RK_MPI_VPSS_DisableChn Chn1 failed! ret=0x%x\n", ret);
+		return -1;
+	}
+
+	// 2. 重新配置 Chn1 属性
+	VPSS_CHN_ATTR_S stVpssChn1Attr;
+	memset(&stVpssChn1Attr, 0, sizeof(VPSS_CHN_ATTR_S));
+
+	stVpssChn1Attr.enChnMode = VPSS_CHN_MODE_USER;
+	stVpssChn1Attr.enCompressMode = COMPRESS_MODE_NONE;
+	stVpssChn1Attr.enDynamicRange = DYNAMIC_RANGE_SDR8;
+	stVpssChn1Attr.enPixelFormat = RK_FMT_YUV420SP;
+	stVpssChn1Attr.stFrameRate.s32SrcFrameRate = -1;
+	stVpssChn1Attr.stFrameRate.s32DstFrameRate = -1;
+	stVpssChn1Attr.u32Width = width;
+	stVpssChn1Attr.u32Height = height;
+	stVpssChn1Attr.u32Depth = 2;  // 用户模式，允许 GetChnFrame
+	stVpssChn1Attr.bFlip = RK_FALSE;
+	stVpssChn1Attr.bMirror = RK_FALSE;
+	stVpssChn1Attr.u32FrameBufCnt = 2;
+
+	ret = RK_MPI_VPSS_SetChnAttr(grpId, VPSS_CHN1, &stVpssChn1Attr);
+	if (ret != RK_SUCCESS) {
+		printf("ERROR: RK_MPI_VPSS_SetChnAttr Chn1 failed! ret=0x%x\n", ret);
+		// 尝试恢复通道
+		RK_MPI_VPSS_EnableChn(grpId, VPSS_CHN1);
+		return -1;
+	}
+
+	// 3. 重新启用 Chn1
+	ret = RK_MPI_VPSS_EnableChn(grpId, VPSS_CHN1);
+	if (ret != RK_SUCCESS) {
+		printf("ERROR: RK_MPI_VPSS_EnableChn Chn1 failed! ret=0x%x\n", ret);
+		return -1;
+	}
+
+	printf("VPSS Chn1 reconfigured to %dx%d\n", width, height);
+	return 0;
+}
+
 int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType) {
 	printf("%s\n",__func__);
 	VENC_RECV_PIC_PARAM_S stRecvParam;

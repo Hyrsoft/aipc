@@ -8,6 +8,7 @@ add_subdirectory(common)
 
 # 添加子模块（静态库）
 add_subdirectory(rkvideo)
+add_subdirectory(rknn)      # AI 推理引擎模块
 add_subdirectory(rtsp)
 add_subdirectory(webrtc)
 add_subdirectory(wspreview)
@@ -44,6 +45,7 @@ target_link_libraries(aipc
         file_lib        # file_lib 依赖 FFmpeg 和 rkvideo
         webrtc_lib      # WebRTC 模块
         wspreview_lib   # WebSocket 预览模块
+        rknn_lib        # AI 推理引擎模块
         rkvideo         # rkvideo 也依赖 sample_comm，放后面确保符号解析
         spdlog::spdlog
         httplib

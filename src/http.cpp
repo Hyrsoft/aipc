@@ -13,6 +13,8 @@
 #include "rtsp/rtsp_service.h"
 #include "file/file_service.h"
 #include "webrtc/webrtc_service.h"
+#include "rknn/ai_engine.h"
+#include "rknn/ai_service.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
@@ -388,6 +390,60 @@ void HttpApi::SetupRoutes() {
         
         fs->StopRecording();
         res.set_content(json_response(true, "Recording stopped"), "application/json");
+    });
+
+    // ========================================================================
+    // AI 推理引擎 API
+    // ========================================================================
+    server_->Get("/api/ai/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto& engine = rknn::AIEngine::Instance();
+        auto& service = rknn::AIService::Instance();
+        
+        json data;
+        data["model_type"] = rknn::ModelTypeToString(engine.GetCurrentModelType());
+        data["has_model"] = engine.HasModel();
+        data["model_dir"] = engine.GetModelDir();
+        data["service_running"] = service.IsRunning();
+        
+        // AI 服务统计
+        auto stats = service.GetStats();
+        data["stats"]["frames_processed"] = stats.frames_processed;
+        data["stats"]["frames_skipped"] = stats.frames_skipped;
+        data["stats"]["total_detections"] = stats.total_detections;
+        data["stats"]["avg_inference_ms"] = stats.avg_inference_ms;
+        
+        if (engine.HasModel()) {
+            auto info = engine.GetModelInfo();
+            data["model_info"]["type"] = rknn::ModelTypeToString(info.type);
+            data["model_info"]["input_width"] = info.input_width;
+            data["model_info"]["input_height"] = info.input_height;
+            data["model_info"]["input_channels"] = info.input_channels;
+            data["model_info"]["is_quant"] = info.is_quant;
+        }
+        
+        res.set_content(json_response(true, "ok", data), "application/json");
+    });
+    
+    server_->Post("/api/ai/switch", [](const HttpRequest& req, HttpResponse& res) {
+        try {
+            json body = json::parse(req.body);
+            std::string model_type_str = body.value("model", "none");
+            
+            rknn::ModelType type = rknn::StringToModelType(model_type_str);
+            
+            LOG_INFO("AI model switch requested: {}", model_type_str);
+            
+            int ret = rknn::AIEngine::Instance().SwitchModel(type);
+            if (ret == 0) {
+                json data;
+                data["model_type"] = rknn::ModelTypeToString(type);
+                res.set_content(json_response(true, "Model switched", data), "application/json");
+            } else {
+                res.set_content(json_response(false, "Failed to switch model"), "application/json");
+            }
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
     });
 
     LOG_INFO("HTTP API 路由配置完成");

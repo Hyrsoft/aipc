@@ -415,6 +415,38 @@
                         <div class="log-entry">等待操作...</div>
                     </div>
                 </div>
+
+                <!-- AI 推理卡片 -->
+                <div class="card">
+                    <h2><span class="icon">🤖</span> AI 推理</h2>
+                    <div class="info-row">
+                        <span class="label">当前模型</span>
+                        <span class="badge" id="aiModelStatus">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">服务状态</span>
+                        <span class="badge" id="aiServiceStatus">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">已处理帧</span>
+                        <span class="value" id="aiFramesProcessed">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">检测总数</span>
+                        <span class="value" id="aiTotalDetections">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">选择模型</span>
+                        <select id="aiModelSelect" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem;">
+                            <option value="none">无（关闭推理）</option>
+                            <option value="yolov5">YOLOv5（目标检测）</option>
+                            <option value="retinaface">RetinaFace（人脸检测）</option>
+                        </select>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" id="btnAiSwitch" onclick="aiSwitchModel()">🔄 切换模型</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -752,6 +784,72 @@
                 addLog('录制停止失败: ' + result.message, 'error');
             }
             updateStatus();
+        }
+
+        // =====================================================================
+        // AI 推理控制
+        // =====================================================================
+        async function updateAiStatus() {
+            try {
+                const result = await apiCall('GET', '/api/ai/status');
+                if (result.success && result.data) {
+                    const data = result.data;
+                    const modelEl = document.getElementById('aiModelStatus');
+                    const serviceEl = document.getElementById('aiServiceStatus');
+                    
+                    // 更新下拉框选中项
+                    const select = document.getElementById('aiModelSelect');
+                    if (data.model_type) {
+                        select.value = data.model_type.toLowerCase();
+                    }
+                    
+                    // 更新模型状态
+                    if (data.has_model) {
+                        modelEl.textContent = data.model_type;
+                        modelEl.className = 'badge success';
+                    } else {
+                        modelEl.textContent = '未加载';
+                        modelEl.className = 'badge info';
+                    }
+                    
+                    // 更新服务状态
+                    if (data.service_running) {
+                        serviceEl.textContent = '运行中';
+                        serviceEl.className = 'badge success';
+                    } else {
+                        serviceEl.textContent = '已停止';
+                        serviceEl.className = 'badge warning';
+                    }
+                    
+                    // 更新统计信息
+                    if (data.stats) {
+                        document.getElementById('aiFramesProcessed').textContent = data.stats.frames_processed || 0;
+                        document.getElementById('aiTotalDetections').textContent = data.stats.total_detections || 0;
+                    }
+                }
+            } catch (error) {
+                console.error('AI status error:', error);
+            }
+        }
+
+        async function aiSwitchModel() {
+            const select = document.getElementById('aiModelSelect');
+            const modelType = select.value;
+            
+            addLog('正在切换 AI 模型: ' + modelType + '...');
+            document.getElementById('btnAiSwitch').disabled = true;
+            
+            const result = await apiCall('POST', '/api/ai/switch', { model: modelType });
+            
+            document.getElementById('btnAiSwitch').disabled = false;
+            
+            if (result.success) {
+                addLog('AI 模型切换成功: ' + (result.data?.model_type || modelType), 'success');
+            } else {
+                addLog('AI 模型切换失败: ' + result.message, 'error');
+            }
+            
+            updateAiStatus();
         }
 
         // =====================================================================
@@ -1196,7 +1294,11 @@
         document.addEventListener('DOMContentLoaded', () => {
             addLog('控制面板已加载');
             updateStatus();
-            updateTimer = setInterval(updateStatus, 3000);
+            updateAiStatus();
+            updateTimer = setInterval(() => {
+                updateStatus();
+                updateAiStatus();
+            }, 3000);
         });
     </script>
 </body>

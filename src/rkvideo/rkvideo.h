@@ -103,6 +103,30 @@ void rkvideo_stop_streaming();
 VideoFramePtr rkvideo_get_vi_frame(int timeoutMs = -1);
 
 /**
+ * @brief 动态重配置 VPSS Chn1 的输出分辨率（用于 AI 模型切换）
+ * 
+ * @param width 新的输出宽度
+ * @param height 新的输出高度
+ * @return 0 成功，负值失败
+ */
+int rkvideo_reconfigure_ai_channel(int width, int height);
+
+/**
+ * @brief 暂停 VPSS 流水线（停止 VPSS Group，用于验证 NPU 带宽冲突）
+ * 
+ * @return 0 成功，负值失败
+ * @warning 会中断编码流和 AI 通道，仅用于调试验证
+ */
+int rkvideo_pause_pipeline();
+
+/**
+ * @brief 恢复 VPSS 流水线
+ * 
+ * @return 0 成功，负值失败
+ */
+int rkvideo_resume_pipeline();
+
+/**
  * @brief 获取当前视频配置
  */
 const VideoConfig& rkvideo_get_config();

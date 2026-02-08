@@ -136,6 +136,20 @@ public:
     }
 
     /**
+     * @brief 排空 IO Context 中的待处理任务
+     * 
+     * 在 Stop() 之后调用，用于执行/销毁所有剩余的异步任务。
+     * 这对于释放异步回调中持有的 shared_ptr 资源（如 VENC Buffer）至关重要。
+     * 
+     * 典型用法：在 StreamDispatcher 停止后、rkvideo_deinit 前调用
+     */
+    void Drain() {
+        io_context_.restart();
+        io_context_.poll();      // 执行所有已排队的任务（非阻塞）
+        io_context_.stop();
+    }
+
+    /**
      * @brief 重置 IO Context（用于重新启动）
      */
     void Reset() {
