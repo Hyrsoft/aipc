@@ -122,13 +122,7 @@ install(TARGETS aipc
     RUNTIME DESTINATION ${AIPC_INSTALL_BIN_DIR}
 )
 
-# 安装 libdatachannel 动态库（如果是动态链接）
-if(TARGET datachannel)
-    install(TARGETS datachannel
-        LIBRARY DESTINATION ${AIPC_INSTALL_LIB_DIR}
-        RUNTIME DESTINATION ${AIPC_INSTALL_BIN_DIR}
-    )
-endif()
+# 注意：libdatachannel 动态库已手动部署到设备中，无需安装
 
 # 安装启动/停止脚本
 install(PROGRAMS 

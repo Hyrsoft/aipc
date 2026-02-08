@@ -110,16 +110,10 @@ int ImageProcessor::ConvertNV12ToModelInput(const void* nv12_data, int src_width
 
     // ========================================
     // 步骤 1: 先用黑色填充整个输出缓冲区（letterbox 边框）
+    // 注意：RV1106 的 RGA 不支持 imfill，使用 memset 替代
+    // 对于黑色（全零）填充，memset 效率很高
     // ========================================
-    rga_buffer_t dst_full = wrapbuffer_virtualaddr(
-        rgb_output, model_width_, model_height_, RK_FORMAT_RGB_888);
-    
-    im_rect fill_rect = {0, 0, model_width_, model_height_};
-    status = imfill(dst_full, fill_rect, 0x00000000);  // 黑色填充
-    if (status != IM_STATUS_SUCCESS) {
-        LOG_ERROR("RGA imfill failed: {}", imStrError(status));
-        return -1;
-    }
+    std::memset(rgb_output, 0, model_width_ * model_height_ * 3);
 
     // ========================================
     // 步骤 2: NV12 -> RGB 颜色转换到临时缓冲区
@@ -145,6 +139,10 @@ int ImageProcessor::ConvertNV12ToModelInput(const void* nv12_data, int src_width
     // ========================================
     // 步骤 3: 缩放并复制到目标 letterbox 中心区域
     // ========================================
+    
+    // 目标缓冲区
+    rga_buffer_t dst_full = wrapbuffer_virtualaddr(
+        rgb_output, model_width_, model_height_, RK_FORMAT_RGB_888);
     
     // 使用 improcess 进行缩放并指定目标区域
     // 源区域：整个临时 RGB 图像

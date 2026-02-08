@@ -84,7 +84,7 @@ int rkvideo_init() {
     // 利用 VPSS 硬件缩放，将 1920x1080 缩放到 AI 需要的尺寸
     // 避免在 CPU 上做大分辨率 OpenCV 转换
     static const int kAiWidth = 640;
-    static const int kAiHeight = 480;
+    static const int kAiHeight = 640;
     
     LOG_DEBUG("Initializing VPSS Group 0...");
     if (g_enableAiChannel) {

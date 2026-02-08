@@ -15,6 +15,15 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# 第一步半：删除 libdatachannel 相关文件（已手动部署到设备）
+echo ""
+echo "清理 libdatachannel 的动态库和头文件..."
+rm -f "$INSTALL_DIR/lib/libdatachannel.so"*
+rm -f "$INSTALL_DIR/lib/libdatachannel.a"
+rm -rf "$INSTALL_DIR/include"
+rm -rf "$INSTALL_DIR/lib"
+echo "清理完成"
+
 # 第二步：使用 rsync 增量同步
 echo ""
 echo "========================================="
