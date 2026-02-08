@@ -254,6 +254,15 @@ int main(int argc, char* argv[]) {
     std::string model_dir = exe_dir + "/../model";
     LOG_INFO("AI model directory: {}", model_dir);
     rknn::AIEngine::Instance().SetModelDir(model_dir);
+    
+    // 设置 VPSS 重配置回调：当模型输入尺寸变化时，自动重配置 VPSS Chn1
+    rknn::AIEngine::Instance().SetVpssReconfigureCallback(
+        [](int width, int height) -> int {
+            LOG_INFO("VPSS reconfigure callback: {}x{}", width, height);
+            return rkvideo_reconfigure_ai_channel(width, height);
+        }
+    );
+    
     LOG_INFO("AI Engine initialized (no model loaded by default)");
 
     // 启动 AI 推理服务

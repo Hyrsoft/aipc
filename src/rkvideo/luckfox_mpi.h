@@ -63,6 +63,21 @@ int vpss_init(int grpId, int inputWidth, int inputHeight,
  */
 int vpss_deinit(int grpId, bool enableChn1 = false);
 
+/**
+ * @brief 动态重配置 VPSS Chn1 的输出分辨率
+ * 
+ * 在 AI 模型切换导致输入尺寸变化时调用，修改 Chn1 的输出分辨率
+ * 以匹配新模型的需求。
+ * 
+ * @param grpId VPSS Group ID
+ * @param width 新的输出宽度
+ * @param height 新的输出高度
+ * @return 0 成功，-1 失败
+ * 
+ * @note 需要先 Disable 通道再重新配置并 Enable
+ */
+int vpss_reconfigure_chn1(int grpId, int width, int height);
+
 int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType);
 
 #endif

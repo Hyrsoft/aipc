@@ -145,6 +145,16 @@ engine.SetVpssReconfigureCallback([](int width, int height) {
 });
 ```
 
+```bash
+AIEngine::SwitchModel()
+  → 检测到输入尺寸变化
+    → vpss_callback_(new_width, new_height)     // lambda 回调
+      → rkvideo_reconfigure_ai_channel()         // rkvideo 模块封装
+        → vpss_reconfigure_chn1()                // MPI 底层操作
+          → DisableChn → SetChnAttr → EnableChn
+
+```
+
 ## 统一结果结构
 
 ```cpp

@@ -216,7 +216,7 @@ private:
     
     /// VPSS 重配置回调
     VpssReconfigureCallback vpss_callback_;
-    
+     
     /// 上一次的模型输入尺寸（用于检测尺寸变化）
     int last_input_width_ = 0;
     int last_input_height_ = 0;

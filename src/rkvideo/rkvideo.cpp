@@ -295,6 +295,23 @@ VideoFramePtr rkvideo_get_vi_frame(int timeoutMs) {
     return acquire_vpss_frame(0, VPSS_CHN1, timeoutMs);
 }
 
+int rkvideo_reconfigure_ai_channel(int width, int height) {
+    if (!g_enableAiChannel) {
+        LOG_ERROR("AI channel (VPSS Chn1) is not enabled, cannot reconfigure");
+        return -1;
+    }
+    
+    LOG_INFO("Reconfiguring AI channel (VPSS Chn1) to {}x{}...", width, height);
+    int ret = vpss_reconfigure_chn1(0, width, height);
+    if (ret != 0) {
+        LOG_ERROR("Failed to reconfigure VPSS Chn1");
+        return -1;
+    }
+    
+    LOG_INFO("AI channel reconfigured successfully to {}x{}", width, height);
+    return 0;
+}
+
 const VideoConfig& rkvideo_get_config() {
     return g_videoConfig;
 }
