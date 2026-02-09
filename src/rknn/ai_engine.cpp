@@ -11,6 +11,7 @@
 #include "ai_engine.h"
 #include "yolov5_model.h"
 #include "retinaface_model.h"
+#include "rkvideo/osd_overlay.h"
 #include "common/logger.h"
 
 namespace rknn {
@@ -302,6 +303,18 @@ std::string AIEngine::FormatResultLog(const DetectionResult& result, size_t inde
     }
     
     return model_->FormatResultLog(result, index, letterbox_scale, letterbox_pad_x, letterbox_pad_y);
+}
+
+void AIEngine::GenerateOSDBoxes(const DetectionResultList& results,
+                                 std::vector<OSDBox>& boxes) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    if (!model_) {
+        boxes.clear();
+        return;
+    }
+    
+    model_->GenerateOSDBoxes(results, boxes);
 }
 
 }  // namespace rknn

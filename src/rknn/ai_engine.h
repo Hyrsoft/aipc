@@ -23,9 +23,13 @@
 #include <mutex>
 #include <atomic>
 #include <functional>
+#include <vector>
 
 #include "ai_model_base.h"
 #include "ai_types.h"
+
+// 前向声明
+struct OSDBox;
 
 namespace rknn {
 
@@ -199,6 +203,15 @@ public:
                                  float letterbox_scale = 1.0f,
                                  int letterbox_pad_x = 0,
                                  int letterbox_pad_y = 0) const;
+
+    /**
+     * @brief 生成 OSD 显示框（委托给模型实现）
+     *
+     * @param results 检测结果列表
+     * @param boxes [out] 输出的 OSD 框列表
+     */
+    void GenerateOSDBoxes(const DetectionResultList& results,
+                           std::vector<OSDBox>& boxes) const;
 
 private:
     AIEngine();

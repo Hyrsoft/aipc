@@ -14,6 +14,7 @@
 #include "common/logger.h"
 #include "common/media_buffer.h"
 #include "rkvideo/rkvideo.h"
+#include "rkvideo/osd_overlay.h"
 
 #include <chrono>
 #include <cstring>
@@ -29,6 +30,38 @@
 //   NV12: ffplay -f rawvideo -pix_fmt nv12 -video_size WxH file.nv12
 //   RGB:  ffplay -f rawvideo -pix_fmt rgb24 -video_size WxH file.rgb
 #endif
+
+// ============================================================================
+// BandwidthGuard RAII - 推理期间自动节流 VENC
+// ============================================================================
+
+/**
+ * @brief RAII 类，在构造时启用 VENC 节流，析构时恢复正常帧率
+ * 
+ * 解决 DDR 带宽瓶颈：RV1106 单通道 256MB DDR3 在 VENC+NPU 同时工作时
+ * 可能导致 NPU 超时。通过在推理期间降低 VENC 编码帧率来缓解。
+ */
+class BandwidthGuard {
+public:
+    explicit BandwidthGuard(bool enable = true) : enabled_(enable) {
+        if (enabled_) {
+            rkvideo_set_venc_throttle(true);
+        }
+    }
+    
+    ~BandwidthGuard() {
+        if (enabled_) {
+            rkvideo_set_venc_throttle(false);
+        }
+    }
+    
+    // 禁止拷贝
+    BandwidthGuard(const BandwidthGuard&) = delete;
+    BandwidthGuard& operator=(const BandwidthGuard&) = delete;
+    
+private:
+    bool enabled_;
+};
 
 namespace rknn {
 
@@ -174,6 +207,7 @@ void AIService::InferenceLoop() {
         // 获取帧信息
         int width = frame->stVFrame.u32Width;
         int height = frame->stVFrame.u32Height;
+        int stride = frame->stVFrame.u32VirWidth;  // 虚拟宽度（行步长）
         void* nv12_data = get_frame_vir_addr(frame);
 #if !AI_DIAG_SAVE_FRAMES
         uint64_t timestamp = frame->stVFrame.u64PTS;
@@ -209,7 +243,7 @@ void AIService::InferenceLoop() {
         
         // 执行 NV12 -> RGB letterbox 转换（和正常推理一样的处理）
         LetterboxInfo letterbox_info;
-        int ret = processor.ConvertNV12ToModelInput(nv12_data, width, height,
+        int ret = processor.ConvertNV12ToModelInput(nv12_data, width, height, stride,
                                                      model_input_buffer.data(), letterbox_info);
         
         // 数据已拷贝，释放 VPSS 帧
@@ -255,7 +289,7 @@ void AIService::InferenceLoop() {
         // ========== 正常推理模式 ==========
         // NV12 转换为 RGB 并做 letterbox
         LetterboxInfo letterbox_info;
-        int ret = processor.ConvertNV12ToModelInput(nv12_data, width, height,
+        int ret = processor.ConvertNV12ToModelInput(nv12_data, width, height, stride,
                                                      model_input_buffer.data(), letterbox_info);
         
         // 数据已拷贝到 model_input_buffer，立即释放 VPSS 帧
@@ -267,20 +301,21 @@ void AIService::InferenceLoop() {
             continue;
         }
         
-        // 执行推理（暂停 VPSS 以验证 NPU 带宽冲突假设）
-        rkvideo_pause_pipeline();
-        
+        // 执行推理（使用 BandwidthGuard RAII 自动节流 VENC）
+        // 在推理期间降低 VENC 编码帧率，减少 DDR 带宽占用
         auto start = std::chrono::steady_clock::now();
         
         DetectionResultList results;
-        ret = AIEngine::Instance().ProcessFrame(model_input_buffer.data(),
-                                                 processor.GetModelWidth(),
-                                                 processor.GetModelHeight(),
-                                                 results);
+        {
+            BandwidthGuard guard;  // 构造时启用节流，析构时恢复
+            ret = AIEngine::Instance().ProcessFrame(model_input_buffer.data(),
+                                                     processor.GetModelWidth(),
+                                                     processor.GetModelHeight(),
+                                                     results);
+        }
         
         auto end = std::chrono::steady_clock::now();
         
-        rkvideo_resume_pipeline();
         double inference_ms = std::chrono::duration<double, std::milli>(end - start).count();
         total_inference_time += inference_ms;
         inference_count++;
@@ -319,6 +354,13 @@ void AIService::InferenceLoop() {
                 // 每 30 帧打印一次无检测日志
                 LOG_DEBUG("Frame #{}: 0 detections, {:.1f}ms", frame_count, inference_ms);
             }
+        }
+        
+        // 更新 OSD 显示检测框（委托给模型特化实现）
+        {
+            std::vector<OSDBox> osd_boxes;
+            AIEngine::Instance().GenerateOSDBoxes(results, osd_boxes);
+            osd_update_boxes(osd_boxes);
         }
         
         // 分发检测结果

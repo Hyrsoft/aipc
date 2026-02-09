@@ -11,6 +11,7 @@
 #define LOG_TAG "RetinaFace"
 
 #include "retinaface_model.h"
+#include "rkvideo/osd_overlay.h"
 #include "common/logger.h"
 
 #include <cstring>
@@ -540,6 +541,28 @@ std::string RetinaFaceModel::FormatResultLog(const DetectionResult& result, size
     }
     
     return std::string(buf);
+}
+
+void RetinaFaceModel::GenerateOSDBoxes(const DetectionResultList& results,
+                                        std::vector<OSDBox>& boxes) const {
+    // RetinaFace 特化：人脸统一使用黄色框
+    static const uint32_t kFaceColor = 0xFFFF00FF;  // 黄色
+    
+    boxes.clear();
+    for (size_t i = 0; i < results.Count(); ++i) {
+        const auto& det = results.results[i];
+        OSDBox box;
+        box.x = det.box.x;
+        box.y = det.box.y;
+        box.width = det.box.width;
+        box.height = det.box.height;
+        box.label_id = 0;  // 人脸类别固定为 0
+        box.color = kFaceColor;
+        boxes.push_back(box);
+    }
+    
+    // TODO: 未来可以扩展支持关键点显示
+    // 但需要对 OSD 模块进行扩展，支持点绘制
 }
 
 }  // namespace rknn

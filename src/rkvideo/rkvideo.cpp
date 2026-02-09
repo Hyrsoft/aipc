@@ -3,6 +3,7 @@
 
 #include "rkvideo.h"
 #include "luckfox_mpi.h"
+#include "osd_overlay.h"
 #include "stream_dispatcher.h"
 #include "common/logger.h"
 
@@ -161,6 +162,18 @@ int rkvideo_init() {
         }
         g_pendingConsumers.clear();
     }
+    
+    // ==================== OSD 初始化（附加到 VENC）====================
+    OSDConfig osdConfig;
+    osdConfig.max_boxes = 8;
+    osdConfig.corner_size = 24;
+    osdConfig.line_width = 4;
+    osdConfig.default_color = 0x00FF00FF;  // 绿色
+    if (osd_init(0, osdConfig)) {
+        LOG_INFO("OSD overlay initialized");
+    } else {
+        LOG_WARN("OSD overlay init failed, continuing without OSD");
+    }
             
     LOG_INFO("rkvideo module initialized successfully");
     LOG_INFO("Pipeline: VI -> VPSS (Chn0->VENC{}) -> H.264 Stream",
@@ -188,6 +201,10 @@ int rkvideo_deinit() {
     // 停止 VENC 接收新帧
     LOG_DEBUG("Stopping VENC recv...");
     RK_MPI_VENC_StopRecvFrame(0);
+    
+    // 销毁 OSD（必须在 VENC 销毁之前）
+    LOG_DEBUG("Destroying OSD overlay...");
+    osd_deinit();
     
     // 排空 VENC 输出队列中的残留帧
     // 如果有已 GetStream 但未 Release 的帧，DestroyChn 会死等
@@ -330,6 +347,18 @@ int rkvideo_resume_pipeline() {
     }
     LOG_DEBUG("VPSS Group 0 resumed after NPU inference");
     return 0;
+}
+
+int rkvideo_set_venc_throttle(bool enable) {
+    // 节流模式：30fps -> 10fps (1/3 抽帧)
+    // 正常模式：恢复 -1/-1 (不限制)
+    int srcFps = enable ? 30 : -1;
+    int dstFps = enable ? 10 : -1;
+    
+    LOG_DEBUG("VENC throttle: {} ({}fps -> {}fps)", 
+              enable ? "enabled" : "disabled", srcFps, dstFps);
+    
+    return vpss_set_chn0_framerate(0, srcFps, dstFps);
 }
 
 const VideoConfig& rkvideo_get_config() {

@@ -84,12 +84,13 @@ public:
      * @param nv12_data NV12 数据（Y + UV 平面）
      * @param src_width 源宽度
      * @param src_height 源高度
+     * @param src_stride 源行步长（虚拟宽度），0 表示使用 src_width
      * @param rgb_output RGB 输出缓冲区（需预先分配）
      * @param[out] letterbox_info letterbox 信息（用于坐标映射）
      * @return 0 成功，负值失败
      */
     int ConvertNV12ToModelInput(const void* nv12_data, int src_width, int src_height,
-                                 void* rgb_output, LetterboxInfo& letterbox_info);
+                                 int src_stride, void* rgb_output, LetterboxInfo& letterbox_info);
 
     /**
      * @brief 在 RGB 图像上绘制检测结果

@@ -127,6 +127,20 @@ int rkvideo_pause_pipeline();
 int rkvideo_resume_pipeline();
 
 /**
+ * @brief 设置 VENC 节流模式（用于 AI 推理期间降低 DDR 带宽占用）
+ * 
+ * 通过控制 VPSS Chn0 的输出帧率来实现：
+ * - enable=true: 降低到 10fps（节流模式，减少 VENC 编码压力）
+ * - enable=false: 恢复到 30fps（正常模式）
+ * 
+ * @param enable true 启用节流，false 禁用节流
+ * @return 0 成功，负值失败
+ * 
+ * @note 比 pause/resume 更平滑，不会完全中断编码流
+ */
+int rkvideo_set_venc_throttle(bool enable);
+
+/**
  * @brief 获取当前视频配置
  */
 const VideoConfig& rkvideo_get_config();

@@ -6,12 +6,14 @@
 set(RKVIDEO_SOURCES
     luckfox_mpi.cpp
     rkvideo.cpp
+    osd_overlay.cpp
 )
 
 set(RKVIDEO_HEADERS
     luckfox_mpi.h
     rkvideo.h
     stream_dispatcher.h
+    osd_overlay.h
 )
 
 # ========================================

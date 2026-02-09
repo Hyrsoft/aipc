@@ -303,3 +303,26 @@ int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType) {
 
 	return 0;
 }
+
+int vpss_set_chn0_framerate(int grpId, int srcFps, int dstFps) {
+	// 获取当前通道属性
+	VPSS_CHN_ATTR_S stChnAttr;
+	RK_S32 ret = RK_MPI_VPSS_GetChnAttr(grpId, VPSS_CHN0, &stChnAttr);
+	if (ret != RK_SUCCESS) {
+		printf("ERROR: RK_MPI_VPSS_GetChnAttr Chn0 failed! ret=0x%x\n", ret);
+		return -1;
+	}
+	
+	// 修改帧率控制参数
+	stChnAttr.stFrameRate.s32SrcFrameRate = srcFps;
+	stChnAttr.stFrameRate.s32DstFrameRate = dstFps;
+	
+	ret = RK_MPI_VPSS_SetChnAttr(grpId, VPSS_CHN0, &stChnAttr);
+	if (ret != RK_SUCCESS) {
+		printf("ERROR: RK_MPI_VPSS_SetChnAttr Chn0 framerate failed! ret=0x%x\n", ret);
+		return -1;
+	}
+	
+	printf("VPSS Chn0 framerate set to %d/%d\n", srcFps, dstFps);
+	return 0;
+}
