@@ -43,11 +43,14 @@ bool ImageProcessor::Init(int model_width, int model_height) {
     model_width_ = model_width;
     model_height_ = model_height;
 
-    // 预分配 RGA 中间缓冲区（用于 NV12->RGB 转换后、缩放前的全尺寸 RGB 图像）
+    // 预分配 RGA 中间缓冲区（用于 NV12->RGB 转换后的全尺寸 RGB 图像）
     // 预分配最大可能的源图像尺寸（1080p）
     constexpr int MAX_SRC_WIDTH = 1920;
     constexpr int MAX_SRC_HEIGHT = 1080;
     temp_rgb_buffer_.resize(MAX_SRC_WIDTH * MAX_SRC_HEIGHT * 3);
+    
+    // 预分配缩放后的临时缓冲区（模型输入尺寸大小）
+    temp_scaled_buffer_.resize(model_width * model_height * 3);
 
     initialized_ = true;
     
@@ -64,6 +67,7 @@ void ImageProcessor::Deinit() {
     }
 
     temp_rgb_buffer_.clear();
+    temp_scaled_buffer_.clear();
     model_width_ = 0;
     model_height_ = 0;
     initialized_ = false;
@@ -80,6 +84,8 @@ int ImageProcessor::ConvertNV12ToModelInput(const void* nv12_data, int src_width
 
     // ========================================
     // 使用 RGA 硬件加速进行图像处理
+    // 注意：RV1106 的 RGA 不支持 improcess 带偏移的目标区域
+    // 所以使用三步法：转换 -> 缩放 -> 手动复制到 letterbox
     // ========================================
     
     IM_STATUS status;
@@ -110,7 +116,6 @@ int ImageProcessor::ConvertNV12ToModelInput(const void* nv12_data, int src_width
 
     // ========================================
     // 步骤 1: 先用黑色填充整个输出缓冲区（letterbox 边框）
-    // 注意：RV1106 的 RGA 不支持 imfill，使用 memset 替代
     // 对于黑色（全零）填充，memset 效率很高
     // ========================================
     std::memset(rgb_output, 0, model_width_ * model_height_ * 3);
@@ -137,29 +142,30 @@ int ImageProcessor::ConvertNV12ToModelInput(const void* nv12_data, int src_width
     }
 
     // ========================================
-    // 步骤 3: 缩放并复制到目标 letterbox 中心区域
+    // 步骤 3: 使用 imresize 缩放到 scaled_width x scaled_height
     // ========================================
     
-    // 目标缓冲区
-    rga_buffer_t dst_full = wrapbuffer_virtualaddr(
-        rgb_output, model_width_, model_height_, RK_FORMAT_RGB_888);
+    rga_buffer_t scaled_rgb = wrapbuffer_virtualaddr(
+        temp_scaled_buffer_.data(), scaled_width, scaled_height, RK_FORMAT_RGB_888);
     
-    // 使用 improcess 进行缩放并指定目标区域
-    // 源区域：整个临时 RGB 图像
-    im_rect src_rect = {0, 0, src_width, src_height};
-    // 目标区域：letterbox 中心
-    im_rect dst_rect = {pad_left, pad_top, scaled_width, scaled_height};
-    
-    // 空的 pat 缓冲区和区域（不使用）
-    rga_buffer_t pat = {};
-    im_rect pat_rect = {};
-    
-    // 执行缩放到指定区域
-    status = improcess(tmp_rgb, dst_full, pat, 
-                       src_rect, dst_rect, pat_rect, 0);
+    status = imresize(tmp_rgb, scaled_rgb);
     if (status != IM_STATUS_SUCCESS) {
-        LOG_ERROR("RGA improcess (resize) failed: {}", imStrError(status));
+        LOG_ERROR("RGA imresize failed: {}", imStrError(status));
         return -1;
+    }
+    
+    // ========================================
+    // 步骤 4: 手动复制缩放后的图像到 letterbox 中心
+    // ========================================
+    uint8_t* dst_ptr = static_cast<uint8_t*>(rgb_output);
+    const uint8_t* src_ptr = temp_scaled_buffer_.data();
+    
+    // 每行复制
+    for (int y = 0; y < scaled_height; ++y) {
+        // 目标位置：(pad_left, pad_top + y)
+        uint8_t* dst_row = dst_ptr + ((pad_top + y) * model_width_ + pad_left) * 3;
+        const uint8_t* src_row = src_ptr + y * scaled_width * 3;
+        std::memcpy(dst_row, src_row, scaled_width * 3);
     }
 
     return 0;

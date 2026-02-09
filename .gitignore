@@ -13,3 +13,7 @@ bin/
 # 参考项目
 rockit-test/
 Smart_Glasses_Subcode/
+
+# 前端构建产物 (Node.js)
+www/node_modules/
+www/dist/

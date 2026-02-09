@@ -5,6 +5,13 @@ INSTALL_DIR="build/Debug/install"
 REMOTE_HOST="root@192.168.8.235"
 REMOTE_PATH="/root/aipc"
 
+# 步骤 0: 构建前端
+./assets/build_frontend.sh
+if [ $? -ne 0 ]; then
+    echo "错误：前端构建失败"
+    exit 1
+fi
+
 # 第一步：执行 cmake install
 echo "========================================="
 echo "执行 cmake --install build/Debug..."

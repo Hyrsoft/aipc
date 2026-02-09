@@ -22,7 +22,7 @@
 
 // 诊断模式开关：保存 VPSS 原始帧和模型输入帧到 /root/record/vpss/
 // 启用后不执行 NPU 推理，仅保存图像用于排查问题
-#define AI_DIAG_SAVE_FRAMES 1
+#define AI_DIAG_SAVE_FRAMES 0
 
 #if AI_DIAG_SAVE_FRAMES
 // 查看方式：

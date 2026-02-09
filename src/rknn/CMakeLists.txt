@@ -57,6 +57,9 @@ target_include_directories(rknn_lib
         ${RKNN_INCLUDE_DIR}                  # 包含 rknn_api.h 等
         ${RGA_INCLUDE_DIR}                   # 包含 im2d.hpp 等
         ${OPENCV_INCLUDE_DIR}                # OpenCV-mobile 头文件
+
+        # for rknn_box_priors.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example/luckfox_pico_rtsp_retinaface_osd/include
 )
 
 # 链接库目录

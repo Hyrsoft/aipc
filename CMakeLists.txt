@@ -139,8 +139,8 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/model/
     PATTERN "*.txt"
 )
 
-# 安装 Web 资源文件
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/www/
+# 安装 Web 资源文件 (from www/dist)
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/www/dist/
     DESTINATION ${AIPC_INSTALL_WWW_DIR}
     FILES_MATCHING
     PATTERN "*.html"

@@ -126,7 +126,8 @@ private:
     bool initialized_ = false;
     
     // 中间缓冲区
-    std::vector<uint8_t> temp_rgb_buffer_;
+    std::vector<uint8_t> temp_rgb_buffer_;     ///< NV12->RGB 转换后的全尺寸缓冲区
+    std::vector<uint8_t> temp_scaled_buffer_;  ///< 缩放后的临时缓冲区
 };
 
 }  // namespace rknn
