@@ -11,6 +11,7 @@
 #include "stream_manager.h"
 #include "common/logger.h"
 #include "rkvideo/rkvideo.h"
+#include "rkvideo/pipeline_manager.h"
 #include "rtsp/rtsp_service.h"
 #include "file/file_service.h"
 #include "webrtc/webrtc_service.h"
@@ -32,12 +33,14 @@ StreamManager::StreamManager(const StreamConfig& config)
         rtsp_service_ = std::make_unique<RtspService>(config_.rtsp_config);
         
         if (rtsp_service_->IsValid()) {
-            // 注册 RTSP 消费者到流分发器
+            // 注册 RTSP 消费者到 PipelineManager
             // 使用 AsyncIO 类型，网络发送通过 asio::post 异步执行
-            rkvideo_register_stream_consumer(
+            auto* service_ptr = rtsp_service_.get();
+            rkvideo::PipelineManager::Instance().RegisterStreamConsumer(
                 "rtsp",
-                &RtspService::StreamConsumer,
-                rtsp_service_.get(),
+                [service_ptr](EncodedStreamPtr stream) {
+                    RtspService::StreamConsumer(stream, service_ptr);
+                },
                 ConsumerType::AsyncIO,  // 网络发送，投递到 IO 线程
                 3
             );
@@ -55,12 +58,14 @@ StreamManager::StreamManager(const StreamConfig& config)
         
         file_service_ = std::make_unique<FileService>(file_config);
         
-        // 注册文件消费者到流分发器
+        // 注册文件消费者到 PipelineManager
         // 使用 Queued 类型，文件写入需要独立线程（磁盘 I/O 延迟不可控）
-        rkvideo_register_stream_consumer(
+        auto* service_ptr = file_service_.get();
+        rkvideo::PipelineManager::Instance().RegisterStreamConsumer(
             "file",
-            &FileService::StreamConsumer,
-            file_service_.get(),
+            [service_ptr](EncodedStreamPtr stream) {
+                FileService::StreamConsumer(stream, service_ptr);
+            },
             ConsumerType::Queued,  // 文件写入，使用独立队列和线程
             5  // 队列稍大，避免录制丢帧
         );
@@ -73,10 +78,12 @@ StreamManager::StreamManager(const StreamConfig& config)
         
         // WebRTC 服务需要在 Start() 中才会连接信令服务器
         // 使用 AsyncIO 类型，网络发送通过 asio::post 异步执行
-        rkvideo_register_stream_consumer(
+        auto* service_ptr = webrtc_service_.get();
+        rkvideo::PipelineManager::Instance().RegisterStreamConsumer(
             "webrtc",
-            &WebRTCService::StreamConsumer,
-            webrtc_service_.get(),
+            [service_ptr](EncodedStreamPtr stream) {
+                WebRTCService::StreamConsumer(stream, service_ptr);
+            },
             ConsumerType::AsyncIO,  // 网络发送，投递到 IO 线程
             3
         );
@@ -87,12 +94,14 @@ StreamManager::StreamManager(const StreamConfig& config)
     if (config_.enable_ws_preview) {
         ws_preview_server_ = std::make_unique<WsPreviewServer>(config_.ws_preview_config);
         
-        // 注册 WebSocket 预览消费者到流分发器
+        // 注册 WebSocket 预览消费者到 PipelineManager
         // 使用 AsyncIO 类型，WebSocket 发送通过 asio::post 异步执行
-        rkvideo_register_stream_consumer(
+        auto* server_ptr = ws_preview_server_.get();
+        rkvideo::PipelineManager::Instance().RegisterStreamConsumer(
             "ws_preview",
-            &WsPreviewServer::StreamConsumer,
-            ws_preview_server_.get(),
+            [server_ptr](EncodedStreamPtr stream) {
+                WsPreviewServer::StreamConsumer(stream, server_ptr);
+            },
             ConsumerType::AsyncIO,  // 网络发送，投递到 IO 线程
             3
         );
@@ -128,8 +137,8 @@ void StreamManager::Start() {
     // 注意：RTSP 和 WebRTC 默认不自动启动，需要通过 API 手动启动
     // 这样可以避免在没有客户端连接时浪费资源
     
-    // 启动视频流分发器
-    rkvideo_start_streaming();
+    // 启动 PipelineManager（视频流分发）
+    rkvideo::PipelineManager::Instance().Start();
     
     running_ = true;
     LOG_INFO("Stream outputs started");
@@ -142,8 +151,8 @@ void StreamManager::Stop() {
     
     LOG_INFO("Stopping stream outputs...");
     
-    // 停止视频流分发器
-    rkvideo_stop_streaming();
+    // 停止 PipelineManager
+    rkvideo::PipelineManager::Instance().Stop();
     
     // 停止 RTSP 服务
     if (rtsp_service_) {

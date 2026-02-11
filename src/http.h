@@ -10,6 +10,10 @@
  * - GET  /api/record/status   获取录制状态
  * - POST /api/record/start    开始录制
  * - POST /api/record/stop     停止录制
+ * - GET  /api/ai/status       获取 AI 模型状态
+ * - POST /api/ai/switch       切换 AI 模型
+ * - GET  /api/pipeline/status 获取管道模式状态（实验性）
+ * - POST /api/pipeline/switch 切换管道模式（实验性）
  *
  * @author 好软，好温暖
  * @date 2026-01-31
