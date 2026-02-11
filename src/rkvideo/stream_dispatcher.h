@@ -185,6 +185,42 @@ public:
      */
     bool IsRunning() const { return running_; }
 
+    /**
+     * @brief 分发帧给所有消费者
+     * 
+     * 根据消费者类型选择不同的分发策略：
+     * - Direct: 直接在当前线程调用
+     * - AsyncIO: 通过 asio::post 投递到 IO 线程
+     * - Queued: 放入消费者专属队列
+     */
+    void DispatchToConsumers(EncodedStreamPtr stream) {
+        for (auto& c : consumers_) {
+            if (!c.callback) continue;
+            
+            switch (c.type) {
+                case ConsumerType::Direct:
+                    // 直接在 Fetch 线程中执行（仅用于极快的操作）
+                    c.callback(stream);
+                    break;
+                    
+                case ConsumerType::AsyncIO:
+                    // 投递到 IO 线程执行（网络发送）
+                    // 捕获 stream 的拷贝，增加引用计数
+                    PostToIo([callback = c.callback, stream]() {
+                        callback(stream);
+                    });
+                    break;
+                    
+                case ConsumerType::Queued:
+                    // 放入队列，由专属线程处理（文件写入）
+                    if (c.queue) {
+                        c.queue->push(stream);
+                    }
+                    break;
+            }
+        }
+    }
+
 private:
     struct ConsumerInfo {
         std::string name;
@@ -255,42 +291,6 @@ private:
         }
         
         LOG_DEBUG("Fetch loop exited, total frames: {}", frameCount);
-    }
-    
-    /**
-     * @brief 分发帧给所有消费者
-     * 
-     * 根据消费者类型选择不同的分发策略：
-     * - Direct: 直接在当前线程调用
-     * - AsyncIO: 通过 asio::post 投递到 IO 线程
-     * - Queued: 放入消费者专属队列
-     */
-    void DispatchToConsumers(EncodedStreamPtr stream) {
-        for (auto& c : consumers_) {
-            if (!c.callback) continue;
-            
-            switch (c.type) {
-                case ConsumerType::Direct:
-                    // 直接在 Fetch 线程中执行（仅用于极快的操作）
-                    c.callback(stream);
-                    break;
-                    
-                case ConsumerType::AsyncIO:
-                    // 投递到 IO 线程执行（网络发送）
-                    // 捕获 stream 的拷贝，增加引用计数
-                    PostToIo([callback = c.callback, stream]() {
-                        callback(stream);
-                    });
-                    break;
-                    
-                case ConsumerType::Queued:
-                    // 放入队列，由专属线程处理（文件写入）
-                    if (c.queue) {
-                        c.queue->push(stream);
-                    }
-                    break;
-            }
-        }
     }
     
     /**

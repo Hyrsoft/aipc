@@ -11,6 +11,7 @@
 #define LOG_TAG "YoloV5"
 
 #include "yolov5_model.h"
+#include "rkvideo/osd_overlay.h"
 #include "common/logger.h"
 
 #include <cstring>
@@ -586,6 +587,38 @@ std::string YoloV5Model::FormatResultLog(const DetectionResult& result, size_t i
     snprintf(buf, sizeof(buf), "[%zu] %s @ (%d,%d,%d,%d) conf=%.1f%%",
              index, result.label.c_str(), x1, y1, x2, y2, result.confidence * 100);
     return std::string(buf);
+}
+
+void YoloV5Model::GenerateOSDBoxes(const DetectionResultList& results,
+                                    std::vector<OSDBox>& boxes) const {
+    // YOLOv5 特化：根据 COCO 类别使用不同颜色
+    // 颜色表（ARGB8888 格式）
+    static const uint32_t kClassColors[] = {
+        0x00FF00FF,  // 0:  person - 绿色
+        0x00BFFFFF,  // 1:  bicycle - 青色
+        0x0000FFFF,  // 2:  car - 蓝色
+        0xFF00FFFF,  // 3:  motorcycle - 品红
+        0xFFFF00FF,  // 4:  airplane - 黄色
+        0xFF0000FF,  // 5:  bus - 红色
+        0xFF8000FF,  // 6:  train - 橙色
+        0x8000FFFF,  // 7:  truck - 紫色
+        0x00FF80FF,  // 8:  boat - 浅绿
+        0xFF0080FF,  // 9:  traffic light - 粉红
+    };
+    static const int kNumColors = sizeof(kClassColors) / sizeof(kClassColors[0]);
+    
+    boxes.clear();
+    for (size_t i = 0; i < results.Count(); ++i) {
+        const auto& det = results.results[i];
+        OSDBox box;
+        box.x = det.box.x;
+        box.y = det.box.y;
+        box.width = det.box.width;
+        box.height = det.box.height;
+        box.label_id = det.class_id;
+        box.color = kClassColors[det.class_id % kNumColors];
+        boxes.push_back(box);
+    }
 }
 
 }  // namespace rknn

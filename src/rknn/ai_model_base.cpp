@@ -7,6 +7,7 @@
  */
 
 #include "ai_model_base.h"
+#include "rkvideo/osd_overlay.h"
 
 #include <sstream>
 #include <iomanip>
@@ -30,6 +31,23 @@ std::string AIModelBase::FormatResultLog(const DetectionResult& result, size_t i
         << " conf=" << std::fixed << std::setprecision(2) << (result.confidence * 100) << "%";
     
     return oss.str();
+}
+
+void AIModelBase::GenerateOSDBoxes(const DetectionResultList& results,
+                                    std::vector<OSDBox>& boxes) const {
+    // 默认实现：使用绿色统一显示所有检测框
+    boxes.clear();
+    for (size_t i = 0; i < results.Count(); ++i) {
+        const auto& det = results.results[i];
+        OSDBox box;
+        box.x = det.box.x;
+        box.y = det.box.y;
+        box.width = det.box.width;
+        box.height = det.box.height;
+        box.label_id = det.class_id;
+        box.color = 0x00FF00FF;  // 默认绿色
+        boxes.push_back(box);
+    }
 }
 
 }  // namespace rknn

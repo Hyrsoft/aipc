@@ -80,4 +80,53 @@ int vpss_reconfigure_chn1(int grpId, int width, int height);
 
 int venc_init(int chnId, int width, int height, RK_CODEC_ID_E enType);
 
+/**
+ * @brief 设置 VPSS Chn0 的输出帧率（用于 VENC 节流）
+ * 
+ * 在 AI 推理期间降低编码帧率，减少 DDR 带宽占用：
+ * - 正常模式：30fps 全帧率编码
+ * - 节流模式：10fps 降帧率编码（推理期间）
+ * 
+ * @param grpId VPSS Group ID
+ * @param srcFps 源帧率，-1 表示不限制
+ * @param dstFps 目标帧率，-1 表示不限制
+ * @return 0 成功，-1 失败
+ * 
+ * @note 帧率控制通过 FRAME_RATE_CTRL_S 实现，src/dst 比值即抽帧比
+ */
+int vpss_set_chn0_framerate(int grpId, int srcFps, int dstFps);
+
+// ============================================================================
+// 串行模式专用函数
+// ============================================================================
+
+/**
+ * @brief 串行模式 VPSS 初始化
+ * 
+ * 与并行模式的区别：
+ * - Chn0 的 u32Depth > 0，允许手动 GetChnFrame
+ * - 不绑定到 VENC，由用户手动 SendFrame
+ * 
+ * @param grpId VPSS Group ID
+ * @param width 输出宽度
+ * @param height 输出高度
+ * @return 0 成功，-1 失败
+ */
+int vpss_init_serial_mode(int grpId, int width, int height);
+
+/**
+ * @brief RGB 输入模式的 VENC 初始化
+ * 
+ * 与并行模式的区别：
+ * - 输入像素格式为 RGB888（用于接收 OSD 叠加后的帧）
+ * - 适用于用户需要在编码前处理图像的场景
+ * 
+ * @param chnId VENC 通道 ID
+ * @param width 图像宽度
+ * @param height 图像高度
+ * @param enType 编码类型（H.264/H.265）
+ * @return 0 成功，-1 失败
+ */
+int venc_init_rgb_input(int chnId, int width, int height, RK_CODEC_ID_E enType);
+
 #endif

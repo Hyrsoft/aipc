@@ -32,6 +32,7 @@
 #include "common/logger.h"
 #include "common/asio_context.h"
 #include "rkvideo/rkvideo.h"
+#include "rkvideo/pipeline_manager.h"
 #include "rknn/ai_engine.h"
 #include "rknn/ai_service.h"
 #include "stream_manager.h"
@@ -239,10 +240,17 @@ int main(int argc, char* argv[]) {
     }
 
     // ========================================================================
-    // 初始化 rkvideo 模块
+    // 初始化 PipelineManager（代替直接调用 rkvideo_init）
     // ========================================================================
-    if (rkvideo_init() != 0) {
-        LOG_ERROR("Failed to initialize rkvideo module!");
+    rkvideo::PipelineManagerConfig pipeline_config;
+    pipeline_config.ApplyResolution(rkvideo::ResolutionPreset::R_1080P);
+    pipeline_config.initial_mode = rkvideo::PipelineMode::PureIPC;  // 默认并行模式
+    pipeline_config.ai_width = 640;
+    pipeline_config.ai_height = 640;
+    
+    LOG_INFO("Initializing PipelineManager in PureIPC mode...");
+    if (rkvideo::PipelineManager::Instance().Init(pipeline_config) != 0) {
+        LOG_ERROR("Failed to initialize PipelineManager!");
         g_http_api->Stop();
         DestroyStreamManager();
         return -1;
@@ -256,10 +264,16 @@ int main(int argc, char* argv[]) {
     rknn::AIEngine::Instance().SetModelDir(model_dir);
     
     // 设置 VPSS 重配置回调：当模型输入尺寸变化时，自动重配置 VPSS Chn1
+    // 注：仅在并行模式下有效，串行模式不需要这个回调
     rknn::AIEngine::Instance().SetVpssReconfigureCallback(
         [](int width, int height) -> int {
-            LOG_INFO("VPSS reconfigure callback: {}x{}", width, height);
-            return rkvideo_reconfigure_ai_channel(width, height);
+            auto& mgr = rkvideo::PipelineManager::Instance();
+            if (mgr.GetCurrentMode() == rkvideo::PipelineMode::PureIPC) {
+                LOG_INFO("VPSS reconfigure callback: {}x{}", width, height);
+                return rkvideo_reconfigure_ai_channel(width, height);
+            }
+            // 串行模式下不需要重配置
+            return 0;
         }
     );
     
@@ -332,8 +346,8 @@ int main(int argc, char* argv[]) {
     LOG_DEBUG("Draining IO context to release pending VENC buffers...");
     IoContext::Instance().Drain();
     
-    // 反初始化 rkvideo
-    rkvideo_deinit();
+    // 反初始化 PipelineManager
+    rkvideo::PipelineManager::Instance().Deinit();
     
     LOG_INFO("=== AIPC Application Terminated ===");
     LogManager::Shutdown();

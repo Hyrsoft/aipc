@@ -24,6 +24,20 @@
       total_detections: 0
   };
 
+  // 分辨率/管道配置
+  let pipelineStatus = {
+      mode: 'parallel',   // 'parallel' | 'serial'
+      resolution: '1080p',
+      width: 1920,
+      height: 1080,
+      framerate: 30,
+      initialized: false,
+      streaming: false,
+      available_resolutions: [],  // 可用分辨率列表，空表示不支持切换
+      note: ''                    // 额外提示信息
+  };
+  let resolutionSwitching = false;
+
   // WebSocket H.264 相关
   let wsConnection = null;
   let jmuxer = null;
@@ -124,6 +138,26 @@
             }
           }
       }
+
+      // 获取管道/分辨率状态
+      const pipelineRes = await fetch('/api/pipeline/status');
+      if (pipelineRes.ok) {
+          const pipelineData = await pipelineRes.json();
+          if (pipelineData.success && pipelineData.data) {
+              const d = pipelineData.data;
+              pipelineStatus = {
+                  mode: d.mode || 'parallel',
+                  resolution: d.resolution?.preset || '1080p',
+                  width: d.resolution?.width || 1920,
+                  height: d.resolution?.height || 1080,
+                  framerate: d.resolution?.framerate || 30,
+                  initialized: d.initialized || false,
+                  streaming: d.streaming || false,
+                  available_resolutions: d.available_resolutions || [],
+                  note: d.note || ''
+              };
+          }
+      }
     } catch (e) {
       console.error('Failed to fetch status', e);
       status = 'offline';
@@ -162,6 +196,76 @@
           }
       } catch(e) {
           addLog(`模型切换异常: ${e.message}`, 'error');
+      }
+  }
+
+  // =====================================================================
+  // 分辨率控制
+  // =====================================================================
+  async function switchResolution(preset) {
+      if (resolutionSwitching) return;
+      if (pipelineStatus.resolution === preset) return;
+      
+      // 检查是否支持分辨率切换
+      if (!pipelineStatus.initialized || pipelineStatus.available_resolutions.length === 0) {
+          addLog('当前模式不支持分辨率切换', 'error');
+          return;
+      }
+      
+      // 推理模式下只能使用 480p
+      if (pipelineStatus.mode === 'serial' && preset !== '480p') {
+          addLog('推理模式下只能使用 480p', 'error');
+          return;
+      }
+      
+      resolutionSwitching = true;
+      addLog(`切换分辨率: ${preset} (冷启动中...)`, 'info');
+      
+      try {
+          if (!isDev) {
+              const res = await fetch('/api/pipeline/resolution', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ resolution: preset })
+              });
+              const data = await res.json();
+              if (data.success) {
+                  pipelineStatus.resolution = preset;
+                  pipelineStatus.width = data.data?.width || (preset === '1080p' ? 1920 : 720);
+                  pipelineStatus.height = data.data?.height || (preset === '1080p' ? 1080 : 480);
+                  addLog(`分辨率切换成功: ${preset} (${pipelineStatus.width}x${pipelineStatus.height})`, 'success');
+                  // 需要重新连接视频流
+                  await reconnectVideoStream();
+              } else {
+                  addLog(`分辨率切换失败: ${data.message}`, 'error');
+              }
+          } else {
+              pipelineStatus.resolution = preset;
+              pipelineStatus.width = preset === '1080p' ? 1920 : 720;
+              pipelineStatus.height = preset === '1080p' ? 1080 : 480;
+              addLog(`(Dev) 切换到 ${preset}`, 'success');
+          }
+      } catch (e) {
+          addLog(`分辨率切换异常: ${e.message}`, 'error');
+      } finally {
+          resolutionSwitching = false;
+      }
+  }
+
+  async function reconnectVideoStream() {
+      // 分辨率切换后需要重新连接流
+      if (previewMode === 'websocket') {
+          if (wsConnected) {
+              disconnectWS();
+              await new Promise(r => setTimeout(r, 500));
+              connectWS();
+          }
+      } else {
+          if (webrtcConnected) {
+              disconnectWebRTC();
+              await new Promise(r => setTimeout(r, 500));
+              connectWebRTC();
+          }
       }
   }
 
@@ -701,6 +805,73 @@
                    </button>
                    {/each}
                </div>
+           </div>
+
+           <!-- 分辨率设置 -->
+           <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+               <h3 class="text-gray-500 text-xs font-bold mb-4 uppercase tracking-wider">分辨率</h3>
+               
+               <!-- 当前分辨率状态 -->
+               <div class="flex items-center justify-between mb-4 bg-gray-50 p-3 rounded-lg">
+                   <div>
+                       <span class="font-bold text-gray-800 text-sm">{pipelineStatus.width}x{pipelineStatus.height}</span>
+                       <span class="text-gray-400 text-xs ml-2">@ {pipelineStatus.framerate}fps</span>
+                   </div>
+                   {#if pipelineStatus.mode === 'serial'}
+                       <span class="text-xs text-amber-500 bg-amber-50 px-2 py-1 rounded">推理模式</span>
+                   {/if}
+               </div>
+               
+               <!-- 分辨率切换的提示 -->
+               {#if !pipelineStatus.initialized || pipelineStatus.available_resolutions.length === 0}
+                   <div class="mb-3 p-2 bg-gray-100 border border-gray-200 rounded-lg text-xs text-gray-600">
+                       当前使用固定分辨率模式，不支持动态切换
+                   </div>
+               {:else if pipelineStatus.mode === 'serial'}
+                   <div class="mb-3 p-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+                       推理模式下强制使用 480p 以保证推理性能
+                   </div>
+               {/if}
+               
+               <!-- 分辨率选择按钮 -->
+               <div class="space-y-2">
+                   {#each [
+                       { preset: '1080p', label: '1080p (1920×1080)', desc: 'IPC 高清模式' },
+                       { preset: '480p', label: '480p (720×480)', desc: 'AI 推理模式' }
+                   ] as res}
+                   {@const isDisabled = !pipelineStatus.initialized || pipelineStatus.available_resolutions.length === 0 || (pipelineStatus.mode === 'serial' && res.preset !== '480p')}
+                   <button 
+                     class={`w-full py-2.5 px-3 rounded-lg text-xs font-medium transition-all flex items-center justify-between group 
+                       ${pipelineStatus.resolution === res.preset 
+                         ? 'bg-primary text-white shadow-lg shadow-primary/20 ring-1 ring-primary' 
+                         : isDisabled
+                           ? 'bg-gray-100 border border-gray-200 text-gray-400 cursor-not-allowed'
+                           : 'bg-white border border-gray-200 text-gray-600 hover:border-primary/50 hover:text-primary'
+                       }`}
+                     on:click={() => switchResolution(res.preset)}
+                     disabled={resolutionSwitching || isDisabled}
+                   >
+                     <div class="text-left">
+                       <div class="font-semibold">{res.label}</div>
+                       <div class="text-[10px] opacity-70">{res.desc}</div>
+                     </div>
+                     {#if pipelineStatus.resolution === res.preset}
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                     {/if}
+                   </button>
+                   {/each}
+               </div>
+               
+               <!-- 切换中提示 -->
+               {#if resolutionSwitching}
+                   <div class="mt-3 flex items-center justify-center text-xs text-gray-500">
+                       <svg class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
+                           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                       </svg>
+                       冷启动切换中...
+                   </div>
+               {/if}
            </div>
 
            <!-- 服务控制 -->

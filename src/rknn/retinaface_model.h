@@ -57,6 +57,10 @@ public:
                                  int letterbox_pad_x = 0,
                                  int letterbox_pad_y = 0) const override;
 
+    /// 生成 OSD 显示框（RetinaFace 特化版本，人脸统一使用黄色）
+    void GenerateOSDBoxes(const DetectionResultList& results,
+                           std::vector<OSDBox>& boxes) const override;
+
 private:
     /// 后处理：解码输出并执行 NMS
     int PostProcess(DetectionResultList& results);

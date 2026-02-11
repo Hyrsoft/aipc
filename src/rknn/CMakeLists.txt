@@ -10,6 +10,7 @@ set(RKNN_SOURCES
     image_utils.cpp
     yolov5_model.cpp
     retinaface_model.cpp
+    serial_frame_processor.cpp
 )
 
 set(RKNN_HEADERS
@@ -20,6 +21,7 @@ set(RKNN_HEADERS
     image_utils.h
     yolov5_model.h
     retinaface_model.h
+    serial_frame_processor.h
 )
 
 # ========================================

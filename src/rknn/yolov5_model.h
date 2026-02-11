@@ -57,6 +57,10 @@ public:
                                  int letterbox_pad_x = 0,
                                  int letterbox_pad_y = 0) const override;
 
+    /// 生成 OSD 显示框（YOLOv5 特化版本，根据 COCO 类别显示不同颜色）
+    void GenerateOSDBoxes(const DetectionResultList& results,
+                           std::vector<OSDBox>& boxes) const override;
+
 private:
     /// 加载标签文件
     int LoadLabels(const std::string& labels_path);

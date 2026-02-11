@@ -19,8 +19,12 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "ai_types.h"
+
+// 前向声明 OSDBox（在 rkvideo/osd_overlay.h 中定义）
+struct OSDBox;
 
 namespace rknn {
 
@@ -179,6 +183,19 @@ public:
                                          float letterbox_scale = 1.0f,
                                          int letterbox_pad_x = 0,
                                          int letterbox_pad_y = 0) const;
+
+    /**
+     * @brief 生成 OSD 显示框（模型特化）
+     *
+     * 允许不同模型自定义 OSD 显示方式。例如：
+     * - YOLOv5 使用不同类别的颜色
+     * - RetinaFace 可以额外显示关键点
+     *
+     * @param results 检测结果列表
+     * @param boxes [out] 输出的 OSD 框列表
+     */
+    virtual void GenerateOSDBoxes(const DetectionResultList& results,
+                                   std::vector<OSDBox>& boxes) const;
 
 protected:
     // 禁止直接实例化基类
