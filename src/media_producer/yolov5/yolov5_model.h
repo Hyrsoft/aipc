@@ -15,7 +15,7 @@
 
 #pragma once
 
-#include "../rknn/ai_types.h"
+#include "../common/ai_types.h"
 #include "rknn/rknn_api.h"
 #include <vector>
 #include <string>

@@ -11,7 +11,7 @@
 #include "retinaface_producer.h"
 #include "mpi_config.h"
 #include "retinaface_model.h"
-#include "../rknn/image_utils.h"
+#include "../common/image_utils.h"
 #include "common/logger.h"
 #include "common/media_buffer.h"
 #include "common/asio_context.h"

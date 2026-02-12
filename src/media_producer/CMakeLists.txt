@@ -63,8 +63,7 @@ set(MEDIA_PRODUCER_HEADERS
 # ========================================
 # 添加子模块
 # ========================================
-add_subdirectory(rkvideo)            # 视频采集管道
-add_subdirectory(rknn)               # RKNN 运行时核心
+add_subdirectory(common)             # 共用工具（AI类型、图像处理、OSD）
 add_subdirectory(yolov5)             # YOLOv5 目标检测模式
 add_subdirectory(retainface)         # RetinaFace 人脸检测模式
 
@@ -90,8 +89,7 @@ target_include_directories(media_producer
 target_link_libraries(media_producer
     PUBLIC
         common
-        rkvideo          # 视频管道封装
-        rknn_lib         # RKNN 运行时核心
+        media_common     # AI类型、图像处理、OSD
         yolov5_lib       # YOLOv5 目标检测
         retinaface_lib   # RetinaFace 人脸检测
 )

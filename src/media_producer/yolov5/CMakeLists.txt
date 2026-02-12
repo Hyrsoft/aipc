@@ -25,11 +25,17 @@ target_include_directories(yolov5_lib
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/media_producer   # for i_media_producer.h
-        ${CMAKE_SOURCE_DIR}/src/media_producer/rknn  # for ai_model_base.h, ai_types.h
-        ${CMAKE_SOURCE_DIR}/src/media_producer/rkvideo  # for osd_overlay.h
+        ${CMAKE_SOURCE_DIR}/src/media_producer/common  # for ai_types.h, image_utils.h, osd_overlay.h
         ${LUCKFOX_MPI_INCLUDE_DIR}
         ${LUCKFOX_MPI_INCLUDE_DIR}/rknn
         ${LUCKFOX_MPI_INCLUDE_DIR}/librga
+        ${LUCKFOX_MPI_INCLUDE_DIR}/rkaiq
+        ${LUCKFOX_MPI_INCLUDE_DIR}/rkaiq/uAPI2
+        ${LUCKFOX_MPI_INCLUDE_DIR}/rkaiq/common
+        ${LUCKFOX_MPI_INCLUDE_DIR}/rkaiq/xcore
+        ${LUCKFOX_MPI_INCLUDE_DIR}/rkaiq/iq_parser
+        ${LUCKFOX_MPI_INCLUDE_DIR}/rkaiq/iq_parser_v2
+        ${LUCKFOX_MPI_INCLUDE_DIR}/rkaiq/algos
 )
 
 # 链接库目录
@@ -41,8 +47,7 @@ target_link_directories(yolov5_lib
 # 链接依赖库
 target_link_libraries(yolov5_lib
     PUBLIC
-        rknn_lib       # RKNN 运行时核心
-        rkvideo        # 视频处理
+        media_common   # AI类型、图像处理、OSD
     PRIVATE
         common
         spdlog::spdlog

@@ -11,7 +11,7 @@
 #define LOG_TAG "YoloV5"
 
 #include "yolov5_model.h"
-#include "../rkvideo/osd_overlay.h"
+#include "../common/osd_overlay.h"
 #include "common/logger.h"
 
 #include <cstring>

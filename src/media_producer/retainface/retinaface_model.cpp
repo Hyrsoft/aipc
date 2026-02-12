@@ -11,7 +11,7 @@
 #define LOG_TAG "RetinaFace"
 
 #include "retinaface_model.h"
-#include "../rkvideo/osd_overlay.h"
+#include "../common/osd_overlay.h"
 #include "common/logger.h"
 
 #include <cstring>
