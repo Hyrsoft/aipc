@@ -6,9 +6,11 @@
 add_library(common INTERFACE)
 
 # 包含目录指向 src，这样可以使用 #include "common/logger.h"
+# 同时添加 RKMPI 头文件路径（media_buffer.h 需要）
 target_include_directories(common
     INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${LUCKFOX_MPI_INCLUDE_DIR}
 )
 
 target_link_libraries(common

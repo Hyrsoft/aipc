@@ -7,12 +7,8 @@
 add_subdirectory(common)
 
 # 添加子模块（静态库）
-add_subdirectory(rkvideo)
-add_subdirectory(rknn)      # AI 推理引擎模块
-add_subdirectory(rtsp)
-add_subdirectory(webrtc)
-add_subdirectory(wspreview)
-add_subdirectory(file)
+add_subdirectory(media_producer)     # 视频采集和 AI 推理模块
+add_subdirectory(media_distribution) # 流分发模块（RTSP/WebRTC/WS/File）
 add_subdirectory(httpserver)
 
 # ========================================
@@ -21,7 +17,6 @@ add_subdirectory(httpserver)
 
 set(AIPC_SOURCES
     main.cpp
-    stream_manager.cpp
     http.cpp
 )
 
@@ -32,6 +27,8 @@ add_executable(aipc ${AIPC_SOURCES})
 target_include_directories(aipc
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/media_producer
+        ${CMAKE_CURRENT_SOURCE_DIR}/media_distribution
         ${LIBDATACHANNEL_PATH}/deps/json/single_include  # nlohmann/json
 )
 
@@ -40,13 +37,9 @@ target_include_directories(aipc
 target_link_libraries(aipc
     PRIVATE
         common
-        httpserver_lib  # HTTP 服务器模块
-        rtsp_lib        # rtsp_lib 依赖 sample_comm
-        file_lib        # file_lib 依赖 FFmpeg 和 rkvideo
-        webrtc_lib      # WebRTC 模块
-        wspreview_lib   # WebSocket 预览模块
-        rknn_lib        # AI 推理引擎模块
-        rkvideo         # rkvideo 也依赖 sample_comm，放后面确保符号解析
+        httpserver_lib      # HTTP 服务器模块
+        media_distribution  # 流分发模块
+        media_producer      # 视频采集和 AI 推理模块
         spdlog::spdlog
         httplib
 )
