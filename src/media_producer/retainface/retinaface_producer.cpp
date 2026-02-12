@@ -400,7 +400,7 @@ int RetinaFaceProducer::InitAiEngine() {
     impl_->ai_model = std::make_unique<rknn::RetinaFaceModel>();
     
     rknn::ModelConfig model_cfg;
-    model_cfg.model_path = "/oem/usr/share/retinaface.rknn";
+    model_cfg.model_path = kDefaultModelPath;  // 使用 mpi_config.h 中的相对路径
     model_cfg.conf_threshold = 0.5f;
     model_cfg.nms_threshold = 0.4f;
 

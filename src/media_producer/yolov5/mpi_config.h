@@ -39,8 +39,9 @@ constexpr int kDefaultAiWidth = 640;    ///< 默认 AI 输入宽度
 constexpr int kDefaultAiHeight = 640;   ///< 默认 AI 输入高度
 constexpr float kDefaultConfThreshold = 0.25f;  ///< 默认置信度阈值
 constexpr float kDefaultNmsThreshold = 0.45f;   ///< 默认 NMS 阈值
-constexpr const char* kDefaultModelPath = "/oem/usr/share/yolov5.rknn";
-constexpr const char* kDefaultLabelsPath = "/oem/usr/share/coco_80_labels_list.txt";
+// 模型路径相对于可执行文件目录（bin/），模型安装在 model/ 目录
+constexpr const char* kDefaultModelPath = "../model/yolov5.rknn";
+constexpr const char* kDefaultLabelsPath = "../model/coco_80_labels_list.txt";
 
 // ============================================================================
 // VI 初始化函数

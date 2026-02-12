@@ -72,28 +72,36 @@ StreamManager::~StreamManager() {
 void StreamManager::Start() {
     LOG_INFO("Starting StreamManager...");
     
-    // 启动 RTSP
-    if (rtsp_service_ && rtsp_service_->IsValid()) {
+    // 启动 RTSP（只在 auto_start_rtsp 为 true 时自动启动）
+    if (rtsp_service_ && rtsp_service_->IsValid() && config_.auto_start_rtsp) {
         if (rtsp_service_->Start()) {
             LOG_INFO("RTSP service started: {}", rtsp_service_->GetUrl());
         } else {
             LOG_ERROR("Failed to start RTSP service");
         }
+    } else if (rtsp_service_) {
+        LOG_INFO("RTSP service created but not auto-started (use API to start)");
     }
     
-    // 启动 WebRTC
-    if (webrtc_service_) {
+    // 启动 WebRTC（只在 auto_start_webrtc 为 true 时自动启动）
+    if (webrtc_service_ && config_.auto_start_webrtc) {
         if (webrtc_service_->Start()) {
             LOG_INFO("WebRTC service started");
         } else {
             LOG_ERROR("Failed to start WebRTC service");
         }
+    } else if (webrtc_service_) {
+        LOG_INFO("WebRTC service created but not auto-started (use API to start)");
     }
     
-    // WebSocket 预览自动启动
+    // 启动 WebSocket 预览服务器
     if (ws_preview_server_) {
-        LOG_INFO("WebSocket preview server ready on port {}", 
-                 config_.ws_preview_config.port);
+        if (ws_preview_server_->Start()) {
+            LOG_INFO("WebSocket preview server started on port {}", 
+                     config_.ws_preview_config.port);
+        } else {
+            LOG_ERROR("Failed to start WebSocket preview server");
+        }
     }
     
     LOG_INFO("StreamManager started");

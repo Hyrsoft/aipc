@@ -259,6 +259,117 @@ void HttpApi::SetupRoutes() {
     });
 
     // ========================================================================
+    // WebRTC HTTP 信令 API
+    // ========================================================================
+    server_->Post("/api/webrtc/offer", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto* mgr = GetStreamManager();
+        if (!mgr || !mgr->GetWebRTCService()) {
+            res.set_content(json_response(false, "WebRTC not available"), "application/json");
+            return;
+        }
+        
+        auto* webrtc = mgr->GetWebRTCService();
+        if (!webrtc->IsRunning()) {
+            res.set_content(json_response(false, "WebRTC service not running"), "application/json");
+            return;
+        }
+        
+        try {
+            std::string offer = webrtc->CreateOfferForHttp();
+            if (offer.empty()) {
+                res.set_content(json_response(false, "Failed to create offer"), "application/json");
+                return;
+            }
+            
+            json data;
+            data["sdp"] = offer;
+            data["type"] = "offer";
+            res.set_content(json_response(true, "ok", data), "application/json");
+        } catch (const std::exception& e) {
+            res.set_content(json_response(false, std::string("Error: ") + e.what()), "application/json");
+        }
+    });
+    
+    server_->Post("/api/webrtc/answer", [](const HttpRequest& req, HttpResponse& res) {
+        auto* mgr = GetStreamManager();
+        if (!mgr || !mgr->GetWebRTCService()) {
+            res.set_content(json_response(false, "WebRTC not available"), "application/json");
+            return;
+        }
+        
+        auto* webrtc = mgr->GetWebRTCService();
+        
+        try {
+            json body = json::parse(req.body);
+            std::string sdp = body.value("sdp", "");
+            
+            if (sdp.empty()) {
+                res.set_content(json_response(false, "Missing SDP"), "application/json");
+                return;
+            }
+            
+            if (webrtc->SetAnswerFromHttp(sdp)) {
+                res.set_content(json_response(true, "Answer set"), "application/json");
+            } else {
+                res.set_content(json_response(false, "Failed to set answer"), "application/json");
+            }
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
+    });
+    
+    server_->Post("/api/webrtc/ice", [](const HttpRequest& req, HttpResponse& res) {
+        auto* mgr = GetStreamManager();
+        if (!mgr || !mgr->GetWebRTCService()) {
+            res.set_content(json_response(false, "WebRTC not available"), "application/json");
+            return;
+        }
+        
+        auto* webrtc = mgr->GetWebRTCService();
+        
+        try {
+            json body = json::parse(req.body);
+            std::string candidate = body.value("candidate", "");
+            std::string mid = body.value("sdpMid", "0");
+            
+            if (candidate.empty()) {
+                // 空候选表示 ICE 收集完成
+                res.set_content(json_response(true, "ICE gathering complete"), "application/json");
+                return;
+            }
+            
+            if (webrtc->AddIceCandidateFromHttp(candidate, mid)) {
+                res.set_content(json_response(true, "ICE candidate added"), "application/json");
+            } else {
+                res.set_content(json_response(false, "Failed to add ICE candidate"), "application/json");
+            }
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
+    });
+    
+    server_->Get("/api/webrtc/candidates", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto* mgr = GetStreamManager();
+        if (!mgr || !mgr->GetWebRTCService()) {
+            res.set_content(json_response(false, "WebRTC not available"), "application/json");
+            return;
+        }
+        
+        auto* webrtc = mgr->GetWebRTCService();
+        auto candidates = webrtc->GetLocalIceCandidates();
+        
+        json data = json::array();
+        for (const auto& [candidate, mid] : candidates) {
+            json c;
+            c["candidate"] = candidate;
+            c["sdpMid"] = mid;
+            data.push_back(c);
+        }
+        
+        res.set_content(json_response(true, "ok", data), "application/json");
+    });
+
+    // ========================================================================
     // 录制状态和控制 API
     // ========================================================================
     server_->Get("/api/record/status", [this](const HttpRequest& /*req*/, HttpResponse& res) {
@@ -297,7 +408,7 @@ void HttpApi::SetupRoutes() {
             return;
         }
         
-        if (fs->StartRecording(stream_config_.mp4_config.outputDir)) {
+        if (fs->StartRecording()) {
             res.set_content(json_response(true, "Recording started"), "application/json");
         } else {
             res.set_content(json_response(false, "Failed to start recording"), "application/json");
@@ -362,7 +473,7 @@ void HttpApi::SetupRoutes() {
             }
             
             // 切换模式（冷切换）
-            if (!mgr.SwitchMode(target_mode)) {
+            if (mgr.SwitchMode(target_mode) != 0) {
                 res.set_content(json_response(false, "Failed to switch producer mode"), "application/json");
                 return;
             }
@@ -370,6 +481,182 @@ void HttpApi::SetupRoutes() {
             json data;
             data["mode"] = media::ProducerModeToString(target_mode);
             res.set_content(json_response(true, "Producer mode switched", data), "application/json");
+            
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
+    });
+
+    // ========================================================================
+    // AI API（前端兼容接口）
+    // ========================================================================
+    server_->Get("/api/ai/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto& mgr = media::MediaManager::Instance();
+        auto mode = mgr.GetCurrentMode();
+        
+        json data;
+        // has_model: 是否加载了 AI 模型
+        bool has_model = (mode == media::ProducerMode::YoloV5 || 
+                          mode == media::ProducerMode::RetinaFace);
+        data["has_model"] = has_model;
+        
+        // model_type: 模型类型名称
+        if (mode == media::ProducerMode::YoloV5) {
+            data["model_type"] = "yolov5";
+        } else if (mode == media::ProducerMode::RetinaFace) {
+            data["model_type"] = "retinaface";
+        } else {
+            data["model_type"] = "none";
+        }
+        
+        // stats: AI 统计信息（当前未实现详细统计，返回占位数据）
+        json stats;
+        stats["frames_processed"] = 0;
+        stats["avg_inference_ms"] = 0;
+        stats["total_detections"] = 0;
+        data["stats"] = stats;
+        
+        res.set_content(json_response(true, "ok", data), "application/json");
+    });
+    
+    server_->Post("/api/ai/switch", [](const HttpRequest& req, HttpResponse& res) {
+        try {
+            json body = json::parse(req.body);
+            std::string model_str = body.value("model", "none");
+            
+            LOG_INFO("AI model switch requested: {}", model_str);
+            
+            // 映射模型名称到生产者模式
+            media::ProducerMode target_mode;
+            if (model_str == "yolov5" || model_str == "yolo") {
+                target_mode = media::ProducerMode::YoloV5;
+            } else if (model_str == "retinaface" || model_str == "face") {
+                target_mode = media::ProducerMode::RetinaFace;
+            } else {
+                target_mode = media::ProducerMode::SimpleIPC;
+            }
+            
+            auto& mgr = media::MediaManager::Instance();
+            
+            if (mgr.GetCurrentMode() == target_mode) {
+                json data;
+                data["model"] = model_str;
+                res.set_content(json_response(true, "Already using requested model", data), "application/json");
+                return;
+            }
+            
+            // 切换模式（冷切换）
+            if (mgr.SwitchMode(target_mode) != 0) {
+                res.set_content(json_response(false, "Failed to switch AI model"), "application/json");
+                return;
+            }
+            
+            json data;
+            data["model"] = model_str;
+            res.set_content(json_response(true, "AI model switched", data), "application/json");
+            
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
+    });
+
+    // ========================================================================
+    // Pipeline API（前端兼容接口）
+    // ========================================================================
+    server_->Get("/api/pipeline/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto& mgr = media::MediaManager::Instance();
+        auto mode = mgr.GetCurrentMode();
+        auto cfg = mgr.GetConfig();
+        auto res_cfg = cfg.GetResolutionConfig();
+        
+        json data;
+        
+        // mode: parallel (纯 IPC) / serial (AI 推理)
+        if (mode == media::ProducerMode::SimpleIPC) {
+            data["mode"] = "parallel";
+        } else {
+            data["mode"] = "serial";
+        }
+        
+        // resolution 信息
+        json resolution;
+        if (cfg.resolution == media::Resolution::R_1080P) {
+            resolution["preset"] = "1080p";
+        } else if (cfg.resolution == media::Resolution::R_720P) {
+            resolution["preset"] = "720p";
+        } else {
+            resolution["preset"] = "480p";
+        }
+        resolution["width"] = res_cfg.width;
+        resolution["height"] = res_cfg.height;
+        resolution["framerate"] = res_cfg.framerate;
+        data["resolution"] = resolution;
+        
+        // 状态信息
+        data["initialized"] = mgr.IsInitialized();
+        data["streaming"] = mgr.IsRunning();
+        
+        // 可用分辨率
+        if (mode == media::ProducerMode::SimpleIPC) {
+            data["available_resolutions"] = json::array({"1080p", "720p", "480p"});
+            data["note"] = "";
+        } else {
+            // AI 模式下只支持 480p
+            data["available_resolutions"] = json::array({"480p"});
+            data["note"] = "AI inference mode only supports 480p";
+        }
+        
+        res.set_content(json_response(true, "ok", data), "application/json");
+    });
+    
+    server_->Post("/api/pipeline/resolution", [](const HttpRequest& req, HttpResponse& res) {
+        try {
+            json body = json::parse(req.body);
+            std::string preset_str = body.value("resolution", "1080p");
+            
+            LOG_INFO("Resolution switch requested: {}", preset_str);
+            
+            // 解析分辨率预设
+            media::Resolution target_res;
+            if (preset_str == "720p") {
+                target_res = media::Resolution::R_720P;
+            } else if (preset_str == "480p") {
+                target_res = media::Resolution::R_480P;
+            } else {
+                target_res = media::Resolution::R_1080P;
+            }
+            
+            auto& mgr = media::MediaManager::Instance();
+            
+            // AI 模式下只支持 480p
+            if (mgr.GetCurrentMode() != media::ProducerMode::SimpleIPC && 
+                target_res != media::Resolution::R_480P) {
+                res.set_content(json_response(false, "AI mode only supports 480p"), "application/json");
+                return;
+            }
+            
+            if (mgr.GetConfig().resolution == target_res) {
+                auto res_cfg = media::ResolutionConfig::FromPreset(target_res);
+                json data;
+                data["resolution"] = preset_str;
+                data["width"] = res_cfg.width;
+                data["height"] = res_cfg.height;
+                res.set_content(json_response(true, "Already using requested resolution", data), "application/json");
+                return;
+            }
+            
+            // 切换分辨率（需要重新初始化）
+            if (mgr.SetResolution(target_res) != 0) {
+                res.set_content(json_response(false, "Failed to switch resolution"), "application/json");
+                return;
+            }
+            
+            auto res_cfg = media::ResolutionConfig::FromPreset(target_res);
+            json data;
+            data["resolution"] = preset_str;
+            data["width"] = res_cfg.width;
+            data["height"] = res_cfg.height;
+            res.set_content(json_response(true, "Resolution switched", data), "application/json");
             
         } catch (const json::exception& e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");

@@ -31,6 +31,10 @@
 #include "common/asio_context.h"
 #include "media_producer/media_manager.h"
 #include "media_distribution/stream_manager.h"
+#include "media_distribution/rtsp/rtsp_service.h"
+#include "media_distribution/file/file_service.h"
+#include "media_distribution/webrtc/webrtc_service.h"
+#include "media_distribution/wspreview/ws_preview.h"
 #include "http.h"
 
 // 全局退出标志
@@ -120,13 +124,15 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     StreamConfig stream_config;
     
-    // RTSP 配置
+    // RTSP 配置 - 创建服务但不自动启动，通过 WebUI 控制
     stream_config.enable_rtsp = true;
+    stream_config.auto_start_rtsp = false;  // 不自动启动
     stream_config.rtsp_config.port = 554;
     stream_config.rtsp_config.path = "/live/0";
     
-    // WebRTC 配置
+    // WebRTC 配置 - 创建服务但不自动启动，通过 WebUI 控制
     stream_config.enable_webrtc = true;
+    stream_config.auto_start_webrtc = false;  // 不自动启动
     stream_config.webrtc_config.device_id = "aipc_camera";
     
     // 从环境变量获取信令服务器地址，默认为 localhost
@@ -170,12 +176,12 @@ int main(int argc, char* argv[]) {
         if (arg == "--record" || arg == "-r") {
             stream_config.enable_file = true;
             LOG_INFO("Recording enabled via command line");
-        } else if (arg == "--no-rtsp") {
-            stream_config.enable_rtsp = false;
-            LOG_INFO("RTSP disabled via command line");
-        } else if (arg == "--no-webrtc") {
-            stream_config.enable_webrtc = false;
-            LOG_INFO("WebRTC disabled via command line");
+        } else if (arg == "--rtsp") {
+            stream_config.auto_start_rtsp = true;
+            LOG_INFO("RTSP auto-start enabled via command line");
+        } else if (arg == "--webrtc") {
+            stream_config.auto_start_webrtc = true;
+            LOG_INFO("WebRTC auto-start enabled via command line");
         } else if (arg == "--no-ws-preview") {
             stream_config.enable_ws_preview = false;
             LOG_INFO("WebSocket preview disabled via command line");
@@ -183,10 +189,13 @@ int main(int argc, char* argv[]) {
             printf("Usage: %s [options]\n", argv[0]);
             printf("Options:\n");
             printf("  --record, -r      Enable file recording\n");
-            printf("  --no-rtsp         Disable RTSP streaming\n");
-            printf("  --no-webrtc       Disable WebRTC streaming\n");
+            printf("  --rtsp            Auto-start RTSP server on startup\n");
+            printf("  --webrtc          Auto-start WebRTC server on startup\n");
             printf("  --no-ws-preview   Disable WebSocket preview\n");
             printf("  --help, -h        Show this help\n");
+            printf("\nNotes:\n");
+            printf("  RTSP and WebRTC services are created but not started by default.\n");
+            printf("  Use --rtsp/--webrtc to auto-start, or control via WebUI.\n");
             printf("\nEnvironment variables:\n");
             printf("  SIGNALING_HOST  WebRTC signaling server host (default: 127.0.0.1)\n");
             return 0;
@@ -231,7 +240,7 @@ int main(int argc, char* argv[]) {
     LOG_INFO("Initializing MediaManager in SimpleIPC mode...");
     auto& media_manager = media::MediaManager::Instance();
     
-    if (!media_manager.Init(media::ProducerMode::SimpleIPC, producer_config)) {
+    if (media_manager.Init(media::ProducerMode::SimpleIPC, producer_config) != 0) {
         LOG_ERROR("Failed to initialize MediaManager!");
         g_http_api->Stop();
         DestroyStreamManager();
@@ -239,8 +248,53 @@ int main(int argc, char* argv[]) {
     }
 
     // 注册流消费者（连接 Producer 和 StreamManager）
-    // TODO: 需要根据实际 StreamManager 接口调整
-    // media_manager.RegisterStreamConsumer(...);
+    LOG_INFO("Connecting MediaManager to StreamManager...");
+    
+    auto* stream_mgr = GetStreamManager();
+    
+    // 注册 RTSP 消费者
+    if (stream_mgr->GetRtspService()) {
+        media_manager.RegisterStreamConsumer(
+            "rtsp",
+            [](EncodedStreamPtr stream) {
+                RtspService::StreamConsumer(stream, GetStreamManager()->GetRtspService());
+            },
+            media::StreamConsumerType::AsyncIO);
+        LOG_INFO("RTSP consumer registered");
+    }
+    
+    // 注册 WebSocket 预览消费者
+    if (stream_mgr->GetWsPreviewServer()) {
+        media_manager.RegisterStreamConsumer(
+            "ws_preview",
+            [](EncodedStreamPtr stream) {
+                WsPreviewServer::StreamConsumer(stream, GetStreamManager()->GetWsPreviewServer());
+            },
+            media::StreamConsumerType::AsyncIO);
+        LOG_INFO("WebSocket preview consumer registered");
+    }
+    
+    // 注册文件保存消费者
+    if (stream_mgr->GetFileService()) {
+        media_manager.RegisterStreamConsumer(
+            "file",
+            [](EncodedStreamPtr stream) {
+                FileService::StreamConsumer(stream, GetStreamManager()->GetFileService());
+            },
+            media::StreamConsumerType::Queued, 10);
+        LOG_INFO("File consumer registered");
+    }
+    
+    // 注册 WebRTC 消费者
+    if (stream_mgr->GetWebRTCService()) {
+        media_manager.RegisterStreamConsumer(
+            "webrtc",
+            [](EncodedStreamPtr stream) {
+                WebRTCService::StreamConsumer(stream, GetStreamManager()->GetWebRTCService());
+            },
+            media::StreamConsumerType::AsyncIO);
+        LOG_INFO("WebRTC consumer registered");
+    }
 
     // 启动视频采集
     if (!media_manager.Start()) {
@@ -272,23 +326,30 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     LOG_INFO("Shutting down AIPC...");
     
-    // 停止 MediaManager
+    // 1. 先清除流消费者（防止继续 post 新帧到 IoContext）
+    LOG_DEBUG("Clearing stream consumers...");
+    media_manager.ClearStreamConsumers();
+    
+    // 2. 停止 MediaManager（等待 fetch 线程退出）
     media_manager.Stop();
-    media_manager.Deinit();
     LOG_INFO("MediaManager stopped");
     
-    // 停止 HTTP API
+    // 3. 排空 IO Context 中的待处理任务（释放已 post 的帧）
+    LOG_DEBUG("Draining IO context to release pending buffers...");
+    IoContext::Instance().Drain();
+    
+    // 4. 现在可以安全地反初始化 MPI（释放 VENC 等硬件资源）
+    media_manager.Deinit();
+    LOG_INFO("MediaManager deinitialized");
+    
+    // 5. 停止 HTTP API
     if (g_http_api) {
         g_http_api->Stop();
         g_http_api.reset();
     }
     
-    // 停止并销毁流管理器
+    // 6. 停止并销毁流管理器
     DestroyStreamManager();
-    
-    // 排空 IO Context 中的待处理任务
-    LOG_DEBUG("Draining IO context to release pending buffers...");
-    IoContext::Instance().Drain();
     
     LOG_INFO("=== AIPC Application Terminated ===");
     LogManager::Shutdown();

@@ -39,10 +39,13 @@ class WsPreviewServer;
  * @brief 流输出总配置
  */
 struct StreamConfig {
-    bool enable_rtsp = true;           ///< 是否启用 RTSP 推流
+    bool enable_rtsp = true;           ///< 是否创建 RTSP 服务
     bool enable_file = false;          ///< 是否启用文件保存
-    bool enable_webrtc = false;        ///< 是否启用 WebRTC
+    bool enable_webrtc = false;        ///< 是否创建 WebRTC 服务
     bool enable_ws_preview = false;    ///< 是否启用 WebSocket 预览
+    
+    bool auto_start_rtsp = true;       ///< 是否自动启动 RTSP 服务
+    bool auto_start_webrtc = true;     ///< 是否自动启动 WebRTC 服务
     
     RtspConfig rtsp_config;            ///< RTSP 配置
     Mp4RecordConfig mp4_config;        ///< MP4 录制配置

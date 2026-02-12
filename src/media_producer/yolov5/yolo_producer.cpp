@@ -406,8 +406,8 @@ int YoloProducer::InitAiEngine() {
     impl_->ai_model = std::make_unique<rknn::YoloV5Model>();
     
     rknn::ModelConfig model_cfg;
-    model_cfg.model_path = "/oem/usr/share/yolov5.rknn";  // 默认模型路径
-    model_cfg.labels_path = "/oem/usr/share/coco_80_labels_list.txt";
+    model_cfg.model_path = kDefaultModelPath;  // 使用 mpi_config.h 中的相对路径
+    model_cfg.labels_path = kDefaultLabelsPath;
     model_cfg.conf_threshold = 0.25f;
     model_cfg.nms_threshold = 0.45f;
 

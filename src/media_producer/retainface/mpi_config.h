@@ -39,7 +39,8 @@ constexpr int kDefaultAiWidth = 640;    ///< 默认 AI 输入宽度
 constexpr int kDefaultAiHeight = 640;   ///< 默认 AI 输入高度
 constexpr float kDefaultConfThreshold = 0.5f;   ///< 默认置信度阈值（人脸检测通常更高）
 constexpr float kDefaultNmsThreshold = 0.4f;    ///< 默认 NMS 阈值
-constexpr const char* kDefaultModelPath = "/oem/usr/share/retinaface.rknn";
+// 模型路径相对于可执行文件目录（bin/），模型安装在 model/ 目录
+constexpr const char* kDefaultModelPath = "../model/retinaface.rknn";
 constexpr int kLandmarkCount = 5;   ///< 人脸关键点数量（左眼、右眼、鼻子、左嘴角、右嘴角）
 
 // ============================================================================

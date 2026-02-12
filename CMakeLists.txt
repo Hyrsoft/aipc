@@ -48,6 +48,8 @@ add_link_options(-Wl,--gc-sections)
 # 第三方库路径（全局可用）
 # ========================================
 set(LUCKFOX_MPI_PATH ${CMAKE_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example CACHE PATH "Luckfox MPI library path")
+set(LUCKFOX_MPI_INCLUDE_DIR ${LUCKFOX_MPI_PATH}/include CACHE PATH "Luckfox MPI include path")
+set(LUCKFOX_MPI_LIB_DIR ${LUCKFOX_MPI_PATH}/lib/uclibc CACHE PATH "Luckfox MPI library path")
 set(SPDLOG_PATH ${CMAKE_SOURCE_DIR}/thirdparty/spdlog CACHE PATH "spdlog library path")
 set(CPP_HTTPLIB_PATH ${CMAKE_SOURCE_DIR}/thirdparty/cpp-httplib CACHE PATH "cpp-httplib library path")
 set(LIBDATACHANNEL_PATH ${CMAKE_SOURCE_DIR}/thirdparty/libdatachannel CACHE PATH "libdatachannel library path")
