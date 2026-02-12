@@ -7,7 +7,7 @@
 # 源文件配置
 # ========================================
 
-# 接口和管理器
+# 接口和管理器（核心层）
 set(MEDIA_PRODUCER_CORE_SOURCES
     media_manager.cpp
 )
@@ -17,53 +17,20 @@ set(MEDIA_PRODUCER_CORE_HEADERS
     media_manager.h
 )
 
-# SimpleIPC 模式
-set(SIMPLE_IPC_SOURCES
-    simple_ipc/simple_ipc_producer.cpp
-)
-
-set(SIMPLE_IPC_HEADERS
-    simple_ipc/simple_ipc_producer.h
-    simple_ipc/mpi_config.h
-)
-
-# YOLOv5 模式
-set(YOLO_SOURCES
-    yolov5/yolo_producer.cpp
-)
-
-set(YOLO_HEADERS
-    yolov5/yolo_producer.h
-)
-
-# RetinaFace 模式
-set(RETINAFACE_SOURCES
-    retainface/retinaface_producer.cpp
-)
-
-set(RETINAFACE_HEADERS
-    retainface/retinaface_producer.h
-)
-
-# 合并所有源文件
+# 合并核心源文件
 set(MEDIA_PRODUCER_SOURCES
     ${MEDIA_PRODUCER_CORE_SOURCES}
-    ${SIMPLE_IPC_SOURCES}
-    ${YOLO_SOURCES}
-    ${RETINAFACE_SOURCES}
 )
 
 set(MEDIA_PRODUCER_HEADERS
     ${MEDIA_PRODUCER_CORE_HEADERS}
-    ${SIMPLE_IPC_HEADERS}
-    ${YOLO_HEADERS}
-    ${RETINAFACE_HEADERS}
 )
 
 # ========================================
 # 添加子模块
 # ========================================
 add_subdirectory(common)             # 共用工具（AI类型、图像处理、OSD）
+add_subdirectory(simple_ipc)         # SimpleIPC 纯监控模式
 add_subdirectory(yolov5)             # YOLOv5 目标检测模式
 add_subdirectory(retainface)         # RetinaFace 人脸检测模式
 
@@ -90,6 +57,7 @@ target_link_libraries(media_producer
     PUBLIC
         common
         media_common     # AI类型、图像处理、OSD
+        simple_ipc_lib   # SimpleIPC 纯监控模式
         yolov5_lib       # YOLOv5 目标检测
         retinaface_lib   # RetinaFace 人脸检测
 )

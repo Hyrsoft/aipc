@@ -328,13 +328,25 @@ const char* MediaManager::GetCurrentTypeName() const {
 // ============================================================================
 
 std::unique_ptr<IMediaProducer> MediaManager::CreateProducerInstance(ProducerMode mode) {
+    // AI 模式（YoloV5/RetinaFace）推荐使用 480p 以降低 DDR 带宽压力
+    ProducerConfig mode_config = config_;
+    
     switch (mode) {
         case ProducerMode::SimpleIPC:
-            return CreateSimpleIPCProducer(config_);
+            // SimpleIPC 使用用户配置的分辨率（默认 1080p）
+            return CreateSimpleIPCProducer(mode_config);
+            
         case ProducerMode::YoloV5:
-            return CreateYoloProducer(config_);
         case ProducerMode::RetinaFace:
-            return CreateRetinaFaceProducer(config_);
+            // AI 模式强制使用 480p，避免 DDR 带宽瓶颈
+            mode_config.resolution = Resolution::R_480P;
+            LOG_INFO("AI mode: using 480p resolution for DDR bandwidth optimization");
+            if (mode == ProducerMode::YoloV5) {
+                return CreateYoloProducer(mode_config);
+            } else {
+                return CreateRetinaFaceProducer(mode_config);
+            }
+            
         default:
             LOG_ERROR("Unknown producer mode: {}", static_cast<int>(mode));
             return nullptr;
