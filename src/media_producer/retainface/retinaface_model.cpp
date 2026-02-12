@@ -1,6 +1,6 @@
 /**
- * @file yolov5_model.cpp
- * @brief YOLOv5 模型实现
+ * @file retinaface_model.cpp
+ * @brief RetinaFace 模型实现
  *
  * 基于 Luckfox RKMPI 例程移植，适配 aipc 项目架构
  *
@@ -8,32 +8,19 @@
  * @date 2026-02-05
  */
 
-#define LOG_TAG "YoloV5"
+#define LOG_TAG "RetinaFace"
 
-#include "yolov5_model.h"
-#include "rkvideo/osd_overlay.h"
+#include "retinaface_model.h"
+#include "../rkvideo/osd_overlay.h"
 #include "common/logger.h"
 
 #include <cstring>
 #include <cmath>
-#include <fstream>
-#include <set>
+
+// 引入 Luckfox 提供的 box priors
+#include "rknn_box_priors.h"
 
 namespace rknn {
-
-// ============================================================================
-// 常量定义
-// ============================================================================
-
-/// YOLOv5 Anchor 配置
-static const int kAnchors[3][6] = {
-    {10, 13, 16, 30, 33, 23},      // P3/8
-    {30, 61, 62, 45, 59, 119},     // P4/16  
-    {116, 90, 156, 198, 373, 326}  // P5/32
-};
-
-/// 每个位置的属性数量 (x, y, w, h, obj_conf, class_probs...)
-static const int kPropBoxSize = 5 + kCocoClassNum;
 
 // ============================================================================
 // 辅助函数
@@ -46,16 +33,9 @@ inline int Clamp(float val, int min_val, int max_val) {
     return val > min_val ? (val < max_val ? static_cast<int>(val) : max_val) : min_val;
 }
 
-/// 反量化：int8 -> float32
-inline float DeqntAffineToF32(int8_t qnt, int32_t zp, float scale) {
+/// 从 uint8 反量化（RetinaFace 使用 uint8 输出）
+inline float DeqntAffineToF32_U8(uint8_t qnt, int32_t zp, float scale) {
     return (static_cast<float>(qnt) - static_cast<float>(zp)) * scale;
-}
-
-/// 量化：float32 -> int8
-inline int8_t QntF32ToAffine(float f32, int32_t zp, float scale) {
-    float dst_val = (f32 / scale) + zp;
-    float clamped = dst_val <= -128 ? -128 : (dst_val >= 127 ? 127 : dst_val);
-    return static_cast<int8_t>(clamped);
 }
 
 /// 计算 IoU
@@ -70,8 +50,7 @@ float CalculateIoU(float x1_min, float y1_min, float x1_max, float y1_max,
 }
 
 /// NMS 排序辅助
-void QuickSortIndicesDescending(std::vector<float>& scores, int left, int right,
-                                std::vector<int>& indices) {
+void QuickSortIndicesDescending(float* scores, int left, int right, int* indices) {
     if (left >= right) return;
     
     float pivot = scores[left];
@@ -94,26 +73,26 @@ void QuickSortIndicesDescending(std::vector<float>& scores, int left, int right,
     QuickSortIndicesDescending(scores, low + 1, right, indices);
 }
 
-/// NMS 实现
-int NMS(int valid_count, std::vector<float>& boxes, std::vector<int>& class_ids,
-        std::vector<int>& order, int filter_id, float threshold) {
+/// NMS 实现（RetinaFace 版本，基于归一化坐标）
+int NMSRetinaFace(int valid_count, float* locations, int* order, float threshold,
+                   int width, int height) {
     for (int i = 0; i < valid_count; ++i) {
-        if (order[i] == -1 || class_ids[order[i]] != filter_id) continue;
+        if (order[i] == -1) continue;
         
         int n = order[i];
         for (int j = i + 1; j < valid_count; ++j) {
             int m = order[j];
-            if (m == -1 || class_ids[m] != filter_id) continue;
+            if (m == -1) continue;
             
-            float x1_min = boxes[n * 4 + 0];
-            float y1_min = boxes[n * 4 + 1];
-            float x1_max = x1_min + boxes[n * 4 + 2];
-            float y1_max = y1_min + boxes[n * 4 + 3];
+            float x1_min = locations[n * 4 + 0] * width;
+            float y1_min = locations[n * 4 + 1] * height;
+            float x1_max = locations[n * 4 + 2] * width;
+            float y1_max = locations[n * 4 + 3] * height;
             
-            float x2_min = boxes[m * 4 + 0];
-            float y2_min = boxes[m * 4 + 1];
-            float x2_max = x2_min + boxes[m * 4 + 2];
-            float y2_max = y2_min + boxes[m * 4 + 3];
+            float x2_min = locations[m * 4 + 0] * width;
+            float y2_min = locations[m * 4 + 1] * height;
+            float x2_max = locations[m * 4 + 2] * width;
+            float y2_max = locations[m * 4 + 3] * height;
             
             float iou = CalculateIoU(x1_min, y1_min, x1_max, y1_max,
                                      x2_min, y2_min, x2_max, y2_max);
@@ -128,19 +107,19 @@ int NMS(int valid_count, std::vector<float>& boxes, std::vector<int>& class_ids,
 }  // anonymous namespace
 
 // ============================================================================
-// YoloV5Model 实现
+// RetinaFaceModel 实现
 // ============================================================================
 
-YoloV5Model::YoloV5Model() {
-    LOG_DEBUG("YoloV5Model created");
+RetinaFaceModel::RetinaFaceModel() {
+    LOG_DEBUG("RetinaFaceModel created");
 }
 
-YoloV5Model::~YoloV5Model() {
+RetinaFaceModel::~RetinaFaceModel() {
     Deinit();
-    LOG_DEBUG("YoloV5Model destroyed");
+    LOG_DEBUG("RetinaFaceModel destroyed");
 }
 
-int YoloV5Model::Init(const ModelConfig& config) {
+int RetinaFaceModel::Init(const ModelConfig& config) {
     if (initialized_) {
         LOG_WARN("Model already initialized, deinitializing first");
         Deinit();
@@ -155,13 +134,6 @@ int YoloV5Model::Init(const ModelConfig& config) {
     if (ret < 0) {
         LOG_ERROR("rknn_init failed: ret={}", ret);
         return -1;
-    }
-    
-    // 查询 SDK 版本信息
-    rknn_sdk_version sdk_ver;
-    ret = rknn_query(ctx_, RKNN_QUERY_SDK_VERSION, &sdk_ver, sizeof(sdk_ver));
-    if (ret == RKNN_SUCC) {
-        LOG_INFO("RKNN SDK: api={}, driver={}", sdk_ver.api_version, sdk_ver.drv_version);
     }
     
     // 2. 查询输入输出数量
@@ -183,7 +155,6 @@ int YoloV5Model::Init(const ModelConfig& config) {
             LOG_ERROR("rknn_query NATIVE_INPUT_ATTR failed: ret={}", ret);
             return -1;
         }
-        // 打印张量属性（参考官方例程的 dump_tensor_attr）
         LOG_INFO("  [{}] index={}, n_dims={}, dims=[{}, {}, {}, {}], n_elems={}, size={}, size_with_stride={}, "
                  "fmt={}, type={}, qnt_type={}, zp={}, scale={}",
                  i, input_attrs_[i].index, input_attrs_[i].n_dims,
@@ -194,7 +165,7 @@ int YoloV5Model::Init(const ModelConfig& config) {
                  (int)input_attrs_[i].qnt_type, input_attrs_[i].zp, input_attrs_[i].scale);
     }
     
-    // 4. 查询输出张量属性
+    // 4. 查询输出张量属性（RetinaFace 有 3 个输出：location, scores, landmarks）
     LOG_INFO("Output tensors:");
     output_attrs_ = new rknn_tensor_attr[io_num_.n_output];
     std::memset(output_attrs_, 0, io_num_.n_output * sizeof(rknn_tensor_attr));
@@ -205,7 +176,6 @@ int YoloV5Model::Init(const ModelConfig& config) {
             LOG_ERROR("rknn_query NATIVE_OUTPUT_ATTR failed: ret={}", ret);
             return -1;
         }
-        // 打印张量属性
         LOG_INFO("  [{}] index={}, n_dims={}, dims=[{}, {}, {}, {}], n_elems={}, size={}, size_with_stride={}, "
                  "fmt={}, type={}, qnt_type={}, zp={}, scale={}",
                  i, output_attrs_[i].index, output_attrs_[i].n_dims,
@@ -216,7 +186,7 @@ int YoloV5Model::Init(const ModelConfig& config) {
                  (int)output_attrs_[i].qnt_type, output_attrs_[i].zp, output_attrs_[i].scale);
     }
     
-    // 5. 设置输入类型为 UINT8，使用 NHWC 格式（RV1106 零拷贝模式要求）
+    // 5. 设置输入类型为 UINT8，使用 NHWC 格式
     input_attrs_[0].type = RKNN_TENSOR_UINT8;
     input_attrs_[0].fmt = RKNN_TENSOR_NHWC;
     LOG_INFO("Set input to UINT8/NHWC, size_with_stride={}", input_attrs_[0].size_with_stride);
@@ -237,7 +207,7 @@ int YoloV5Model::Init(const ModelConfig& config) {
     LOG_INFO("Set input io_mem success");
     
     // 7. 创建输出内存
-    for (uint32_t i = 0; i < io_num_.n_output; ++i) {
+    for (uint32_t i = 0; i < io_num_.n_output && i < 3; ++i) {
         output_mems_[i] = rknn_create_mem(ctx_, output_attrs_[i].size_with_stride);
         if (!output_mems_[i]) {
             LOG_ERROR("rknn_create_mem for output[{}] failed", i);
@@ -269,22 +239,15 @@ int YoloV5Model::Init(const ModelConfig& config) {
     is_quant_ = (output_attrs_[0].qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC);
     LOG_INFO("Model is {}", is_quant_ ? "quantized (INT8)" : "float");
     
-    // 10. 加载标签文件（如果提供）
-    if (!config.labels_path.empty()) {
-        if (LoadLabels(config.labels_path) != 0) {
-            LOG_WARN("Failed to load labels from: {}", config.labels_path);
-        }
-    }
-    
     initialized_ = true;
-    LOG_INFO("YOLOv5 model initialized successfully");
+    LOG_INFO("RetinaFace model initialized successfully");
     return 0;
 }
 
-void YoloV5Model::Deinit() {
+void RetinaFaceModel::Deinit() {
     if (!initialized_ && ctx_ == 0) return;
     
-    LOG_INFO("Deinitializing YOLOv5 model...");
+    LOG_INFO("Deinitializing RetinaFace model...");
     
     // 释放输入内存
     if (input_mem_) {
@@ -312,16 +275,15 @@ void YoloV5Model::Deinit() {
         ctx_ = 0;
     }
     
-    labels_.clear();
     initialized_ = false;
-    LOG_INFO("YOLOv5 model deinitialized");
+    LOG_INFO("RetinaFace model deinitialized");
 }
 
-bool YoloV5Model::IsInitialized() const {
+bool RetinaFaceModel::IsInitialized() const {
     return initialized_;
 }
 
-int YoloV5Model::SetInput(const void* data, int width, int height, int stride) {
+int RetinaFaceModel::SetInput(const void* data, int width, int height, int stride) {
     if (!initialized_) {
         LOG_ERROR("Model not initialized");
         return -1;
@@ -336,7 +298,6 @@ int YoloV5Model::SetInput(const void* data, int width, int height, int stride) {
     if (width != model_width_ || height != model_height_) {
         LOG_WARN("Input size {}x{} doesn't match model size {}x{}, need resize",
                  width, height, model_width_, model_height_);
-        // TODO: 实现 RGA 缩放
         return -1;
     }
     
@@ -346,10 +307,8 @@ int YoloV5Model::SetInput(const void* data, int width, int height, int stride) {
     
     // 拷贝数据到输入内存
     if (actual_stride == model_width_ * model_channel_) {
-        // 紧凑排列，直接拷贝
         std::memcpy(input_mem_->virt_addr, data, expected_size);
     } else {
-        // 逐行拷贝
         uint8_t* dst = static_cast<uint8_t*>(input_mem_->virt_addr);
         const uint8_t* src = static_cast<const uint8_t*>(data);
         int row_size = model_width_ * model_channel_;
@@ -361,15 +320,13 @@ int YoloV5Model::SetInput(const void* data, int width, int height, int stride) {
     return 0;
 }
 
-int YoloV5Model::SetInputDma(int dma_fd, int size, int width, int height) {
+int RetinaFaceModel::SetInputDma(int dma_fd, int size, int width, int height) {
     if (!initialized_) {
         LOG_ERROR("Model not initialized");
         return -1;
     }
     
-    // TODO: 实现 DMA Buffer 零拷贝输入
-    // 需要使用 rknn_set_io_mem 重新设置输入内存
-    LOG_WARN("SetInputDma not implemented yet, falling back to copy mode");
+    LOG_WARN("SetInputDma not implemented yet");
     (void)dma_fd;
     (void)size;
     (void)width;
@@ -377,7 +334,7 @@ int YoloV5Model::SetInputDma(int dma_fd, int size, int width, int height) {
     return -1;
 }
 
-int YoloV5Model::Run() {
+int RetinaFaceModel::Run() {
     if (!initialized_) {
         LOG_ERROR("Model not initialized");
         return -1;
@@ -394,7 +351,7 @@ int YoloV5Model::Run() {
     return 0;
 }
 
-int YoloV5Model::GetResults(DetectionResultList& results) {
+int RetinaFaceModel::GetResults(DetectionResultList& results) {
     if (!initialized_) {
         LOG_ERROR("Model not initialized");
         return -1;
@@ -404,82 +361,83 @@ int YoloV5Model::GetResults(DetectionResultList& results) {
     return PostProcess(results);
 }
 
-int YoloV5Model::PostProcess(DetectionResultList& results) {
-    std::vector<float> boxes;
-    std::vector<float> scores;
-    std::vector<int> class_ids;
+int RetinaFaceModel::PostProcess(DetectionResultList& results) {
+    // 获取输出指针
+    uint8_t* location = static_cast<uint8_t*>(output_mems_[0]->virt_addr);
+    uint8_t* scores = static_cast<uint8_t*>(output_mems_[1]->virt_addr);
+    uint8_t* landmarks = static_cast<uint8_t*>(output_mems_[2]->virt_addr);
     
-    // 不同尺度的 grid 大小和 stride
-    const int strides[3] = {8, 16, 32};
+    // 选择对应尺寸的 prior boxes
+    const float (*prior_ptr)[4];
+    int num_priors;
+    if (model_width_ == 640) {
+        prior_ptr = BOX_PRIORS_640;
+        num_priors = 16800;
+    } else if (model_width_ == 320) {
+        prior_ptr = BOX_PRIORS_320;
+        num_priors = 4200;
+    } else {
+        LOG_ERROR("Unsupported model size: {}", model_width_);
+        return -1;
+    }
+    
+    // 分配临时数组
+    std::vector<int> filter_indices(num_priors);
+    std::vector<float> props(num_priors, 0.0f);
+    std::vector<float> loc_fp32(num_priors * 4, 0.0f);
+    std::vector<float> landms_fp32(num_priors * 10, 0.0f);
+    
+    // 量化参数
+    int32_t loc_zp = output_attrs_[0].zp;
+    float loc_scale = output_attrs_[0].scale;
+    int32_t scores_zp = output_attrs_[1].zp;
+    float scores_scale = output_attrs_[1].scale;
+    int32_t landms_zp = output_attrs_[2].zp;
+    float landms_scale = output_attrs_[2].scale;
+    
+    // 方差参数（RetinaFace 固定值）
+    const float VARIANCES[2] = {0.1f, 0.2f};
+    
     int valid_count = 0;
+    float conf_threshold = config_.conf_threshold > 0 ? config_.conf_threshold : 0.5f;
     
-    // 遍历三个输出层
-    for (uint32_t i = 0; i < io_num_.n_output && i < 3; ++i) {
-        int grid_h = model_height_ / strides[i];
-        int grid_w = model_width_ / strides[i];
+    // 解码 boxes
+    for (int i = 0; i < num_priors && valid_count < kMaxDetections; ++i) {
+        // scores 输出格式：[num_priors, 2]，第二个值为人脸置信度
+        float face_score = DeqntAffineToF32_U8(scores[i * 2 + 1], scores_zp, scores_scale);
         
-        int8_t* output = static_cast<int8_t*>(output_mems_[i]->virt_addr);
-        int32_t zp = output_attrs_[i].zp;
-        float scale = output_attrs_[i].scale;
-        
-        int8_t threshold_i8 = QntF32ToAffine(config_.conf_threshold, zp, scale);
-        
-        // RV1106 NHWC 格式处理
-        int anchor_per_branch = 3;
-        int align_c = kPropBoxSize * anchor_per_branch;
-        
-        for (int h = 0; h < grid_h; ++h) {
-            for (int w = 0; w < grid_w; ++w) {
-                for (int a = 0; a < anchor_per_branch; ++a) {
-                    int hw_offset = h * grid_w * align_c + w * align_c + a * kPropBoxSize;
-                    int8_t* ptr = output + hw_offset;
-                    int8_t box_conf = ptr[4];
-                    
-                    if (box_conf >= threshold_i8) {
-                        // 找到最大类别概率
-                        int8_t max_class_prob = ptr[5];
-                        int max_class_id = 0;
-                        for (int k = 1; k < kCocoClassNum; ++k) {
-                            if (ptr[5 + k] > max_class_prob) {
-                                max_class_prob = ptr[5 + k];
-                                max_class_id = k;
-                            }
-                        }
-                        
-                        float box_conf_f32 = DeqntAffineToF32(box_conf, zp, scale);
-                        float class_prob_f32 = DeqntAffineToF32(max_class_prob, zp, scale);
-                        float final_score = box_conf_f32 * class_prob_f32;
-                        
-                        if (final_score > config_.conf_threshold) {
-                            // 解码边界框
-                            float box_x = DeqntAffineToF32(ptr[0], zp, scale) * 2.0f - 0.5f;
-                            float box_y = DeqntAffineToF32(ptr[1], zp, scale) * 2.0f - 0.5f;
-                            float box_w = DeqntAffineToF32(ptr[2], zp, scale) * 2.0f;
-                            float box_h = DeqntAffineToF32(ptr[3], zp, scale) * 2.0f;
-                            
-                            box_w = box_w * box_w;
-                            box_h = box_h * box_h;
-                            
-                            box_x = (box_x + w) * strides[i];
-                            box_y = (box_y + h) * strides[i];
-                            box_w *= kAnchors[i][a * 2];
-                            box_h *= kAnchors[i][a * 2 + 1];
-                            
-                            // 转换为左上角坐标
-                            box_x -= box_w / 2.0f;
-                            box_y -= box_h / 2.0f;
-                            
-                            boxes.push_back(box_x);
-                            boxes.push_back(box_y);
-                            boxes.push_back(box_w);
-                            boxes.push_back(box_h);
-                            scores.push_back(final_score);
-                            class_ids.push_back(max_class_id);
-                            valid_count++;
-                        }
-                    }
-                }
+        if (face_score > conf_threshold) {
+            filter_indices[valid_count] = i;
+            props[valid_count] = face_score;
+            
+            int offset = i * 4;
+            uint8_t* bbox = location + offset;
+            
+            // 解码边界框
+            float box_x = DeqntAffineToF32_U8(bbox[0], loc_zp, loc_scale) * VARIANCES[0] * prior_ptr[i][2] + prior_ptr[i][0];
+            float box_y = DeqntAffineToF32_U8(bbox[1], loc_zp, loc_scale) * VARIANCES[0] * prior_ptr[i][3] + prior_ptr[i][1];
+            float box_w = std::exp(DeqntAffineToF32_U8(bbox[2], loc_zp, loc_scale) * VARIANCES[1]) * prior_ptr[i][2];
+            float box_h = std::exp(DeqntAffineToF32_U8(bbox[3], loc_zp, loc_scale) * VARIANCES[1]) * prior_ptr[i][3];
+            
+            float xmin = box_x - box_w * 0.5f;
+            float ymin = box_y - box_h * 0.5f;
+            float xmax = xmin + box_w;
+            float ymax = ymin + box_h;
+            
+            loc_fp32[offset + 0] = xmin;
+            loc_fp32[offset + 1] = ymin;
+            loc_fp32[offset + 2] = xmax;
+            loc_fp32[offset + 3] = ymax;
+            
+            // 解码关键点
+            for (int j = 0; j < 5; ++j) {
+                landms_fp32[i * 10 + 2 * j] = DeqntAffineToF32_U8(landmarks[i * 10 + 2 * j], landms_zp, landms_scale)
+                                              * VARIANCES[0] * prior_ptr[i][2] + prior_ptr[i][0];
+                landms_fp32[i * 10 + 2 * j + 1] = DeqntAffineToF32_U8(landmarks[i * 10 + 2 * j + 1], landms_zp, landms_scale)
+                                                  * VARIANCES[0] * prior_ptr[i][3] + prior_ptr[i][1];
             }
+            
+            ++valid_count;
         }
     }
     
@@ -487,38 +445,44 @@ int YoloV5Model::PostProcess(DetectionResultList& results) {
         return 0;
     }
     
+    // 排序
+    QuickSortIndicesDescending(props.data(), 0, valid_count - 1, filter_indices.data());
+    
     // NMS
-    std::vector<int> order(valid_count);
-    for (int i = 0; i < valid_count; ++i) order[i] = i;
+    float nms_threshold = config_.nms_threshold > 0 ? config_.nms_threshold : 0.2f;
+    NMSRetinaFace(valid_count, loc_fp32.data(), filter_indices.data(), nms_threshold, model_width_, model_height_);
     
-    // 按分数排序
-    std::vector<float> scores_copy = scores;
-    QuickSortIndicesDescending(scores_copy, 0, valid_count - 1, order);
-    
-    // 对每个类别执行 NMS
-    std::set<int> unique_classes(class_ids.begin(), class_ids.end());
-    for (int cls_id : unique_classes) {
-        NMS(valid_count, boxes, class_ids, order, cls_id, config_.nms_threshold);
-    }
-    
-    // 收集最终结果
+    // 收集结果
     for (int i = 0; i < valid_count && results.Count() < static_cast<size_t>(config_.max_detections); ++i) {
-        int idx = order[i];
-        if (idx == -1) continue;
+        if (filter_indices[i] == -1 || props[i] < conf_threshold) {
+            continue;
+        }
+        
+        int n = filter_indices[i];
         
         DetectionResult det;
-        det.class_id = class_ids[idx];
-        det.confidence = scores[idx];
-        det.box.x = Clamp(boxes[idx * 4 + 0], 0, model_width_);
-        det.box.y = Clamp(boxes[idx * 4 + 1], 0, model_height_);
-        det.box.width = Clamp(boxes[idx * 4 + 2], 0, model_width_ - det.box.x);
-        det.box.height = Clamp(boxes[idx * 4 + 3], 0, model_height_ - det.box.y);
+        det.class_id = 0;  // 人脸类别固定为 0
+        det.confidence = props[i];
+        det.label = "face";
         
-        // 设置标签
-        if (det.class_id >= 0 && det.class_id < static_cast<int>(labels_.size())) {
-            det.label = labels_[det.class_id];
-        } else {
-            det.label = "class_" + std::to_string(det.class_id);
+        // 转换为像素坐标
+        float x1 = loc_fp32[n * 4 + 0] * model_width_;
+        float y1 = loc_fp32[n * 4 + 1] * model_height_;
+        float x2 = loc_fp32[n * 4 + 2] * model_width_;
+        float y2 = loc_fp32[n * 4 + 3] * model_height_;
+        
+        det.box.x = Clamp(x1, 0, model_width_);
+        det.box.y = Clamp(y1, 0, model_height_);
+        det.box.width = Clamp(x2 - x1, 0, model_width_ - det.box.x);
+        det.box.height = Clamp(y2 - y1, 0, model_height_ - det.box.y);
+        
+        // 添加关键点
+        det.landmarks.resize(5);
+        for (int j = 0; j < 5; ++j) {
+            float point_x = landms_fp32[n * 10 + 2 * j] * model_width_;
+            float point_y = landms_fp32[n * 10 + 2 * j + 1] * model_height_;
+            det.landmarks[j].x = Clamp(point_x, 0, model_width_);
+            det.landmarks[j].y = Clamp(point_y, 0, model_height_);
         }
         
         results.Add(det);
@@ -527,85 +491,62 @@ int YoloV5Model::PostProcess(DetectionResultList& results) {
     return 0;
 }
 
-int YoloV5Model::LoadLabels(const std::string& labels_path) {
-    std::ifstream file(labels_path);
-    if (!file.is_open()) {
-        LOG_ERROR("Failed to open labels file: {}", labels_path);
-        return -1;
-    }
-    
-    labels_.clear();
-    std::string line;
-    while (std::getline(file, line)) {
-        // 去除行尾空白
-        while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ')) {
-            line.pop_back();
-        }
-        if (!line.empty()) {
-            labels_.push_back(line);
-        }
-    }
-    
-    LOG_INFO("Loaded {} labels from {}", labels_.size(), labels_path);
-    return 0;
-}
-
-ModelInfo YoloV5Model::GetModelInfo() const {
+ModelInfo RetinaFaceModel::GetModelInfo() const {
     ModelInfo info;
     info.input_width = model_width_;
     info.input_height = model_height_;
     info.input_channels = model_channel_;
     info.is_quant = is_quant_;
-    info.type = ModelType::kYoloV5;
+    info.type = ModelType::kRetinaFace;
     return info;
 }
 
-void YoloV5Model::GetInputSize(int& width, int& height) const {
+void RetinaFaceModel::GetInputSize(int& width, int& height) const {
     width = model_width_;
     height = model_height_;
 }
 
-void* YoloV5Model::GetInputVirtAddr() const {
+void* RetinaFaceModel::GetInputVirtAddr() const {
     return input_mem_ ? input_mem_->virt_addr : nullptr;
 }
 
-int YoloV5Model::GetInputMemSize() const {
+int RetinaFaceModel::GetInputMemSize() const {
     return input_mem_ ? input_mem_->size : 0;
 }
 
-std::string YoloV5Model::FormatResultLog(const DetectionResult& result, size_t index,
-                                          float letterbox_scale,
-                                          int letterbox_pad_x,
-                                          int letterbox_pad_y) const {
-    // YOLOv5 特化格式：显示类别名和置信度
+std::string RetinaFaceModel::FormatResultLog(const DetectionResult& result, size_t index,
+                                              float letterbox_scale,
+                                              int letterbox_pad_x,
+                                              int letterbox_pad_y) const {
+    // RetinaFace 特化格式：显示人脸框和关键点
     int x1 = static_cast<int>((result.box.x - letterbox_pad_x) / letterbox_scale);
     int y1 = static_cast<int>((result.box.y - letterbox_pad_y) / letterbox_scale);
     int x2 = static_cast<int>((result.box.x + result.box.width - letterbox_pad_x) / letterbox_scale);
     int y2 = static_cast<int>((result.box.y + result.box.height - letterbox_pad_y) / letterbox_scale);
     
-    char buf[256];
-    snprintf(buf, sizeof(buf), "[%zu] %s @ (%d,%d,%d,%d) conf=%.1f%%",
-             index, result.label.c_str(), x1, y1, x2, y2, result.confidence * 100);
+    char buf[512];
+    int len = snprintf(buf, sizeof(buf), "[%zu] face @ (%d,%d,%d,%d) conf=%.1f%%",
+                       index, x1, y1, x2, y2, result.confidence * 100);
+    
+    // 添加关键点信息（如果有）
+    if (result.HasLandmarks() && result.landmarks.size() >= 5) {
+        len += snprintf(buf + len, sizeof(buf) - len, " lm:[");
+        for (size_t i = 0; i < result.landmarks.size() && i < 5; ++i) {
+            int lx = static_cast<int>((result.landmarks[i].x - letterbox_pad_x) / letterbox_scale);
+            int ly = static_cast<int>((result.landmarks[i].y - letterbox_pad_y) / letterbox_scale);
+            len += snprintf(buf + len, sizeof(buf) - len, "%s(%d,%d)",
+                           i > 0 ? "," : "", lx, ly);
+        }
+        snprintf(buf + len, sizeof(buf) - len, "]");
+    }
+    
     return std::string(buf);
 }
 
-void YoloV5Model::GenerateOSDBoxes(const DetectionResultList& results,
-                                    std::vector<OSDBox>& boxes) const {
-    // YOLOv5 特化：根据 COCO 类别使用不同颜色
-    // 颜色表（ARGB8888 格式）
-    static const uint32_t kClassColors[] = {
-        0x00FF00FF,  // 0:  person - 绿色
-        0x00BFFFFF,  // 1:  bicycle - 青色
-        0x0000FFFF,  // 2:  car - 蓝色
-        0xFF00FFFF,  // 3:  motorcycle - 品红
-        0xFFFF00FF,  // 4:  airplane - 黄色
-        0xFF0000FF,  // 5:  bus - 红色
-        0xFF8000FF,  // 6:  train - 橙色
-        0x8000FFFF,  // 7:  truck - 紫色
-        0x00FF80FF,  // 8:  boat - 浅绿
-        0xFF0080FF,  // 9:  traffic light - 粉红
-    };
-    static const int kNumColors = sizeof(kClassColors) / sizeof(kClassColors[0]);
+void RetinaFaceModel::GenerateOSDBoxes(const DetectionResultList& results,
+                                        std::vector<OSDBox>& boxes) const {
+    // RetinaFace 特化：人脸统一使用黄色框
+    static const uint32_t kFaceColor = 0xFFFF00FF;  // 黄色
     
     boxes.clear();
     for (size_t i = 0; i < results.Count(); ++i) {
@@ -615,10 +556,13 @@ void YoloV5Model::GenerateOSDBoxes(const DetectionResultList& results,
         box.y = det.box.y;
         box.width = det.box.width;
         box.height = det.box.height;
-        box.label_id = det.class_id;
-        box.color = kClassColors[det.class_id % kNumColors];
+        box.label_id = 0;  // 人脸类别固定为 0
+        box.color = kFaceColor;
         boxes.push_back(box);
     }
+    
+    // TODO: 未来可以扩展支持关键点显示
+    // 但需要对 OSD 模块进行扩展，支持点绘制
 }
 
 }  // namespace rknn

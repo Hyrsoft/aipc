@@ -7,9 +7,6 @@ set(RKVIDEO_SOURCES
     luckfox_mpi.cpp
     rkvideo.cpp
     osd_overlay.cpp
-    serial_pipeline.cpp
-    pipeline_manager.cpp
-    ai_frame_processor.cpp
 )
 
 set(RKVIDEO_HEADERS
@@ -18,9 +15,6 @@ set(RKVIDEO_HEADERS
     stream_dispatcher.h
     osd_overlay.h
     pipeline_mode.h
-    serial_pipeline.h
-    pipeline_manager.h
-    ai_frame_processor.h
 )
 
 # ========================================

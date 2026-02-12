@@ -1,27 +1,16 @@
 # ========================================
 # rknn 模块 CMakeLists.txt
-# AI 推理引擎 - 基于 RKNN 的模型管理与调度
+# RKNN 工具库 - 图像处理和类型定义
 # ========================================
 
+# RKNN 工具文件
 set(RKNN_SOURCES
-    ai_model_base.cpp
-    ai_engine.cpp
-    ai_service.cpp
     image_utils.cpp
-    yolov5_model.cpp
-    retinaface_model.cpp
-    serial_frame_processor.cpp
 )
 
 set(RKNN_HEADERS
     ai_types.h
-    ai_model_base.h
-    ai_engine.h
-    ai_service.h
     image_utils.h
-    yolov5_model.h
-    retinaface_model.h
-    serial_frame_processor.h
 )
 
 # ========================================
@@ -55,13 +44,14 @@ add_library(rknn_lib STATIC ${RKNN_SOURCES} ${RKNN_HEADERS})
 target_include_directories(rknn_lib
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${LUCKFOX_MPI_INCLUDE_DIR}          # 包含 rk_mpi_*.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/..       # 访问 media_producer/ 下的其他模块
+        ${LUCKFOX_MPI_INCLUDE_DIR}           # 包含 rk_mpi_*.h
         ${RKNN_INCLUDE_DIR}                  # 包含 rknn_api.h 等
         ${RGA_INCLUDE_DIR}                   # 包含 im2d.hpp 等
         ${OPENCV_INCLUDE_DIR}                # OpenCV-mobile 头文件
 
         # for rknn_box_priors.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example/luckfox_pico_rtsp_retinaface_osd/include
+        ${CMAKE_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example/luckfox_pico_rtsp_retinaface_osd/include
 )
 
 # 链接库目录

@@ -2,7 +2,7 @@
  * @file retinaface_model.h
  * @brief RetinaFace 模型实现 - 基于 RKNN 的人脸检测
  *
- * 实现 AIModelBase 接口，封装 RetinaFace 模型的：
+ * 封装 RetinaFace 模型的：
  * - 模型加载和初始化
  * - NPU 推理执行
  * - 后处理（人脸框解码、关键点、NMS）
@@ -15,8 +15,13 @@
 
 #pragma once
 
-#include "ai_model_base.h"
+#include "../rknn/ai_types.h"
 #include "rknn/rknn_api.h"
+#include <vector>
+#include <string>
+
+// 前向声明
+struct OSDBox;
 
 namespace rknn {
 
@@ -27,39 +32,51 @@ namespace rknn {
  * 支持人脸检测和 5 点关键点定位，使用 RKNN 进行 NPU 加速推理。
  * 采用零拷贝内存模式以提高性能。
  */
-class RetinaFaceModel : public AIModelBase {
+class RetinaFaceModel {
 public:
     RetinaFaceModel();
-    ~RetinaFaceModel() override;
+    ~RetinaFaceModel();
+
+    // 禁止拷贝
+    RetinaFaceModel(const RetinaFaceModel&) = delete;
+    RetinaFaceModel& operator=(const RetinaFaceModel&) = delete;
 
     // ========================================================================
-    // AIModelBase 接口实现
+    // 生命周期管理
     // ========================================================================
     
-    int Init(const ModelConfig& config) override;
-    void Deinit() override;
-    bool IsInitialized() const override;
+    int Init(const ModelConfig& config);
+    void Deinit();
+    bool IsInitialized() const;
 
-    int SetInput(const void* data, int width, int height, int stride = 0) override;
-    int SetInputDma(int dma_fd, int size, int width, int height) override;
-    int Run() override;
-    int GetResults(DetectionResultList& results) override;
+    // ========================================================================
+    // 推理接口
+    // ========================================================================
 
-    ModelInfo GetModelInfo() const override;
-    ModelType GetType() const override { return ModelType::kRetinaFace; }
-    void GetInputSize(int& width, int& height) const override;
-    void* GetInputVirtAddr() const override;
-    int GetInputMemSize() const override;
+    int SetInput(const void* data, int width, int height, int stride = 0);
+    int SetInputDma(int dma_fd, int size, int width, int height);
+    int Run();
+    int GetResults(DetectionResultList& results);
+
+    // ========================================================================
+    // 信息查询
+    // ========================================================================
+
+    ModelInfo GetModelInfo() const;
+    ModelType GetType() const { return ModelType::kRetinaFace; }
+    void GetInputSize(int& width, int& height) const;
+    void* GetInputVirtAddr() const;
+    int GetInputMemSize() const;
     
-    /// 格式化检测结果日志（RetinaFace 特化版本，包含关键点信息）
+    /// 格式化检测结果日志（包含关键点信息）
     std::string FormatResultLog(const DetectionResult& result, size_t index,
                                  float letterbox_scale = 1.0f,
                                  int letterbox_pad_x = 0,
-                                 int letterbox_pad_y = 0) const override;
+                                 int letterbox_pad_y = 0) const;
 
-    /// 生成 OSD 显示框（RetinaFace 特化版本，人脸统一使用黄色）
+    /// 生成 OSD 显示框（人脸统一使用黄色）
     void GenerateOSDBoxes(const DetectionResultList& results,
-                           std::vector<OSDBox>& boxes) const override;
+                           std::vector<OSDBox>& boxes) const;
 
 private:
     /// 后处理：解码输出并执行 NMS
