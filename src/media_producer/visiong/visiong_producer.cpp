@@ -13,6 +13,9 @@
 #include "common/logger.h"
 #include "common/media_buffer.h"
 
+#include "yolov5/yolov5_strategy.h"
+#include "python/python_strategy.h"
+
 #include "visiong/core/Camera.h"
 #include "visiong/core/ImageBuffer.h"
 #include "visiong/modules/VencManager.h"
@@ -142,14 +145,12 @@ struct VisionGProducer::Impl {
 };
 
 VisionGProducer::VisionGProducer(const ProducerConfig& config,
-                                 const std::string& model_path,
-                                 const std::string& label_path)
+                                 std::unique_ptr<IModelStrategy> strategy)
     : config_(config),
-      model_path_(model_path),
-      label_path_(label_path),
+      strategy_(std::move(strategy)),
       impl_(std::make_unique<Impl>()) {
 
-    type_name_ = "VisionG";
+    type_name_ = std::string("VisionG/") + strategy_->GetName();
 
     LOG_DEBUG("VisionGProducer created ({})", type_name_);
 }
@@ -178,23 +179,22 @@ int VisionGProducer::Init() {
 
     camera_->skip(5);
 
-    npu_ = std::make_unique<NPU>(
-        ModelType::YOLOV5,
-        model_path_,
-        label_path_,
-        0.25f,
-        0.45f);
-    if (!npu_ || !npu_->is_initialized()) {
-        LOG_ERROR("VisionG NPU init failed: model={}", model_path_);
+    npu_ = strategy_->CreateNPU();
+    if (!npu_) {
+        LOG_DEBUG("Strategy {} does not use NPU (will manage its own engine)", strategy_->GetName());
+    }
+
+    if (!strategy_->Init()) {
+        LOG_ERROR("Strategy init failed ({})", strategy_->GetName());
+        npu_.reset();
         camera_->release();
         camera_.reset();
-        npu_.reset();
         return -1;
     }
 
     initialized_.store(true);
     LOG_INFO("VisionG producer ({}) initialized successfully", type_name_);
-    LOG_INFO("Pipeline: Camera::snapshot() -> NPU::inference() -> OSD -> VencManager");
+    LOG_INFO("Pipeline: Camera::snapshot() -> {}::ProcessFrame() -> VencManager", strategy_->GetName());
     return 0;
 }
 
@@ -205,6 +205,7 @@ int VisionGProducer::Deinit() {
 
     Stop();
 
+    strategy_->Deinit();
     npu_.reset();
 
     if (camera_) {
@@ -276,6 +277,20 @@ int VisionGProducer::SetFrameRate(int fps) {
     return 0;
 }
 
+void VisionGProducer::ReplaceNPU(std::unique_ptr<NPU> new_npu) {
+    npu_ = std::move(new_npu);
+}
+
+void VisionGProducer::PauseFrameLoop() {
+    paused_.store(true);
+    LOG_INFO("Frame loop paused");
+}
+
+void VisionGProducer::ResumeFrameLoop() {
+    paused_.store(false);
+    LOG_INFO("Frame loop resumed");
+}
+
 void VisionGProducer::FrameLoop() {
     LOG_INFO("VisionG frame loop started ({})", type_name_);
 
@@ -283,6 +298,12 @@ void VisionGProducer::FrameLoop() {
     VencManager::ScopedUser venc_user(venc);
 
     while (running_.load()) {
+        // 暂停期间跳过处理（用于 NPU 模型切换）
+        if (paused_.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+
         ImageBuffer frame = camera_->snapshot();
         if (!frame.is_valid()) {
             LOG_WARN("Camera snapshot failed, retrying...");
@@ -290,18 +311,8 @@ void VisionGProducer::FrameLoop() {
         }
         frame_count_++;
 
-        auto detections = npu_->inference(frame);
+        ImageBuffer draw_frame = strategy_->ProcessFrame(frame, npu_.get());
         inference_count_++;
-
-        ImageBuffer draw_frame = frame.get_bgr_version().copy();
-        for (const auto& det : detections) {
-            auto [x, y, w, h] = det.box;
-            draw_frame.draw_rectangle(x, y, w, h, {0, 255, 0}, 3, false);
-
-            char text[64];
-            snprintf(text, sizeof(text), "%s %.1f%%", det.label.c_str(), det.score * 100.0f);
-            draw_frame.draw_string(x, y - 8, text, {0, 255, 0}, 1.0, 2);
-        }
 
         VencEncodedPacket packet;
         bool ok = venc.encodeToVideo(
@@ -330,10 +341,18 @@ void VisionGProducer::FrameLoop() {
 }
 
 std::unique_ptr<IMediaProducer> CreateVisionGYoloProducer(const ProducerConfig& config) {
-    return std::make_unique<VisionGProducer>(
-        config,
+    auto strategy = std::make_unique<YoloV5Strategy>(
         "../model/yolov5.rknn",
         "../model/coco_80_labels_list.txt");
+    return std::make_unique<VisionGProducer>(config, std::move(strategy));
+}
+
+std::unique_ptr<IMediaProducer> CreateVisionGPythonProducer(const ProducerConfig& config) {
+    auto strategy = std::make_unique<PythonStrategy>(
+        "../model/yolov5.rknn",
+        "../model/coco_80_labels_list.txt",
+        "YOLOV5");
+    return std::make_unique<VisionGProducer>(config, std::move(strategy));
 }
 
 }  // namespace media

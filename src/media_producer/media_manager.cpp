@@ -334,10 +334,17 @@ std::unique_ptr<IMediaProducer> MediaManager::CreateProducerInstance(ProducerMod
             return CreateSimpleIPCProducer(mode_config);
 
         case ProducerMode::VisionG:
-            // VisionG AI 模式（当前实现：YOLOv5）
             mode_config.resolution = Resolution::R_480P;
-            LOG_INFO("AI mode: using VisionG producer at 480p for DDR bandwidth optimization");
-            return CreateVisionGYoloProducer(mode_config);
+            LOG_INFO("AI mode: using VisionG/{} at 480p", VisionGModelToString(current_visiong_model_));
+            switch (current_visiong_model_) {
+                case VisionGModel::YOLOv5:
+                    return CreateVisionGYoloProducer(mode_config);
+                case VisionGModel::Python:
+                    return CreateVisionGPythonProducer(mode_config);
+                default:
+                    LOG_ERROR("Unknown VisionG model: {}", static_cast<int>(current_visiong_model_));
+                    return nullptr;
+            }
             
         default:
             LOG_ERROR("Unknown producer mode: {}", static_cast<int>(mode));
@@ -354,7 +361,7 @@ std::unique_ptr<IMediaProducer> CreateProducer(ProducerMode mode, const Producer
         case ProducerMode::SimpleIPC:
             return CreateSimpleIPCProducer(config);
         case ProducerMode::VisionG:
-            return CreateVisionGYoloProducer(config);
+            return CreateVisionGYoloProducer(config);  // 默认 YOLOv5
         default:
             return nullptr;
     }

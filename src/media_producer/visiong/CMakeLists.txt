@@ -1,14 +1,19 @@
 # ========================================
 # visiong 模块 CMakeLists.txt
-# VisionG 库驱动的 AI 推理模式 - Producer
+# VisionG 库驱动的 AI 推理模式 - Producer + 模型策略
 # ========================================
 
 set(VISIONG_PRODUCER_SOURCES
     visiong_producer.cpp
+    yolov5/yolov5_strategy.cpp
+    python/python_strategy.cpp
 )
 
 set(VISIONG_PRODUCER_HEADERS
     visiong_producer.h
+    i_model_strategy.h
+    yolov5/yolov5_strategy.h
+    python/python_strategy.h
 )
 
 # ========================================
@@ -41,6 +46,14 @@ target_link_libraries(visiong_producer_lib
     PRIVATE
         common
         spdlog::spdlog
+        ${PYTHON_LIBRARY}
+)
+
+# pybind11 头文件（用于 PythonStrategy 的 embed 模式）
+target_include_directories(visiong_producer_lib
+    PRIVATE
+        ${PYBIND11_INCLUDE_DIR}
+        ${PYTHON_INCLUDE_DIR}
 )
 
 # 设置编译选项

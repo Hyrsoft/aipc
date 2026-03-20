@@ -2,25 +2,19 @@
  * @file visiong_producer.h
  * @brief VisionG 库驱动的 AI 推理模式生产者
  *
- * 使用 VisionG 库替代手动 MPI/RKNN 管理：
- * - Camera 类替代 ISP/VI 初始化和取帧
- * - NPU 类替代 RKNN 上下文管理和推理
- * - ImageBuffer 替代 OpenCV 进行 OSD 绘制
- * - VencManager 替代手写 VENC 管理
+ * 使用 VisionG 库管理 Camera 取帧和 VencManager 编码，
+ * 具体的 AI 模型推理和 OSD 绘制逻辑委托给 IModelStrategy。
  *
  * 数据流：
  *   Camera::snapshot() → ImageBuffer (NV12)
- *     → NPU::inference() → vector<Detection>
- *     → ImageBuffer::draw_rectangle/draw_string (OSD)
+ *     → IModelStrategy::ProcessFrame() (推理 + OSD)
  *     → VencManager::encodeToVideo() → H264 编码流
- *
- * @author AI Assistant
- * @date 2026-03-20
  */
 
 #pragma once
 
 #include "../i_media_producer.h"
+#include "i_model_strategy.h"
 
 #include <atomic>
 #include <memory>
@@ -30,8 +24,6 @@
 // 前向声明 VisionG 类型
 class Camera;
 class NPU;
-class ImageBuffer;
-enum class ModelType;
 
 namespace media {
 
@@ -39,19 +31,17 @@ namespace media {
  * @class VisionGProducer
  * @brief VisionG 库驱动的 AI 推理模式生产者
  *
- * 当前先实现 YOLOv5 模型推理路径。
+ * 通过 IModelStrategy 支持不同 AI 模型（YOLOv5、RetinaFace、YOLO11 等）。
  */
 class VisionGProducer : public IMediaProducer {
 public:
     /**
      * @brief 构造函数
      * @param config 配置参数
-     * @param model_path 模型文件路径
-     * @param label_path 标签文件路径（可选）
+     * @param strategy 模型策略（决定使用哪个 AI 模型及 OSD 逻辑）
      */
     VisionGProducer(const ProducerConfig& config,
-                    const std::string& model_path,
-                    const std::string& label_path = "");
+                    std::unique_ptr<IModelStrategy> strategy);
 
     ~VisionGProducer() override;
 
@@ -76,6 +66,23 @@ public:
     int SetResolution(Resolution preset) override;
     int SetFrameRate(int fps) override;
 
+    /**
+     * @brief 获取内部模型策略指针（用于 Python 编辑器 API 直接操作）
+     */
+    IModelStrategy* GetStrategy() { return strategy_.get(); }
+
+    /**
+     * @brief 动态替换 NPU 实例（用于模型切换），需在帧循环暂停时调用
+     * @param new_npu 新的 NPU 实例
+     */
+    void ReplaceNPU(std::unique_ptr<NPU> new_npu);
+
+    /**
+     * @brief 暂停/恢复帧循环（用于 NPU 模型切换期间）
+     */
+    void PauseFrameLoop();
+    void ResumeFrameLoop();
+
 private:
     // 禁止拷贝
     VisionGProducer(const VisionGProducer&) = delete;
@@ -91,13 +98,13 @@ private:
     std::string type_name_;
 
     // VisionG 组件
-    std::string model_path_;
-    std::string label_path_;
+    std::unique_ptr<IModelStrategy> strategy_;
     std::unique_ptr<Camera> camera_;
     std::unique_ptr<NPU> npu_;
 
     std::atomic<bool> initialized_{false};
     std::atomic<bool> running_{false};
+    std::atomic<bool> paused_{false};
 
     std::thread frame_thread_;
 

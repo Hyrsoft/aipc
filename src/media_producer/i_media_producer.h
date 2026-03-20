@@ -280,17 +280,22 @@ protected:
 std::unique_ptr<IMediaProducer> CreateSimpleIPCProducer(const ProducerConfig& config);
 
 /**
- * @brief 创建 VisionG AI 推理模式生产者（当前实现：YOLOv5）
- * 
- * 特点：
- * - 使用 VisionG 库 Camera 取帧 + NPU 推理 + ImageBuffer OSD
- * - 使用 VisionG VencManager 编码并适配到 EncodedStreamPtr
- * - DDR 带宽受限，推荐 480p
+ * @brief 创建 VisionG AI 推理模式生产者（YOLOv5）
  * 
  * @param config 配置参数
  * @return 生产者实例
  */
 std::unique_ptr<IMediaProducer> CreateVisionGYoloProducer(const ProducerConfig& config);
+
+/**
+ * @brief 创建 VisionG Python 可编程模式生产者
+ * 
+ * 支持通过 Web 编辑器动态更新 Python 后处理代码。
+ * 
+ * @param config 配置参数
+ * @return 生产者实例
+ */
+std::unique_ptr<IMediaProducer> CreateVisionGPythonProducer(const ProducerConfig& config);
 
 // ============================================================================
 // 生产者模式枚举
@@ -301,7 +306,15 @@ std::unique_ptr<IMediaProducer> CreateVisionGYoloProducer(const ProducerConfig& 
  */
 enum class ProducerMode {
     SimpleIPC,          ///< 纯监控模式
-    VisionG             ///< VisionG AI 推理模式（当前实现：YOLOv5）
+    VisionG             ///< VisionG AI 推理模式
+};
+
+/**
+ * @brief VisionG AI 模型枚举
+ */
+enum class VisionGModel {
+    YOLOv5,             ///< YOLOv5 物体检测
+    Python,             ///< Python 可编程模式（Web 编辑器）
 };
 
 /**
@@ -317,6 +330,17 @@ inline const char* ProducerModeToString(ProducerMode mode) {
         case ProducerMode::SimpleIPC: return "SimpleIPC";
         case ProducerMode::VisionG:   return "VisionG";
         default:                      return "Unknown";
+    }
+}
+
+/**
+ * @brief VisionG 模型枚举转字符串
+ */
+inline const char* VisionGModelToString(VisionGModel model) {
+    switch (model) {
+        case VisionGModel::YOLOv5:     return "YOLOv5";
+        case VisionGModel::Python:     return "Python";
+        default:                       return "Unknown";
     }
 }
 

@@ -142,6 +142,16 @@ public:
     ProducerMode GetCurrentMode() const { return current_mode_; }
 
     /**
+     * @brief 获取当前 VisionG 模型
+     */
+    VisionGModel GetCurrentVisionGModel() const { return current_visiong_model_; }
+
+    /**
+     * @brief 设置 VisionG 模型（下次创建或切换时生效）
+     */
+    void SetVisionGModel(VisionGModel model) { current_visiong_model_ = model; }
+
+    /**
      * @brief 检查是否已初始化
      */
     bool IsInitialized() const { return initialized_; }
@@ -214,6 +224,12 @@ public:
      */
     uint64_t GetModeSwitchCount() const { return mode_switch_count_; }
 
+    /**
+     * @brief 获取当前生产者的原始指针（用于 Python 编辑器等直接操作）
+     * @note 仅在持有 mutex 或确保线程安全的情况下使用
+     */
+    IMediaProducer* GetProducer() { return producer_.get(); }
+
 private:
     MediaManager() = default;
     ~MediaManager();
@@ -233,6 +249,7 @@ private:
     
     bool initialized_ = false;
     ProducerMode current_mode_ = ProducerMode::SimpleIPC;
+    VisionGModel current_visiong_model_ = VisionGModel::YOLOv5;
     ProducerConfig config_;
     
     // 当前生产者实例

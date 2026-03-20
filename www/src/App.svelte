@@ -24,6 +24,26 @@
       total_detections: 0
   };
 
+  // Python 编辑器状态
+  let pythonActive = false;
+  let pythonCode = '';
+  let pythonError = '';
+  let pythonDeploying = false;
+  let pythonModelInfo = { path: '', label_path: '', type: '' };
+
+  // 模型文件管理
+  let modelFiles = [];
+  let modelUploading = false;
+  let selectedModelPath = 'yolov5.rknn';
+  let selectedModelType = 'YOLOV5';
+  let selectedLabelPath = 'coco_80_labels_list.txt';
+
+  // Python 模板
+  let pythonTemplates = [];
+
+  // 编辑器面板显示状态
+  let showEditor = false;
+
   // 分辨率/管道配置
   let pipelineStatus = {
       mode: 'parallel',   // 'parallel' | 'serial'
@@ -267,6 +287,159 @@
               connectWebRTC();
           }
       }
+  }
+
+  // =====================================================================
+  // Python 编辑器
+  // =====================================================================
+  async function fetchPythonStatus() {
+      if (isDev) return;
+      try {
+          const res = await fetch('/api/python/status');
+          const data = await res.json();
+          if (data.success) {
+              pythonActive = data.data.active;
+              pythonError = data.data.last_error || '';
+              if (data.data.model) {
+                  pythonModelInfo = data.data.model;
+              }
+          }
+      } catch(e) { /* ignore */ }
+  }
+
+  async function fetchPythonCode() {
+      if (isDev) return;
+      try {
+          const res = await fetch('/api/python/code');
+          const data = await res.json();
+          if (data.success) {
+              pythonCode = data.data.code;
+          }
+      } catch(e) { /* ignore */ }
+  }
+
+  async function deployPythonCode() {
+      if (!pythonCode.trim()) return;
+      pythonDeploying = true;
+      addLog('部署 Python 代码...');
+      try {
+          const res = await fetch('/api/python/code', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ code: pythonCode })
+          });
+          const data = await res.json();
+          if (data.success) {
+              pythonError = '';
+              addLog('Python 代码部署成功', 'success');
+          } else {
+              pythonError = data.data?.error || data.message;
+              addLog('代码错误: ' + pythonError, 'error');
+          }
+      } catch(e) {
+          addLog('部署失败: ' + e.message, 'error');
+      } finally {
+          pythonDeploying = false;
+      }
+  }
+
+  async function fetchModelList() {
+      if (isDev) return;
+      try {
+          const res = await fetch('/api/model/list');
+          const data = await res.json();
+          if (data.success) {
+              modelFiles = data.data;
+          }
+      } catch(e) { /* ignore */ }
+  }
+
+  async function uploadModelFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      modelUploading = true;
+      addLog(`上传模型文件: ${file.name}...`);
+      try {
+          const formData = new FormData();
+          formData.append('file', file);
+          const res = await fetch('/api/model/upload', { method: 'POST', body: formData });
+          const data = await res.json();
+          if (data.success) {
+              addLog(`上传成功: ${file.name}`, 'success');
+              await fetchModelList();
+          } else {
+              addLog(`上传失败: ${data.message}`, 'error');
+          }
+      } catch(e) {
+          addLog('上传异常: ' + e.message, 'error');
+      } finally {
+          modelUploading = false;
+          event.target.value = '';
+      }
+  }
+
+  async function deleteModelFile(name) {
+      addLog(`删除模型: ${name}...`);
+      try {
+          const res = await fetch(`/api/model/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          const data = await res.json();
+          if (data.success) {
+              addLog(`已删除: ${name}`, 'success');
+              await fetchModelList();
+          } else {
+              addLog(`删除失败: ${data.message}`, 'error');
+          }
+      } catch(e) {
+          addLog('删除异常: ' + e.message, 'error');
+      }
+  }
+
+  async function switchNpuModel() {
+      addLog(`切换 NPU 模型: ${selectedModelPath} (${selectedModelType})...`);
+      try {
+          const res = await fetch('/api/python/model', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  model_path: selectedModelPath,
+                  label_path: selectedLabelPath,
+                  model_type: selectedModelType
+              })
+          });
+          const data = await res.json();
+          if (data.success) {
+              addLog('NPU 模型切换成功', 'success');
+              await fetchPythonStatus();
+          } else {
+              addLog('模型切换失败: ' + data.message, 'error');
+          }
+      } catch(e) {
+          addLog('模型切换异常: ' + e.message, 'error');
+      }
+  }
+
+  async function fetchTemplates() {
+      if (isDev) return;
+      try {
+          const res = await fetch('/api/python/templates');
+          const data = await res.json();
+          if (data.success) {
+              pythonTemplates = data.data;
+          }
+      } catch(e) { /* ignore */ }
+  }
+
+  function loadTemplate(tmpl) {
+      pythonCode = tmpl.code;
+      addLog(`已加载模板: ${tmpl.name}`, 'success');
+  }
+
+  async function openEditor() {
+      showEditor = true;
+      await fetchPythonStatus();
+      await fetchPythonCode();
+      await fetchModelList();
+      await fetchTemplates();
   }
 
   // =====================================================================
@@ -793,18 +966,29 @@
                </div>
                
                <div class="space-y-2">
-                   {#each ['none', 'yolov5', 'retinaface'] as model}
+                   {#each ['none', 'yolov5', 'python'] as model}
                    <button 
                      class={`w-full py-2.5 px-3 rounded-lg text-xs font-medium transition-all flex items-center justify-between group ${modelName === model ? 'bg-primary text-white shadow-lg shadow-primary/20 ring-1 ring-primary' : 'bg-white border border-gray-200 text-gray-600 hover:border-primary/50 hover:text-primary'}`}
                      on:click={() => switchModel(model)}
                    >
-                     <span class="uppercase">{model === 'none' ? '关闭 AI' : model}</span>
+                     <span class="uppercase">{model === 'none' ? '关闭 AI' : model === 'python' ? 'Python 可编程' : model}</span>
                      {#if modelName === model}
                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                      {/if}
                    </button>
                    {/each}
                </div>
+
+               <!-- Python 编辑器快捷入口 -->
+               {#if modelName === 'python'}
+                   <button
+                     class="w-full mt-3 py-2 px-3 rounded-lg text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors flex items-center justify-center gap-2"
+                     on:click={openEditor}
+                   >
+                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                     打开 Python 编辑器
+                   </button>
+               {/if}
            </div>
 
            <!-- 分辨率设置 -->
@@ -945,4 +1129,171 @@
        </div>
     </div>
   </div>
+
+  <!-- Python 编辑器面板（全屏浮层） -->
+  {#if showEditor}
+  <div class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
+      <!-- 头部 -->
+      <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 bg-amber-100 rounded-lg flex items-center justify-center text-amber-600">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+          </div>
+          <div>
+            <h2 class="font-bold text-gray-800">Python 后处理编辑器</h2>
+            <p class="text-xs text-gray-500">编写 AI 推理结果的 OSD 绘制逻辑</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          {#if pythonError}
+            <span class="text-xs text-red-500 bg-red-50 px-2 py-1 rounded">错误</span>
+          {:else if pythonActive}
+            <span class="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">运行中</span>
+          {/if}
+          <button on:click={() => showEditor = false} class="p-2 hover:bg-gray-200 rounded-lg transition-colors">
+            <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 内容区 -->
+      <div class="flex-1 flex overflow-hidden">
+        <!-- 左侧：代码编辑器 -->
+        <div class="flex-1 flex flex-col border-r border-gray-200">
+          <!-- 工具栏 -->
+          <div class="px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-2">
+            <button
+              on:click={deployPythonCode}
+              disabled={pythonDeploying}
+              class="px-4 py-1.5 bg-green-500 text-white text-xs font-bold rounded-lg hover:bg-green-600 disabled:opacity-50 flex items-center gap-2"
+            >
+              {#if pythonDeploying}
+                <svg class="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+              {/if}
+              部署代码
+            </button>
+
+            <!-- 模板选择 -->
+            {#if pythonTemplates.length > 0}
+              <select
+                class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white"
+                on:change={(e) => {
+                  const tmpl = pythonTemplates.find(t => t.name === e.target.value);
+                  if (tmpl) loadTemplate(tmpl);
+                  e.target.value = '';
+                }}
+              >
+                <option value="">加载模板...</option>
+                {#each pythonTemplates as tmpl}
+                  <option value={tmpl.name}>{tmpl.name}</option>
+                {/each}
+              </select>
+            {/if}
+          </div>
+
+          <!-- 代码编辑区 -->
+          <textarea
+            bind:value={pythonCode}
+            class="flex-1 w-full p-4 font-mono text-sm leading-relaxed resize-none focus:outline-none bg-gray-900 text-green-400"
+            spellcheck="false"
+            placeholder="# 在此编写 Python 后处理代码&#10;&#10;def process(image, detections):&#10;    bgr = image.to_format('bgr')&#10;    for det in detections:&#10;        x, y, w, h = det.box&#10;        bgr.draw_rectangle(x, y, w, h, color=(0,255,0))&#10;    return bgr"
+          ></textarea>
+
+          <!-- 错误信息 -->
+          {#if pythonError}
+            <div class="px-4 py-2 bg-red-50 border-t border-red-200 text-xs text-red-600 font-mono max-h-24 overflow-y-auto">
+              {pythonError}
+            </div>
+          {/if}
+        </div>
+
+        <!-- 右侧：模型管理面板 -->
+        <div class="w-72 flex flex-col bg-gray-50 overflow-y-auto">
+          <!-- NPU 模型选择 -->
+          <div class="p-4 border-b border-gray-200">
+            <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">NPU 模型</h3>
+
+            <div class="space-y-2">
+              <div>
+                <label class="text-xs text-gray-500 block mb-1">模型文件</label>
+                <select bind:value={selectedModelPath} class="w-full text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white">
+                  {#each modelFiles.filter(f => f.type === 'rknn') as f}
+                    <option value={f.name}>{f.name}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <div>
+                <label class="text-xs text-gray-500 block mb-1">模型类型</label>
+                <select bind:value={selectedModelType} class="w-full text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white">
+                  {#each ['YOLOV5', 'YOLO11', 'YOLO11_SEG', 'YOLO11_POSE', 'RETINAFACE', 'LPRNET'] as t}
+                    <option value={t}>{t}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <div>
+                <label class="text-xs text-gray-500 block mb-1">标签文件（可选）</label>
+                <select bind:value={selectedLabelPath} class="w-full text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white">
+                  <option value="">无</option>
+                  {#each modelFiles.filter(f => f.type === 'txt') as f}
+                    <option value={f.name}>{f.name}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <button
+                on:click={switchNpuModel}
+                class="w-full py-2 bg-primary text-white text-xs font-bold rounded-lg hover:bg-primary/90"
+              >
+                加载模型
+              </button>
+
+              {#if pythonModelInfo.path}
+                <div class="text-[10px] text-gray-400 mt-1">
+                  当前: {pythonModelInfo.path} ({pythonModelInfo.type})
+                </div>
+              {/if}
+            </div>
+          </div>
+
+          <!-- 模型文件管理 -->
+          <div class="p-4">
+            <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">模型文件</h3>
+
+            <label class="w-full py-2 px-3 bg-white border border-dashed border-gray-300 rounded-lg text-xs text-gray-500 cursor-pointer hover:border-primary hover:text-primary transition-colors flex items-center justify-center gap-2 mb-3">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+              {modelUploading ? '上传中...' : '上传 .rknn / .txt 文件'}
+              <input type="file" accept=".rknn,.txt" class="hidden" on:change={uploadModelFile} disabled={modelUploading}>
+            </label>
+
+            <div class="space-y-1">
+              {#each modelFiles as f}
+                <div class="flex items-center justify-between py-1.5 px-2 bg-white rounded border border-gray-100 text-xs">
+                  <div class="flex-1 min-w-0">
+                    <div class="truncate font-medium text-gray-700">{f.name}</div>
+                    <div class="text-[10px] text-gray-400">{(f.size / 1024 / 1024).toFixed(1)} MB</div>
+                  </div>
+                  {#if f.name !== 'yolov5.rknn' && f.name !== 'coco_80_labels_list.txt'}
+                    <button
+                      on:click={() => deleteModelFile(f.name)}
+                      class="ml-2 p-1 text-gray-400 hover:text-red-500 transition-colors"
+                      title="删除"
+                    >
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                  {/if}
+                </div>
+              {/each}
+              {#if modelFiles.length === 0}
+                <div class="text-xs text-gray-400 text-center py-4">加载中...</div>
+              {/if}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {/if}
 </main>

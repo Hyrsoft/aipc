@@ -16,14 +16,56 @@
 #include "media_distribution/file/file_service.h"
 #include "media_distribution/webrtc/webrtc_service.h"
 #include "media_producer/media_manager.h"
+#include "media_producer/visiong/visiong_producer.h"
+#include "media_producer/visiong/python/python_strategy.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
 
 using json = nlohmann::json;
 
 // ============================================================================
+// 模型文件目录（上传和管理）
+// ============================================================================
+static const std::string MODEL_DIR = "../model";
+static const size_t MAX_UPLOAD_SIZE = 50 * 1024 * 1024;  // 50MB
+
+// ============================================================================
 // 辅助函数
 // ============================================================================
+
+/**
+ * @brief 获取当前 VisionGProducer 下的 PythonStrategy（如果处于 Python 模式）
+ */
+static media::PythonStrategy* GetPythonStrategy() {
+    auto& mgr = media::MediaManager::Instance();
+    if (mgr.GetCurrentMode() != media::ProducerMode::VisionG ||
+        mgr.GetCurrentVisionGModel() != media::VisionGModel::Python) {
+        return nullptr;
+    }
+    auto* producer = dynamic_cast<media::VisionGProducer*>(mgr.GetProducer());
+    if (!producer) return nullptr;
+    return dynamic_cast<media::PythonStrategy*>(producer->GetStrategy());
+}
+
+/**
+ * @brief 净化文件名，移除路径穿越字符
+ */
+static std::string SanitizeFilename(const std::string& name) {
+    std::string result;
+    for (char c : name) {
+        if (c == '/' || c == '\\' || c == '\0') continue;
+        result += c;
+    }
+    // 防止 ".." 路径穿越
+    if (result.find("..") != std::string::npos) {
+        return "";
+    }
+    return result;
+}
 
 /**
  * @brief 生成 JSON 响应
@@ -453,10 +495,16 @@ void HttpApi::SetupRoutes() {
             
             LOG_INFO("Producer mode switch requested: {}", mode_str);
             
+            auto& mgr = media::MediaManager::Instance();
+
             // 解析模式字符串
             media::ProducerMode target_mode;
-            if (mode_str == "visiong" || mode_str == "yolov5" || mode_str == "yolo") {
+            if (mode_str == "python") {
                 target_mode = media::ProducerMode::VisionG;
+                mgr.SetVisionGModel(media::VisionGModel::Python);
+            } else if (mode_str == "visiong" || mode_str == "yolov5" || mode_str == "yolo") {
+                target_mode = media::ProducerMode::VisionG;
+                mgr.SetVisionGModel(media::VisionGModel::YOLOv5);
             } else {
                 target_mode = media::ProducerMode::SimpleIPC;
             }
@@ -499,7 +547,7 @@ void HttpApi::SetupRoutes() {
         
         // model_type: 模型类型名称
         if (mode == media::ProducerMode::VisionG) {
-            data["model_type"] = "yolov5";
+            data["model_type"] = media::VisionGModelToString(mgr.GetCurrentVisionGModel());
         } else {
             data["model_type"] = "none";
         }
@@ -521,10 +569,16 @@ void HttpApi::SetupRoutes() {
             
             LOG_INFO("AI model switch requested: {}", model_str);
             
+            auto& mgr = media::MediaManager::Instance();
+
             // 映射模型名称到生产者模式
             media::ProducerMode target_mode;
-            if (model_str == "yolov5" || model_str == "yolo" || model_str == "visiong") {
+            if (model_str == "python") {
                 target_mode = media::ProducerMode::VisionG;
+                mgr.SetVisionGModel(media::VisionGModel::Python);
+            } else if (model_str == "yolov5" || model_str == "yolo" || model_str == "visiong") {
+                target_mode = media::ProducerMode::VisionG;
+                mgr.SetVisionGModel(media::VisionGModel::YOLOv5);
             } else {
                 target_mode = media::ProducerMode::SimpleIPC;
             }
@@ -654,6 +708,280 @@ void HttpApi::SetupRoutes() {
         } catch (const json::exception& e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
         }
+    });
+
+    // ========================================================================
+    // 模型文件管理 API
+    // ========================================================================
+
+    // 列出所有模型文件
+    server_->Get("/api/model/list", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        namespace fs = std::filesystem;
+        json models = json::array();
+
+        try {
+            for (const auto& entry : fs::directory_iterator(MODEL_DIR)) {
+                if (!entry.is_regular_file()) continue;
+                auto ext = entry.path().extension().string();
+                // 小写化扩展名
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".rknn" || ext == ".txt") {
+                    json item;
+                    item["name"] = entry.path().filename().string();
+                    item["size"] = entry.file_size();
+                    item["type"] = ext.substr(1);  // "rknn" or "txt"
+                    models.push_back(item);
+                }
+            }
+        } catch (const fs::filesystem_error& e) {
+            res.set_content(json_response(false, std::string("Failed to list models: ") + e.what()), "application/json");
+            return;
+        }
+
+        res.set_content(json_response(true, "ok", models), "application/json");
+    });
+
+    // 上传模型文件
+    server_->Post("/api/model/upload", [](const HttpRequest& req, HttpResponse& res) {
+        if (!req.has_file("file")) {
+            res.set_content(json_response(false, "No file in request"), "application/json");
+            return;
+        }
+
+        const auto& file = req.get_file_value("file");
+        std::string filename = SanitizeFilename(file.filename);
+
+        if (filename.empty()) {
+            res.set_content(json_response(false, "Invalid filename"), "application/json");
+            return;
+        }
+
+        // 仅允许 .rknn 和 .txt 后缀
+        std::string ext = filename.substr(filename.find_last_of('.') + 1);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext != "rknn" && ext != "txt") {
+            res.set_content(json_response(false, "Only .rknn and .txt files are allowed"), "application/json");
+            return;
+        }
+
+        // 文件大小限制
+        if (file.content.size() > MAX_UPLOAD_SIZE) {
+            res.set_content(json_response(false, "File too large (max 50MB)"), "application/json");
+            return;
+        }
+
+        // 禁止覆盖内置模型
+        if (filename == "yolov5.rknn") {
+            res.set_content(json_response(false, "Cannot overwrite built-in model"), "application/json");
+            return;
+        }
+
+        std::string path = MODEL_DIR + "/" + filename;
+        std::ofstream ofs(path, std::ios::binary);
+        if (!ofs) {
+            res.set_content(json_response(false, "Failed to write file"), "application/json");
+            return;
+        }
+        ofs.write(file.content.data(), static_cast<std::streamsize>(file.content.size()));
+        ofs.close();
+
+        json data;
+        data["name"] = filename;
+        data["size"] = file.content.size();
+        LOG_INFO("Model file uploaded: {} ({} bytes)", filename, file.content.size());
+        res.set_content(json_response(true, "File uploaded", data), "application/json");
+    });
+
+    // 删除模型文件
+    server_->Delete(R"(/api/model/(.+))", [](const HttpRequest& req, HttpResponse& res) {
+        std::string filename = SanitizeFilename(req.matches[1].str());
+
+        if (filename.empty()) {
+            res.set_content(json_response(false, "Invalid filename"), "application/json");
+            return;
+        }
+
+        // 禁止删除内置模型
+        if (filename == "yolov5.rknn" || filename == "coco_80_labels_list.txt") {
+            res.set_content(json_response(false, "Cannot delete built-in files"), "application/json");
+            return;
+        }
+
+        std::string path = MODEL_DIR + "/" + filename;
+        if (!std::filesystem::exists(path)) {
+            res.set_content(json_response(false, "File not found"), "application/json");
+            return;
+        }
+
+        std::filesystem::remove(path);
+        LOG_INFO("Model file deleted: {}", filename);
+        res.set_content(json_response(true, "File deleted"), "application/json");
+    });
+
+    // ========================================================================
+    // Python 编辑器 API
+    // ========================================================================
+
+    // 获取当前 Python 代码
+    server_->Get("/api/python/code", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto* strategy = GetPythonStrategy();
+        if (!strategy) {
+            res.set_content(json_response(false, "Not in Python mode"), "application/json");
+            return;
+        }
+
+        json data;
+        data["code"] = strategy->GetCurrentCode();
+        res.set_content(json_response(true, "ok", data), "application/json");
+    });
+
+    // 提交 / 热更新 Python 代码
+    server_->Post("/api/python/code", [](const HttpRequest& req, HttpResponse& res) {
+        auto* strategy = GetPythonStrategy();
+        if (!strategy) {
+            res.set_content(json_response(false, "Not in Python mode"), "application/json");
+            return;
+        }
+
+        try {
+            json body = json::parse(req.body);
+            std::string code = body.value("code", "");
+            if (code.empty()) {
+                res.set_content(json_response(false, "Empty code"), "application/json");
+                return;
+            }
+
+            std::string err = strategy->UpdateCode(code);
+            if (err.empty()) {
+                res.set_content(json_response(true, "Code updated"), "application/json");
+            } else {
+                json data;
+                data["error"] = err;
+                res.set_content(json_response(false, "Code error", data), "application/json");
+            }
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
+    });
+
+    // Python 模式状态
+    server_->Get("/api/python/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        auto& mgr = media::MediaManager::Instance();
+        bool is_python = (mgr.GetCurrentMode() == media::ProducerMode::VisionG &&
+                          mgr.GetCurrentVisionGModel() == media::VisionGModel::Python);
+
+        json data;
+        data["active"] = is_python;
+
+        if (is_python) {
+            auto* strategy = GetPythonStrategy();
+            if (strategy) {
+                data["last_error"] = strategy->GetLastError();
+                auto info = strategy->GetModelInfo();
+                data["model"]["path"] = info.model_path;
+                data["model"]["label_path"] = info.label_path;
+                data["model"]["type"] = info.model_type;
+            }
+        }
+
+        res.set_content(json_response(true, "ok", data), "application/json");
+    });
+
+    // 切换 NPU 模型（Python 模式下）
+    server_->Post("/api/python/model", [](const HttpRequest& req, HttpResponse& res) {
+        try {
+            json body = json::parse(req.body);
+            std::string model_path = body.value("model_path", "");
+            std::string label_path = body.value("label_path", "");
+            std::string model_type = body.value("model_type", "YOLOV5");
+
+            if (model_path.empty()) {
+                res.set_content(json_response(false, "model_path is required"), "application/json");
+                return;
+            }
+
+            // 净化路径：仅允许纯文件名
+            model_path = SanitizeFilename(model_path);
+            label_path = SanitizeFilename(label_path);
+            if (model_path.empty()) {
+                res.set_content(json_response(false, "Invalid model_path"), "application/json");
+                return;
+            }
+
+            // 检查文件存在
+            std::string full_model = MODEL_DIR + "/" + model_path;
+            if (!std::filesystem::exists(full_model)) {
+                res.set_content(json_response(false, "Model file not found: " + model_path), "application/json");
+                return;
+            }
+
+            auto* strategy = GetPythonStrategy();
+            if (!strategy) {
+                res.set_content(json_response(false, "Not in Python mode"), "application/json");
+                return;
+            }
+
+            auto* producer = dynamic_cast<media::VisionGProducer*>(
+                media::MediaManager::Instance().GetProducer());
+            if (!producer) {
+                res.set_content(json_response(false, "Producer not available"), "application/json");
+                return;
+            }
+
+            // 暂停帧循环 → 重建 NPU → 恢复帧循环
+            producer->PauseFrameLoop();
+
+            std::string full_label = label_path.empty() ? "" : (MODEL_DIR + "/" + label_path);
+            auto new_npu = strategy->UpdateModel(full_model, full_label, model_type);
+            if (!new_npu) {
+                producer->ResumeFrameLoop();
+                res.set_content(json_response(false, "Failed to load model"), "application/json");
+                return;
+            }
+
+            producer->ReplaceNPU(std::move(new_npu));
+            producer->ResumeFrameLoop();
+
+            json data;
+            data["model_path"] = model_path;
+            data["model_type"] = model_type;
+            LOG_INFO("Python mode model switched: {} ({})", model_path, model_type);
+            res.set_content(json_response(true, "Model switched", data), "application/json");
+
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
+    });
+
+    // 获取 Python 模板列表
+    server_->Get("/api/python/templates", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        namespace fs = std::filesystem;
+        json templates = json::array();
+        std::string template_dir = "../python_templates";
+
+        try {
+            if (fs::exists(template_dir)) {
+                for (const auto& entry : fs::directory_iterator(template_dir)) {
+                    if (!entry.is_regular_file()) continue;
+                    auto ext = entry.path().extension().string();
+                    if (ext != ".py") continue;
+
+                    std::ifstream ifs(entry.path());
+                    std::string content((std::istreambuf_iterator<char>(ifs)),
+                                        std::istreambuf_iterator<char>());
+
+                    json tmpl;
+                    tmpl["name"] = entry.path().stem().string();
+                    tmpl["filename"] = entry.path().filename().string();
+                    tmpl["code"] = content;
+                    templates.push_back(tmpl);
+                }
+            }
+        } catch (const fs::filesystem_error& e) {
+            LOG_WARN("Failed to list templates: {}", e.what());
+        }
+
+        res.set_content(json_response(true, "ok", templates), "application/json");
     });
 
     LOG_INFO("HTTP API 路由配置完成");

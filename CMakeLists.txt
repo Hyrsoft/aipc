@@ -61,6 +61,18 @@ set(VISIONG_INCLUDE_DIR ${VISIONG_PREBUILT_DIR}/include CACHE PATH "VisionG incl
 set(VISIONG_LIB_DIR ${VISIONG_PREBUILT_DIR}/lib CACHE PATH "VisionG library dir")
 set(VISIONG_EXTRA_LIB_DIR ${CMAKE_SOURCE_DIR}/../media/out/lib CACHE PATH "Extra vendor libs for VisionG (ivs/rve)")
 
+# VisionG Python 预编译包路径
+set(VISIONG_PYTHON_PREBUILT_DIR ${CMAKE_BINARY_DIR}/visiong_python CACHE PATH "VisionG Python package root")
+
+# ========================================
+# Python 3.11 配置（用于 pybind11::embed）
+# ========================================
+# 使用 visiong 源码中的 target_python（交叉编译目标板 Python）
+set(VISIONG_TARGET_PYTHON_DIR ${CMAKE_SOURCE_DIR}/visiong/3rdparty/target_python)
+set(PYTHON_INCLUDE_DIR ${VISIONG_TARGET_PYTHON_DIR}/include/python3.11 CACHE PATH "Python include dir")
+set(PYTHON_LIBRARY ${VISIONG_TARGET_PYTHON_DIR}/lib/libpython3.11.so CACHE FILEPATH "Python library")
+set(PYBIND11_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/visiong/3rdparty/pybind11/include CACHE PATH "pybind11 include dir")
+
 # ========================================
 # OpenSSL 配置（用于交叉编译）
 # ========================================
@@ -96,9 +108,32 @@ target_compile_definitions(asio INTERFACE
 # Asio 需要 pthread
 target_link_libraries(asio INTERFACE pthread)
 
-# VisionG (预编译库导入)
+# VisionG (预编译库导入 - 自动下载)
+set(VISIONG_ZIP_URL "https://github.com/yiex/visiong/releases/download/v1.0.1/visiong_cpp.zip")
+set(VISIONG_ZIP_PATH "${CMAKE_BINARY_DIR}/visiong_cpp.zip")
+
 if(NOT EXISTS "${VISIONG_INCLUDE_DIR}/visiong/core/Camera.h")
-    message(FATAL_ERROR "VisionG headers not found at ${VISIONG_INCLUDE_DIR}. Please extract visiong_cpp.zip into ${VISIONG_PREBUILT_DIR}")
+    if(NOT EXISTS "${VISIONG_ZIP_PATH}")
+        message(STATUS "Downloading VisionG prebuilt library from ${VISIONG_ZIP_URL} ...")
+        file(DOWNLOAD "${VISIONG_ZIP_URL}" "${VISIONG_ZIP_PATH}"
+            STATUS VISIONG_DL_STATUS
+            SHOW_PROGRESS
+            TLS_VERIFY ON
+        )
+        list(GET VISIONG_DL_STATUS 0 VISIONG_DL_CODE)
+        if(NOT VISIONG_DL_CODE EQUAL 0)
+            list(GET VISIONG_DL_STATUS 1 VISIONG_DL_MSG)
+            file(REMOVE "${VISIONG_ZIP_PATH}")
+            message(FATAL_ERROR "Failed to download VisionG: ${VISIONG_DL_MSG}")
+        endif()
+    endif()
+
+    message(STATUS "Extracting VisionG prebuilt library to ${VISIONG_PREBUILT_DIR} ...")
+    file(ARCHIVE_EXTRACT INPUT "${VISIONG_ZIP_PATH}" DESTINATION "${VISIONG_PREBUILT_DIR}")
+
+    if(NOT EXISTS "${VISIONG_INCLUDE_DIR}/visiong/core/Camera.h")
+        message(FATAL_ERROR "VisionG extraction failed: headers not found at ${VISIONG_INCLUDE_DIR}")
+    endif()
 endif()
 
 set(VISIONG_LIBRARY "")
@@ -115,6 +150,32 @@ set_target_properties(visiong_runtime PROPERTIES
     IMPORTED_LOCATION "${VISIONG_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${VISIONG_INCLUDE_DIR}"
 )
+
+# VisionG Python 预编译包（_visiong.so + visiong.py）
+set(VISIONG_PYTHON_ZIP_URL "https://github.com/yiex/visiong/releases/download/v1.0.1/visiong_python.zip")
+set(VISIONG_PYTHON_ZIP_PATH "${CMAKE_BINARY_DIR}/visiong_python.zip")
+
+if(NOT EXISTS "${VISIONG_PYTHON_PREBUILT_DIR}/_visiong.so")
+    if(NOT EXISTS "${VISIONG_PYTHON_ZIP_PATH}")
+        message(STATUS "Downloading VisionG Python package from ${VISIONG_PYTHON_ZIP_URL} ...")
+        file(DOWNLOAD "${VISIONG_PYTHON_ZIP_URL}" "${VISIONG_PYTHON_ZIP_PATH}"
+            STATUS VISIONG_PY_DL_STATUS
+            SHOW_PROGRESS
+            TLS_VERIFY ON
+        )
+        list(GET VISIONG_PY_DL_STATUS 0 VISIONG_PY_DL_CODE)
+        if(NOT VISIONG_PY_DL_CODE EQUAL 0)
+            list(GET VISIONG_PY_DL_STATUS 1 VISIONG_PY_DL_MSG)
+            file(REMOVE "${VISIONG_PYTHON_ZIP_PATH}")
+            message(WARNING "Failed to download VisionG Python: ${VISIONG_PY_DL_MSG}")
+        endif()
+    endif()
+
+    if(EXISTS "${VISIONG_PYTHON_ZIP_PATH}")
+        message(STATUS "Extracting VisionG Python package to ${VISIONG_PYTHON_PREBUILT_DIR} ...")
+        file(ARCHIVE_EXTRACT INPUT "${VISIONG_PYTHON_ZIP_PATH}" DESTINATION "${VISIONG_PYTHON_PREBUILT_DIR}")
+    endif()
+endif()
 
 # libdatachannel (WebRTC 支持)
 # 配置选项
@@ -159,12 +220,11 @@ install(PROGRAMS
     DESTINATION ${AIPC_INSTALL_BIN_DIR}
 )
 
-# 安装 AI 模型文件
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/model/
+# 安装 AI 模型文件（仅内置 YOLOv5 模型，其余由用户通过 Web 上传）
+install(FILES
+    ${CMAKE_SOURCE_DIR}/assets/model/yolov5.rknn
+    ${CMAKE_SOURCE_DIR}/assets/model/coco_80_labels_list.txt
     DESTINATION ${AIPC_INSTALL_MODEL_DIR}
-    FILES_MATCHING 
-    PATTERN "*.rknn"
-    PATTERN "*.txt"
 )
 
 # 安装 VisionG 动态库（便于部署）
@@ -173,6 +233,29 @@ if(EXISTS "${VISIONG_LIB_DIR}/libvisiong.so")
         DESTINATION ${AIPC_INSTALL_LIB_DIR}
     )
 endif()
+
+# 安装 VisionG Python 模块（_visiong.so + visiong.py）
+set(AIPC_INSTALL_PYTHON_DIR "python")
+if(EXISTS "${VISIONG_PYTHON_PREBUILT_DIR}/_visiong.so")
+    install(FILES
+        "${VISIONG_PYTHON_PREBUILT_DIR}/_visiong.so"
+        DESTINATION ${AIPC_INSTALL_PYTHON_DIR}
+    )
+endif()
+# visiong.py 加载器从源码获取
+if(EXISTS "${CMAKE_SOURCE_DIR}/visiong/src/python/visiong.py")
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/visiong/src/python/visiong.py"
+        DESTINATION ${AIPC_INSTALL_PYTHON_DIR}
+    )
+endif()
+
+# 安装 Python 模板代码
+set(AIPC_INSTALL_TEMPLATES_DIR "python_templates")
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/python_templates/
+    DESTINATION ${AIPC_INSTALL_TEMPLATES_DIR}
+    FILES_MATCHING PATTERN "*.py"
+)
 
 # 安装 Web 资源文件 (from www/dist)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/www/dist/
