@@ -26,6 +26,7 @@ target_include_directories(yolov5_lib
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/media_producer   # for i_media_producer.h
         ${CMAKE_SOURCE_DIR}/src/media_producer/common  # for ai_types.h, image_utils.h, osd_overlay.h
+        ${OpenCV_INCLUDE_DIRS}             # 必须在 MPI 之前
         ${LUCKFOX_MPI_INCLUDE_DIR}
         ${LUCKFOX_MPI_INCLUDE_DIR}/rknn
         ${LUCKFOX_MPI_INCLUDE_DIR}/librga
@@ -52,6 +53,9 @@ target_link_libraries(yolov5_lib
         common
         spdlog::spdlog
 )
+
+# 强制将导入目标的包含目录作为普通的 -I 处理，确保 OpenCV 头文件优先级高于 Luckfox MPI
+set_target_properties(yolov5_lib PROPERTIES NO_SYSTEM_FROM_IMPORTED ON)
 
 # 设置编译选项
 target_compile_options(yolov5_lib

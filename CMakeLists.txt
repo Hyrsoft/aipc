@@ -90,6 +90,25 @@ target_compile_definitions(asio INTERFACE
 # Asio 需要 pthread
 target_link_libraries(asio INTERFACE pthread)
 
+# VisionG (计算机视觉运行时 - Camera/NPU/ImageBuffer/VencManager)
+set(VISIONG_PATH ${CMAKE_SOURCE_DIR}/thirdparty/visiong CACHE PATH "VisionG library path")
+# 关闭不需要的组件
+set(VISIONG_BUILD_PYTHON_MODULE OFF CACHE BOOL "Disable VisionG Python module" FORCE)
+set(VISIONG_BUILD_CPP_LIBS ON CACHE BOOL "Build VisionG C++ libraries" FORCE)
+set(VISIONG_ENABLE_NPU ON CACHE BOOL "Enable VisionG NPU" FORCE)
+set(VISIONG_ENABLE_IVE OFF CACHE BOOL "Disable VisionG IVE" FORCE)
+set(VISIONG_ENABLE_GUI ON CACHE BOOL "Enable VisionG GUI (Required for OSD text drawing)" FORCE)
+set(VISIONG_ENABLE_LTO OFF CACHE BOOL "Disable VisionG LTO (managed by top-level project)" FORCE)
+set(VISIONG_STRIP_SYMBOLS OFF CACHE BOOL "Disable VisionG symbol stripping" FORCE)
+# 映射依赖路径（复用 LUCKFOX_MPI 已有的 SDK 头文件和库）
+set(VISIONG_VENDOR_INCLUDE_DIR "${LUCKFOX_MPI_INCLUDE_DIR}" CACHE PATH "VisionG vendor include" FORCE)
+set(VISIONG_RGA_INCLUDE_DIR "${LUCKFOX_MPI_INCLUDE_DIR}/librga" CACHE PATH "VisionG RGA include" FORCE)
+set(VISIONG_RKNN_INCLUDE_DIR "${LUCKFOX_MPI_INCLUDE_DIR}/rknn" CACHE PATH "VisionG RKNN include" FORCE)
+set(VISIONG_VENDOR_LIB_DIR "${LUCKFOX_MPI_LIB_DIR}" CACHE PATH "VisionG vendor lib" FORCE)
+# 使用 VisionG 自带的 OpenCV（包含 imgcodecs），而非 Luckfox SDK 的精简版
+set(VISIONG_OPENCV_DIR "${VISIONG_PATH}/3rdparty/opencv/lib/cmake/opencv4" CACHE PATH "VisionG OpenCV config" FORCE)
+add_subdirectory(${VISIONG_PATH} ${CMAKE_BINARY_DIR}/visiong)
+
 # libdatachannel (WebRTC 支持)
 # 配置选项
 set(NO_WEBSOCKET OFF CACHE BOOL "Disable WebSocket support" FORCE)

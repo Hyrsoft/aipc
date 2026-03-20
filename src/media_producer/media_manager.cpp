@@ -12,6 +12,7 @@
 #include "simple_ipc/simple_ipc_producer.h"
 #include "yolov5/yolo_producer.h"
 #include "retainface/retinaface_producer.h"
+#include "visiong/visiong_producer.h"
 #include "common/logger.h"
 
 #include <chrono>
@@ -346,6 +347,17 @@ std::unique_ptr<IMediaProducer> MediaManager::CreateProducerInstance(ProducerMod
             } else {
                 return CreateRetinaFaceProducer(mode_config);
             }
+
+        case ProducerMode::VisionG_YoloV5:
+        case ProducerMode::VisionG_RetinaFace:
+            // VisionG AI 模式强制使用 480p
+            mode_config.resolution = Resolution::R_480P;
+            LOG_INFO("VisionG AI mode: using 480p resolution for DDR bandwidth optimization");
+            if (mode == ProducerMode::VisionG_YoloV5) {
+                return CreateVisionGYoloProducer(mode_config);
+            } else {
+                return CreateVisionGRetinaFaceProducer(mode_config);
+            }
             
         default:
             LOG_ERROR("Unknown producer mode: {}", static_cast<int>(mode));
@@ -365,6 +377,10 @@ std::unique_ptr<IMediaProducer> CreateProducer(ProducerMode mode, const Producer
             return CreateYoloProducer(config);
         case ProducerMode::RetinaFace:
             return CreateRetinaFaceProducer(config);
+        case ProducerMode::VisionG_YoloV5:
+            return CreateVisionGYoloProducer(config);
+        case ProducerMode::VisionG_RetinaFace:
+            return CreateVisionGRetinaFaceProducer(config);
         default:
             return nullptr;
     }

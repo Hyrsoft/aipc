@@ -32,6 +32,10 @@ target_include_directories(aipc
         ${LIBDATACHANNEL_PATH}/deps/json/single_include  # nlohmann/json
 )
 
+# 查找 OpenCV (与 VisionG 保持一致，使用其自带版本)
+set(OpenCV_DIR ${CMAKE_SOURCE_DIR}/thirdparty/visiong/3rdparty/opencv/lib/cmake/opencv4)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
+
 # 链接静态库和第三方库
 # 注意：链接顺序很重要，被依赖的库放后面
 target_link_libraries(aipc
@@ -40,6 +44,7 @@ target_link_libraries(aipc
         httpserver_lib      # HTTP 服务器模块
         media_distribution  # 流分发模块
         media_producer      # 视频采集和 AI 推理模块
+        ${OpenCV_LIBS}      # OpenCV (需要在模块之后以解析依赖)
         spdlog::spdlog
         httplib
 )

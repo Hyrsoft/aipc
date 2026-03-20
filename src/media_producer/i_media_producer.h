@@ -305,6 +305,32 @@ std::unique_ptr<IMediaProducer> CreateYoloProducer(const ProducerConfig& config)
  */
 std::unique_ptr<IMediaProducer> CreateRetinaFaceProducer(const ProducerConfig& config);
 
+/**
+ * @brief 创建 VisionG YOLOv5 AI 推理模式生产者
+ * 
+ * 特点：
+ * - 使用 VisionG 库 Camera 取帧 + NPU 推理 + ImageBuffer OSD
+ * - VENC 编码仍使用 MPI 接口
+ * - DDR 带宽受限，推荐 480p
+ * 
+ * @param config 配置参数
+ * @return 生产者实例
+ */
+std::unique_ptr<IMediaProducer> CreateVisionGYoloProducer(const ProducerConfig& config);
+
+/**
+ * @brief 创建 VisionG RetinaFace 人脸检测模式生产者
+ * 
+ * 特点：
+ * - 使用 VisionG 库 Camera 取帧 + NPU 推理 + ImageBuffer OSD
+ * - VENC 编码仍使用 MPI 接口
+ * - DDR 带宽受限，推荐 480p
+ * 
+ * @param config 配置参数
+ * @return 生产者实例
+ */
+std::unique_ptr<IMediaProducer> CreateVisionGRetinaFaceProducer(const ProducerConfig& config);
+
 // ============================================================================
 // 生产者模式枚举
 // ============================================================================
@@ -313,9 +339,11 @@ std::unique_ptr<IMediaProducer> CreateRetinaFaceProducer(const ProducerConfig& c
  * @brief 生产者模式枚举
  */
 enum class ProducerMode {
-    SimpleIPC,      ///< 纯监控模式
-    YoloV5,         ///< YOLOv5 目标检测
-    RetinaFace      ///< RetinaFace 人脸检测
+    SimpleIPC,          ///< 纯监控模式
+    YoloV5,             ///< YOLOv5 目标检测（原始 MPI 实现）
+    RetinaFace,         ///< RetinaFace 人脸检测（原始 MPI 实现）
+    VisionG_YoloV5,     ///< VisionG 库驱动的 YOLOv5
+    VisionG_RetinaFace  ///< VisionG 库驱动的 RetinaFace
 };
 
 /**
@@ -328,10 +356,12 @@ std::unique_ptr<IMediaProducer> CreateProducer(ProducerMode mode, const Producer
  */
 inline const char* ProducerModeToString(ProducerMode mode) {
     switch (mode) {
-        case ProducerMode::SimpleIPC:   return "SimpleIPC";
-        case ProducerMode::YoloV5:      return "YoloV5";
-        case ProducerMode::RetinaFace:  return "RetinaFace";
-        default:                        return "Unknown";
+        case ProducerMode::SimpleIPC:          return "SimpleIPC";
+        case ProducerMode::YoloV5:             return "YoloV5";
+        case ProducerMode::RetinaFace:         return "RetinaFace";
+        case ProducerMode::VisionG_YoloV5:     return "VisionG_YoloV5";
+        case ProducerMode::VisionG_RetinaFace: return "VisionG_RetinaFace";
+        default:                               return "Unknown";
     }
 }
 

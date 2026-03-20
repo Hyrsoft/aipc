@@ -3,6 +3,10 @@
 # 媒体生产者 - 策略模式实现的视频采集与编码
 # ========================================
 
+# 查找 OpenCV (全局提供给各个 Producer)
+set(OpenCV_DIR ${CMAKE_SOURCE_DIR}/thirdparty/visiong/3rdparty/opencv/lib/cmake/opencv4)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
+
 # ========================================
 # 源文件配置
 # ========================================
@@ -33,6 +37,7 @@ add_subdirectory(common)             # 共用工具（AI类型、图像处理、
 add_subdirectory(simple_ipc)         # SimpleIPC 纯监控模式
 add_subdirectory(yolov5)             # YOLOv5 目标检测模式
 add_subdirectory(retainface)         # RetinaFace 人脸检测模式
+add_subdirectory(visiong)            # VisionG 库驱动的 AI 推理模式
 
 # ========================================
 # 创建静态库
@@ -60,6 +65,7 @@ target_link_libraries(media_producer
         simple_ipc_lib   # SimpleIPC 纯监控模式
         yolov5_lib       # YOLOv5 目标检测
         retinaface_lib   # RetinaFace 人脸检测
+        visiong_producer_lib  # VisionG 库驱动的 AI 推理
 )
 
 # 设置编译选项
