@@ -47,13 +47,13 @@ add_link_options(-Wl,--gc-sections)
 # ========================================
 # 第三方库路径（全局可用）
 # ========================================
-set(LUCKFOX_MPI_PATH ${CMAKE_SOURCE_DIR}/thirdparty/luckfox_pico_rkmpi_example CACHE PATH "Luckfox MPI library path")
+set(LUCKFOX_MPI_PATH ${CMAKE_SOURCE_DIR}/3rdparty/luckfox_pico_rkmpi_example CACHE PATH "Luckfox MPI library path")
 set(LUCKFOX_MPI_INCLUDE_DIR ${LUCKFOX_MPI_PATH}/include CACHE PATH "Luckfox MPI include path")
 set(LUCKFOX_MPI_LIB_DIR ${LUCKFOX_MPI_PATH}/lib/uclibc CACHE PATH "Luckfox MPI library path")
-set(SPDLOG_PATH ${CMAKE_SOURCE_DIR}/thirdparty/spdlog CACHE PATH "spdlog library path")
-set(CPP_HTTPLIB_PATH ${CMAKE_SOURCE_DIR}/thirdparty/cpp-httplib CACHE PATH "cpp-httplib library path")
-set(LIBDATACHANNEL_PATH ${CMAKE_SOURCE_DIR}/thirdparty/libdatachannel CACHE PATH "libdatachannel library path")
-set(ASIO_PATH ${CMAKE_SOURCE_DIR}/thirdparty/asio CACHE PATH "Asio library path")
+set(SPDLOG_PATH ${CMAKE_SOURCE_DIR}/3rdparty/spdlog CACHE PATH "spdlog library path")
+set(CPP_HTTPLIB_PATH ${CMAKE_SOURCE_DIR}/3rdparty/cpp-httplib CACHE PATH "cpp-httplib library path")
+set(LIBDATACHANNEL_PATH ${CMAKE_SOURCE_DIR}/3rdparty/libdatachannel CACHE PATH "libdatachannel library path")
+set(ASIO_PATH ${CMAKE_SOURCE_DIR}/3rdparty/asio CACHE PATH "Asio library path")
 
 # VisionG 预编译库路径（将 visiong_cpp.zip 解压到该目录）
 set(VISIONG_PREBUILT_DIR ${CMAKE_BINARY_DIR}/visiong_cpp CACHE PATH "VisionG prebuilt package root")

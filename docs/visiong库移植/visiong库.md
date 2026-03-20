@@ -1,4 +1,4 @@
-我在thirdparty中添加了一个visiong库，我希望用这个库来取代media produceer中除了simple ipc之外的edge ai部分，包括rknn运行时管理、硬件资源管理分配（vi、vpss等），调用visiong库等c++接口来实现。我需要你分析一下可行性，并给出修改修改思路
+我在3rdparty中添加了一个visiong库，我希望用这个库来取代media produceer中除了simple ipc之外的edge ai部分，包括rknn运行时管理、硬件资源管理分配（vi、vpss等），调用visiong库等c++接口来实现。我需要你分析一下可行性，并给出修改修改思路
 
 # VisionG 库替代 Edge AI 可行性分析
 
@@ -8,11 +8,11 @@ VisionG 库提供了 **Camera、NPU、VencManager、ImageBuffer** 四大核心 C
 
 | 当前手动管理                            | VisionG 替代                                                 |
 | --------------------------------------- | ------------------------------------------------------------ |
-| ISP 初始化 (`SAMPLE_COMM_ISP_Init/Run`) | [Camera](file:///home/hao/projects/luckfox-pico/aipc/thirdparty/visiong/include/visiong/core/Camera.h#24-25) 内部自动管理 |
+| ISP 初始化 (`SAMPLE_COMM_ISP_Init/Run`) | [Camera](file:///home/hao/projects/luckfox-pico/aipc/3rdparty/visiong/include/visiong/core/Camera.h#24-25) 内部自动管理 |
 | VI 设备/通道配置 (`RK_MPI_VI_*`)        | `Camera::snapshot()` 封装                                    |
 | VENC 配置 (`RK_MPI_VENC_*`)             | `VencManager::encodeToVideo()`                               |
-| MB Pool 管理 (`RK_MPI_MB_*`)            | [ImageBuffer](file:///home/hao/projects/luckfox-pico/aipc/thirdparty/visiong/include/visiong/core/ImageBuffer.h#73-74) 自动管理 |
-| RKNN 上下文管理                         | [NPU](file:///home/hao/projects/luckfox-pico/aipc/thirdparty/visiong/include/visiong/npu/NPU.h#48-49) 类封装 |
+| MB Pool 管理 (`RK_MPI_MB_*`)            | [ImageBuffer](file:///home/hao/projects/luckfox-pico/aipc/3rdparty/visiong/include/visiong/core/ImageBuffer.h#73-74) 自动管理 |
+| RKNN 上下文管理                         | [NPU](file:///home/hao/projects/luckfox-pico/aipc/3rdparty/visiong/include/visiong/npu/NPU.h#48-49) 类封装 |
 | NV12→BGR 转换 + letterbox               | `ImageBuffer::to_format()` / `ImageBuffer::letterbox()`      |
 | OpenCV 画框 / 文字                      | `ImageBuffer::draw_rectangle()` / `draw_string()`            |
 | MPI 系统初始化/退出                     | VisionG 内部自动管理                                         |
@@ -121,7 +121,7 @@ venc.encodeToVideo(frame, VencCodec::H264, 75, packet);
 
 ### 4.1 编码流格式适配（核心难点）
 
-当前系统的消费者回调使用 `EncodedStreamPtr`（自定义类型），而 VisionG 输出 [VencEncodedPacket](file:///home/hao/projects/luckfox-pico/aipc/thirdparty/visiong/include/visiong/modules/VencManager.h#27-36)。需要写一个转换层：
+当前系统的消费者回调使用 `EncodedStreamPtr`（自定义类型），而 VisionG 输出 [VencEncodedPacket](file:///home/hao/projects/luckfox-pico/aipc/3rdparty/visiong/include/visiong/modules/VencManager.h#27-36)。需要写一个转换层：
 
 ```cpp
 // VencEncodedPacket → EncodedStreamPtr 转换
@@ -137,7 +137,7 @@ EncodedStreamPtr ConvertToStream(const VencEncodedPacket& packet) {
 ### 4.2 Camera 与 SimpleIPC 的 ISP/VI 冲突
 
 > [!WARNING]
-> VisionG 的 [Camera](file:///home/hao/projects/luckfox-pico/aipc/thirdparty/visiong/include/visiong/core/Camera.h#24-25) 内部会自行初始化 ISP 和 VI。当从 SimpleIPC 切换到 AI 模式时，需要确保 SimpleIPC 的 ISP/VI 已经完全释放，否则会产生硬件资源冲突。
+> VisionG 的 [Camera](file:///home/hao/projects/luckfox-pico/aipc/3rdparty/visiong/include/visiong/core/Camera.h#24-25) 内部会自行初始化 ISP 和 VI。当从 SimpleIPC 切换到 AI 模式时，需要确保 SimpleIPC 的 ISP/VI 已经完全释放，否则会产生硬件资源冲突。
 
 当前的 [force_cleanup_mpi_state()](file:///home/hao/projects/luckfox-pico/aipc/src/media_producer/yolov5/mpi_config.h#48-83) 机制已经处理了这个问题。VisionG 的 Camera 在构造时会重新初始化，所以冷切换流程不变。
 
@@ -150,7 +150,7 @@ VisionG 的 `VencManager::getInstance()` 是全局单例，而 SimpleIPC 模式�
 
 ### 4.4 NPU 检测结果坐标系
 
-VisionG `NPU::inference()` 返回的 `Detection::box` 是 `std::tuple<int,int,int,int>`，其坐标是否已经映射回原图尺寸需要确认。根据 VisionG 源码结构，推理时传入 [ImageBuffer](file:///home/hao/projects/luckfox-pico/aipc/thirdparty/visiong/include/visiong/core/ImageBuffer.h#73-74)，内部应该会自动处理 letterbox 和坐标反映射。
+VisionG `NPU::inference()` 返回的 `Detection::box` 是 `std::tuple<int,int,int,int>`，其坐标是否已经映射回原图尺寸需要确认。根据 VisionG 源码结构，推理时传入 [ImageBuffer](file:///home/hao/projects/luckfox-pico/aipc/3rdparty/visiong/include/visiong/core/ImageBuffer.h#73-74)，内部应该会自动处理 letterbox 和坐标反映射。
 
 ---
 
