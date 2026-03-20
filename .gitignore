@@ -14,7 +14,6 @@ bin/
 rockit-test/
 Smart_Glasses_Subcode/
 aipc_old/
-visiong/
 
 # 前端构建产物 (Node.js)
 www/node_modules/
