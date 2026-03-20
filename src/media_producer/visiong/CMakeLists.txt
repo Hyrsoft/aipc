@@ -5,14 +5,12 @@
 
 set(VISIONG_PRODUCER_SOURCES
     visiong_producer.cpp
-    yolov5/yolov5_strategy.cpp
     python/python_strategy.cpp
 )
 
 set(VISIONG_PRODUCER_HEADERS
     visiong_producer.h
     i_model_strategy.h
-    yolov5/yolov5_strategy.h
     python/python_strategy.h
 )
 

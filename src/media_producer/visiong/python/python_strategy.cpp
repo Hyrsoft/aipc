@@ -22,6 +22,26 @@ namespace py = pybind11;
 namespace media {
 
 // ============================================================================
+// 注册模型列表
+// ============================================================================
+
+const std::vector<RegisteredModel>& PythonStrategy::GetRegisteredModels() {
+    static const std::vector<RegisteredModel> models = {
+        {"YOLOv5 物体检测",      "YOLOV5",      "yolov5.rknn",  "coco_80_labels_list.txt",
+         "80 类 COCO 物体检测，通用场景"},
+        {"YOLO11 物体检测",      "YOLO11",      "yolo11.rknn",  "coco_80_labels_list.txt",
+         "YOLO11 物体检测，精度更高"},
+        {"YOLO11 实例分割",      "YOLO11_SEG",  "yolo11_seg.rknn", "coco_80_labels_list.txt",
+         "YOLO11 实例分割，支持 mask 轮廓"},
+        {"YOLO11 人体姿态",      "YOLO11_POSE", "yolo11_pose.rknn", "",
+         "YOLO11 人体姿态估计，17 关键点 + 骨架"},
+        {"RetinaFace 人脸检测",  "RETINAFACE",  "retinaface.rknn", "",
+         "人脸检测 + 5 点关键点"},
+    };
+    return models;
+}
+
+// ============================================================================
 // 默认 Python 后处理代码
 // ============================================================================
 

@@ -41,6 +41,9 @@
   // Python 模板
   let pythonTemplates = [];
 
+  // C++ 注册的可用模型类型
+  let registeredModels = [];
+
   // 编辑器面板显示状态
   let showEditor = false;
 
@@ -188,7 +191,7 @@
   // AI 控制
   // =====================================================================
   async function toggleAI() {
-    const targetModel = aiEnabled ? 'none' : 'yolov5';
+    const targetModel = aiEnabled ? 'none' : 'visiong';
     await switchModel(targetModel);
   }
 
@@ -206,6 +209,9 @@
                   modelName = name;
                   aiEnabled = name !== 'none';
                   addLog(`模型切换成功: ${name}`, 'success');
+                  if (name === 'visiong') {
+                      openEditor();
+                  }
               } else {
                   addLog(`切换失败: ${data.message}`, 'error');
               }
@@ -213,6 +219,9 @@
              modelName = name;
              aiEnabled = name !== 'none';
              addLog(`(Dev) 切换到 ${name}`, 'success');
+             if (name === 'visiong') {
+                 openEditor();
+             }
           }
       } catch(e) {
           addLog(`模型切换异常: ${e.message}`, 'error');
@@ -440,6 +449,18 @@
       await fetchPythonCode();
       await fetchModelList();
       await fetchTemplates();
+      await fetchRegisteredModels();
+  }
+
+  async function fetchRegisteredModels() {
+      if (isDev) return;
+      try {
+          const res = await fetch('/api/models/registered');
+          const data = await res.json();
+          if (data.success) {
+              registeredModels = data.data;
+          }
+      } catch(e) { /* ignore */ }
   }
 
   // =====================================================================
@@ -966,12 +987,12 @@
                </div>
                
                <div class="space-y-2">
-                   {#each ['none', 'yolov5', 'python'] as model}
+                   {#each ['none', 'visiong'] as model}
                    <button 
                      class={`w-full py-2.5 px-3 rounded-lg text-xs font-medium transition-all flex items-center justify-between group ${modelName === model ? 'bg-primary text-white shadow-lg shadow-primary/20 ring-1 ring-primary' : 'bg-white border border-gray-200 text-gray-600 hover:border-primary/50 hover:text-primary'}`}
                      on:click={() => switchModel(model)}
                    >
-                     <span class="uppercase">{model === 'none' ? '关闭 AI' : model === 'python' ? 'Python 可编程' : model}</span>
+                     <span class="uppercase">{model === 'none' ? '关闭 AI' : 'VisionG AI'}</span>
                      {#if modelName === model}
                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                      {/if}
@@ -980,7 +1001,7 @@
                </div>
 
                <!-- Python 编辑器快捷入口 -->
-               {#if modelName === 'python'}
+               {#if modelName === 'visiong'}
                    <button
                      class="w-full mt-3 py-2 px-3 rounded-lg text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 transition-colors flex items-center justify-center gap-2"
                      on:click={openEditor}
@@ -1227,9 +1248,12 @@
               <div>
                 <label class="text-xs text-gray-500 block mb-1">模型类型</label>
                 <select bind:value={selectedModelType} class="w-full text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white">
-                  {#each ['YOLOV5', 'YOLO11', 'YOLO11_SEG', 'YOLO11_POSE', 'RETINAFACE', 'LPRNET'] as t}
-                    <option value={t}>{t}</option>
+                  {#each registeredModels as m}
+                    <option value={m.type}>{m.name}</option>
                   {/each}
+                  {#if registeredModels.length === 0}
+                    <option value="YOLOV5">YOLOV5</option>
+                  {/if}
                 </select>
               </div>
 

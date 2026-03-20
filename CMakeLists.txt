@@ -68,10 +68,10 @@ set(VISIONG_PYTHON_PREBUILT_DIR ${CMAKE_BINARY_DIR}/visiong_python CACHE PATH "V
 # Python 3.11 配置（用于 pybind11::embed）
 # ========================================
 # 使用 visiong 源码中的 target_python（交叉编译目标板 Python）
-set(VISIONG_TARGET_PYTHON_DIR ${CMAKE_SOURCE_DIR}/visiong/3rdparty/target_python)
+set(VISIONG_TARGET_PYTHON_DIR ${CMAKE_SOURCE_DIR}/3rdparty/visiong/3rdparty/target_python)
 set(PYTHON_INCLUDE_DIR ${VISIONG_TARGET_PYTHON_DIR}/include/python3.11 CACHE PATH "Python include dir")
 set(PYTHON_LIBRARY ${VISIONG_TARGET_PYTHON_DIR}/lib/libpython3.11.so CACHE FILEPATH "Python library")
-set(PYBIND11_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/visiong/3rdparty/pybind11/include CACHE PATH "pybind11 include dir")
+set(PYBIND11_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/3rdparty/visiong/3rdparty/pybind11 CACHE PATH "pybind11 include dir")
 
 # ========================================
 # OpenSSL 配置（用于交叉编译）
@@ -243,9 +243,9 @@ if(EXISTS "${VISIONG_PYTHON_PREBUILT_DIR}/_visiong.so")
     )
 endif()
 # visiong.py 加载器从源码获取
-if(EXISTS "${CMAKE_SOURCE_DIR}/visiong/src/python/visiong.py")
+if(EXISTS "${CMAKE_SOURCE_DIR}/3rdparty/visiong/src/python/visiong.py")
     install(FILES
-        "${CMAKE_SOURCE_DIR}/visiong/src/python/visiong.py"
+        "${CMAKE_SOURCE_DIR}/3rdparty/visiong/src/python/visiong.py"
         DESTINATION ${AIPC_INSTALL_PYTHON_DIR}
     )
 endif()

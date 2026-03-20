@@ -20,8 +20,23 @@
 
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace media {
+
+/**
+ * @brief C++ 注册的可用模型类型
+ *
+ * 限制用户只能选择 visiong 库支持的模型类型。
+ * 前端通过 /api/models/registered 获取此列表。
+ */
+struct RegisteredModel {
+    std::string name;           ///< 显示名称（如 "YOLOv5 物体检测"）
+    std::string type_str;       ///< 模型类型字符串（如 "YOLOV5"）
+    std::string default_model;  ///< 默认模型文件名（如 "yolov5.rknn"）
+    std::string default_labels; ///< 默认标签文件名（空字符串表示无标签）
+    std::string description;    ///< 描述
+};
 
 /**
  * @brief Python 可编程模型策略
@@ -49,6 +64,16 @@ public:
     void Deinit() override;
     ImageBuffer ProcessFrame(const ImageBuffer& frame, NPU* npu) override;
     const char* GetName() const override { return "Python"; }
+
+    // ========== 注册模型列表 ==========
+
+    /**
+     * @brief 获取 C++ 注册的可用模型类型列表
+     *
+     * 硬编码 visiong 库支持的 ModelType 枚举值。
+     * 前端使用此列表渲染模型类型选择器，防止用户选择不支持的模型。
+     */
+    static const std::vector<RegisteredModel>& GetRegisteredModels();
 
     // ========== Python 编辑器专用接口 ==========
 

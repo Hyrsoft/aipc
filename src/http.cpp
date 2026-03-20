@@ -38,12 +38,11 @@ static const size_t MAX_UPLOAD_SIZE = 50 * 1024 * 1024;  // 50MB
 // ============================================================================
 
 /**
- * @brief 获取当前 VisionGProducer 下的 PythonStrategy（如果处于 Python 模式）
+ * @brief 获取当前 VisionGProducer 下的 PythonStrategy（如果处于 VisionG 模式）
  */
 static media::PythonStrategy* GetPythonStrategy() {
     auto& mgr = media::MediaManager::Instance();
-    if (mgr.GetCurrentMode() != media::ProducerMode::VisionG ||
-        mgr.GetCurrentVisionGModel() != media::VisionGModel::Python) {
+    if (mgr.GetCurrentMode() != media::ProducerMode::VisionG) {
         return nullptr;
     }
     auto* producer = dynamic_cast<media::VisionGProducer*>(mgr.GetProducer());
@@ -499,17 +498,11 @@ void HttpApi::SetupRoutes() {
 
             // 解析模式字符串
             media::ProducerMode target_mode;
-            if (mode_str == "python") {
+            if (mode_str == "visiong" || mode_str == "python" || mode_str == "yolov5" || mode_str == "yolo") {
                 target_mode = media::ProducerMode::VisionG;
-                mgr.SetVisionGModel(media::VisionGModel::Python);
-            } else if (mode_str == "visiong" || mode_str == "yolov5" || mode_str == "yolo") {
-                target_mode = media::ProducerMode::VisionG;
-                mgr.SetVisionGModel(media::VisionGModel::YOLOv5);
             } else {
                 target_mode = media::ProducerMode::SimpleIPC;
             }
-            
-            auto& mgr = media::MediaManager::Instance();
             
             if (mgr.GetCurrentMode() == target_mode) {
                 json data;
@@ -545,9 +538,15 @@ void HttpApi::SetupRoutes() {
         bool has_model = (mode == media::ProducerMode::VisionG);
         data["has_model"] = has_model;
         
-        // model_type: 模型类型名称
+        // model_type: 当前模型信息
         if (mode == media::ProducerMode::VisionG) {
-            data["model_type"] = media::VisionGModelToString(mgr.GetCurrentVisionGModel());
+            auto* strategy = GetPythonStrategy();
+            if (strategy) {
+                auto info = strategy->GetModelInfo();
+                data["model_type"] = info.model_type;
+            } else {
+                data["model_type"] = "visiong";
+            }
         } else {
             data["model_type"] = "none";
         }
@@ -573,17 +572,11 @@ void HttpApi::SetupRoutes() {
 
             // 映射模型名称到生产者模式
             media::ProducerMode target_mode;
-            if (model_str == "python") {
+            if (model_str == "visiong" || model_str == "python" || model_str == "yolov5" || model_str == "yolo") {
                 target_mode = media::ProducerMode::VisionG;
-                mgr.SetVisionGModel(media::VisionGModel::Python);
-            } else if (model_str == "yolov5" || model_str == "yolo" || model_str == "visiong") {
-                target_mode = media::ProducerMode::VisionG;
-                mgr.SetVisionGModel(media::VisionGModel::YOLOv5);
             } else {
                 target_mode = media::ProducerMode::SimpleIPC;
             }
-            
-            auto& mgr = media::MediaManager::Instance();
             
             if (mgr.GetCurrentMode() == target_mode) {
                 json data;
@@ -743,12 +736,12 @@ void HttpApi::SetupRoutes() {
 
     // 上传模型文件
     server_->Post("/api/model/upload", [](const HttpRequest& req, HttpResponse& res) {
-        if (!req.has_file("file")) {
+        if (!req.form.has_file("file")) {
             res.set_content(json_response(false, "No file in request"), "application/json");
             return;
         }
 
-        const auto& file = req.get_file_value("file");
+        const auto& file = req.form.get_file("file");
         std::string filename = SanitizeFilename(file.filename);
 
         if (filename.empty()) {
@@ -819,6 +812,26 @@ void HttpApi::SetupRoutes() {
     });
 
     // ========================================================================
+    // 注册模型列表 API
+    // ========================================================================
+
+    // 获取 C++ 注册的可用模型类型列表
+    server_->Get("/api/models/registered", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        const auto& models = media::PythonStrategy::GetRegisteredModels();
+        json list = json::array();
+        for (const auto& m : models) {
+            json item;
+            item["name"] = m.name;
+            item["type"] = m.type_str;
+            item["default_model"] = m.default_model;
+            item["default_labels"] = m.default_labels;
+            item["description"] = m.description;
+            list.push_back(item);
+        }
+        res.set_content(json_response(true, "ok", list), "application/json");
+    });
+
+    // ========================================================================
     // Python 编辑器 API
     // ========================================================================
 
@@ -826,7 +839,7 @@ void HttpApi::SetupRoutes() {
     server_->Get("/api/python/code", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* strategy = GetPythonStrategy();
         if (!strategy) {
-            res.set_content(json_response(false, "Not in Python mode"), "application/json");
+            res.set_content(json_response(false, "Not in VisionG mode"), "application/json");
             return;
         }
 
@@ -839,7 +852,7 @@ void HttpApi::SetupRoutes() {
     server_->Post("/api/python/code", [](const HttpRequest& req, HttpResponse& res) {
         auto* strategy = GetPythonStrategy();
         if (!strategy) {
-            res.set_content(json_response(false, "Not in Python mode"), "application/json");
+            res.set_content(json_response(false, "Not in VisionG mode"), "application/json");
             return;
         }
 
@@ -867,13 +880,12 @@ void HttpApi::SetupRoutes() {
     // Python 模式状态
     server_->Get("/api/python/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto& mgr = media::MediaManager::Instance();
-        bool is_python = (mgr.GetCurrentMode() == media::ProducerMode::VisionG &&
-                          mgr.GetCurrentVisionGModel() == media::VisionGModel::Python);
+        bool is_visiong = (mgr.GetCurrentMode() == media::ProducerMode::VisionG);
 
         json data;
-        data["active"] = is_python;
+        data["active"] = is_visiong;
 
-        if (is_python) {
+        if (is_visiong) {
             auto* strategy = GetPythonStrategy();
             if (strategy) {
                 data["last_error"] = strategy->GetLastError();
@@ -917,7 +929,7 @@ void HttpApi::SetupRoutes() {
 
             auto* strategy = GetPythonStrategy();
             if (!strategy) {
-                res.set_content(json_response(false, "Not in Python mode"), "application/json");
+                res.set_content(json_response(false, "Not in VisionG mode"), "application/json");
                 return;
             }
 

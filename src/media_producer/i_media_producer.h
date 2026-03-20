@@ -280,22 +280,15 @@ protected:
 std::unique_ptr<IMediaProducer> CreateSimpleIPCProducer(const ProducerConfig& config);
 
 /**
- * @brief 创建 VisionG AI 推理模式生产者（YOLOv5）
+ * @brief 创建 VisionG AI 推理模式生产者
+ * 
+ * 统一使用 PythonStrategy：C++ 负责 NPU 初始化和推理，Python 负责后处理绘制。
+ * 默认加载 YOLOv5 模型，用户可通过 Web 编辑器切换模型和自定义 Python 代码。
  * 
  * @param config 配置参数
  * @return 生产者实例
  */
-std::unique_ptr<IMediaProducer> CreateVisionGYoloProducer(const ProducerConfig& config);
-
-/**
- * @brief 创建 VisionG Python 可编程模式生产者
- * 
- * 支持通过 Web 编辑器动态更新 Python 后处理代码。
- * 
- * @param config 配置参数
- * @return 生产者实例
- */
-std::unique_ptr<IMediaProducer> CreateVisionGPythonProducer(const ProducerConfig& config);
+std::unique_ptr<IMediaProducer> CreateVisionGProducer(const ProducerConfig& config);
 
 // ============================================================================
 // 生产者模式枚举
@@ -309,13 +302,7 @@ enum class ProducerMode {
     VisionG             ///< VisionG AI 推理模式
 };
 
-/**
- * @brief VisionG AI 模型枚举
- */
-enum class VisionGModel {
-    YOLOv5,             ///< YOLOv5 物体检测
-    Python,             ///< Python 可编程模式（Web 编辑器）
-};
+
 
 /**
  * @brief 通过模式枚举创建生产者
@@ -330,17 +317,6 @@ inline const char* ProducerModeToString(ProducerMode mode) {
         case ProducerMode::SimpleIPC: return "SimpleIPC";
         case ProducerMode::VisionG:   return "VisionG";
         default:                      return "Unknown";
-    }
-}
-
-/**
- * @brief VisionG 模型枚举转字符串
- */
-inline const char* VisionGModelToString(VisionGModel model) {
-    switch (model) {
-        case VisionGModel::YOLOv5:     return "YOLOv5";
-        case VisionGModel::Python:     return "Python";
-        default:                       return "Unknown";
     }
 }
 

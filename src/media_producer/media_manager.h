@@ -142,16 +142,6 @@ public:
     ProducerMode GetCurrentMode() const { return current_mode_; }
 
     /**
-     * @brief 获取当前 VisionG 模型
-     */
-    VisionGModel GetCurrentVisionGModel() const { return current_visiong_model_; }
-
-    /**
-     * @brief 设置 VisionG 模型（下次创建或切换时生效）
-     */
-    void SetVisionGModel(VisionGModel model) { current_visiong_model_ = model; }
-
-    /**
      * @brief 检查是否已初始化
      */
     bool IsInitialized() const { return initialized_; }
@@ -249,7 +239,6 @@ private:
     
     bool initialized_ = false;
     ProducerMode current_mode_ = ProducerMode::SimpleIPC;
-    VisionGModel current_visiong_model_ = VisionGModel::YOLOv5;
     ProducerConfig config_;
     
     // 当前生产者实例

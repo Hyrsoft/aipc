@@ -13,7 +13,6 @@
 #include "common/logger.h"
 #include "common/media_buffer.h"
 
-#include "yolov5/yolov5_strategy.h"
 #include "python/python_strategy.h"
 
 #include "visiong/core/Camera.h"
@@ -340,14 +339,7 @@ void VisionGProducer::FrameLoop() {
              type_name_, frame_count_.load(), inference_count_.load());
 }
 
-std::unique_ptr<IMediaProducer> CreateVisionGYoloProducer(const ProducerConfig& config) {
-    auto strategy = std::make_unique<YoloV5Strategy>(
-        "../model/yolov5.rknn",
-        "../model/coco_80_labels_list.txt");
-    return std::make_unique<VisionGProducer>(config, std::move(strategy));
-}
-
-std::unique_ptr<IMediaProducer> CreateVisionGPythonProducer(const ProducerConfig& config) {
+std::unique_ptr<IMediaProducer> CreateVisionGProducer(const ProducerConfig& config) {
     auto strategy = std::make_unique<PythonStrategy>(
         "../model/yolov5.rknn",
         "../model/coco_80_labels_list.txt",
