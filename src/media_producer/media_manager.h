@@ -72,8 +72,8 @@ using ModeSwitchCallback = std::function<void(ProducerMode old_mode, ProducerMod
  * // 启动
  * mgr.Start();
  * 
- * // 切换到 YOLOv5 模式（冷切换）
- * mgr.SwitchMode(ProducerMode::YoloV5);
+ * // 切换到 VisionG AI 模式（冷切换）
+ * mgr.SwitchMode(ProducerMode::VisionG);
  * 
  * // 切回纯 IPC 模式
  * mgr.SwitchMode(ProducerMode::SimpleIPC);

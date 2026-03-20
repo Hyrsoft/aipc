@@ -10,7 +10,7 @@
  * HTTP API: 见 http.h
  *
  * 使用新的 Producer-based 架构：
- * - MediaManager: 统一管理视频采集模式（SimpleIPC/YOLOv5/RetinaFace）
+ * - MediaManager: 统一管理视频采集模式（SimpleIPC/VisionG）
  * - StreamManager: 管理流分发（RTSP/WebRTC/WebSocket/File）
  *
  * @author 好软，好温暖
@@ -43,7 +43,7 @@
 static std::atomic<bool> g_running{true};
 
 // 默认启动模式（修改这里可以切换初始模式）
-static media::ProducerMode g_startup_mode = media::ProducerMode::YoloV5;
+static media::ProducerMode g_startup_mode = media::ProducerMode::VisionG;
 
 // 全局 HTTP API 实例
 static std::unique_ptr<HttpApi> g_http_api;
@@ -192,19 +192,18 @@ int main(int argc, char *argv[]) {
             std::string mode_str = argv[++i];
             if (mode_str == "simple_ipc" || mode_str == "ipc") {
                 g_startup_mode = media::ProducerMode::SimpleIPC;
-            } else if (mode_str == "yolov5" || mode_str == "yolo") {
-                g_startup_mode = media::ProducerMode::YoloV5;
-            } else if (mode_str == "retinaface" || mode_str == "face") {
-                g_startup_mode = media::ProducerMode::RetinaFace;
+            } else if (mode_str == "visiong" || mode_str == "yolov5" || mode_str == "yolo") {
+                // 当前 VisionG 模式先实现 YOLOv5
+                g_startup_mode = media::ProducerMode::VisionG;
             } else {
-                printf("Unknown mode: %s (valid: simple_ipc, yolov5, retinaface)\n", mode_str.c_str());
+                printf("Unknown mode: %s (valid: simple_ipc, visiong)\n", mode_str.c_str());
                 return -1;
             }
             LOG_INFO("Startup mode set to: {}", media::ProducerModeToString(g_startup_mode));
         } else if (arg == "--help" || arg == "-h") {
             printf("Usage: %s [options]\n", argv[0]);
             printf("Options:\n");
-            printf("  --mode <mode>     Startup mode: simple_ipc|yolov5|retinaface (default: yolov5)\n");
+            printf("  --mode <mode>     Startup mode: simple_ipc|visiong (default: visiong)\n");
             printf("  --record, -r      Enable file recording\n");
             printf("  --rtsp            Auto-start RTSP server on startup\n");
             printf("  --webrtc          Auto-start WebRTC server on startup\n");

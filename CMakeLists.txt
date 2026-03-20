@@ -55,6 +55,12 @@ set(CPP_HTTPLIB_PATH ${CMAKE_SOURCE_DIR}/thirdparty/cpp-httplib CACHE PATH "cpp-
 set(LIBDATACHANNEL_PATH ${CMAKE_SOURCE_DIR}/thirdparty/libdatachannel CACHE PATH "libdatachannel library path")
 set(ASIO_PATH ${CMAKE_SOURCE_DIR}/thirdparty/asio CACHE PATH "Asio library path")
 
+# VisionG 预编译库路径（将 visiong_cpp.zip 解压到该目录）
+set(VISIONG_PREBUILT_DIR ${CMAKE_BINARY_DIR}/visiong_cpp CACHE PATH "VisionG prebuilt package root")
+set(VISIONG_INCLUDE_DIR ${VISIONG_PREBUILT_DIR}/include CACHE PATH "VisionG include dir")
+set(VISIONG_LIB_DIR ${VISIONG_PREBUILT_DIR}/lib CACHE PATH "VisionG library dir")
+set(VISIONG_EXTRA_LIB_DIR ${CMAKE_SOURCE_DIR}/../media/out/lib CACHE PATH "Extra vendor libs for VisionG (ivs/rve)")
+
 # ========================================
 # OpenSSL 配置（用于交叉编译）
 # ========================================
@@ -90,24 +96,25 @@ target_compile_definitions(asio INTERFACE
 # Asio 需要 pthread
 target_link_libraries(asio INTERFACE pthread)
 
-# VisionG (计算机视觉运行时 - Camera/NPU/ImageBuffer/VencManager)
-set(VISIONG_PATH ${CMAKE_SOURCE_DIR}/thirdparty/visiong CACHE PATH "VisionG library path")
-# 关闭不需要的组件
-set(VISIONG_BUILD_PYTHON_MODULE OFF CACHE BOOL "Disable VisionG Python module" FORCE)
-set(VISIONG_BUILD_CPP_LIBS ON CACHE BOOL "Build VisionG C++ libraries" FORCE)
-set(VISIONG_ENABLE_NPU ON CACHE BOOL "Enable VisionG NPU" FORCE)
-set(VISIONG_ENABLE_IVE OFF CACHE BOOL "Disable VisionG IVE" FORCE)
-set(VISIONG_ENABLE_GUI ON CACHE BOOL "Enable VisionG GUI (Required for OSD text drawing)" FORCE)
-set(VISIONG_ENABLE_LTO OFF CACHE BOOL "Disable VisionG LTO (managed by top-level project)" FORCE)
-set(VISIONG_STRIP_SYMBOLS OFF CACHE BOOL "Disable VisionG symbol stripping" FORCE)
-# 映射依赖路径（复用 LUCKFOX_MPI 已有的 SDK 头文件和库）
-set(VISIONG_VENDOR_INCLUDE_DIR "${LUCKFOX_MPI_INCLUDE_DIR}" CACHE PATH "VisionG vendor include" FORCE)
-set(VISIONG_RGA_INCLUDE_DIR "${LUCKFOX_MPI_INCLUDE_DIR}/librga" CACHE PATH "VisionG RGA include" FORCE)
-set(VISIONG_RKNN_INCLUDE_DIR "${LUCKFOX_MPI_INCLUDE_DIR}/rknn" CACHE PATH "VisionG RKNN include" FORCE)
-set(VISIONG_VENDOR_LIB_DIR "${LUCKFOX_MPI_LIB_DIR}" CACHE PATH "VisionG vendor lib" FORCE)
-# 使用 VisionG 自带的 OpenCV（包含 imgcodecs），而非 Luckfox SDK 的精简版
-set(VISIONG_OPENCV_DIR "${VISIONG_PATH}/3rdparty/opencv/lib/cmake/opencv4" CACHE PATH "VisionG OpenCV config" FORCE)
-add_subdirectory(${VISIONG_PATH} ${CMAKE_BINARY_DIR}/visiong)
+# VisionG (预编译库导入)
+if(NOT EXISTS "${VISIONG_INCLUDE_DIR}/visiong/core/Camera.h")
+    message(FATAL_ERROR "VisionG headers not found at ${VISIONG_INCLUDE_DIR}. Please extract visiong_cpp.zip into ${VISIONG_PREBUILT_DIR}")
+endif()
+
+set(VISIONG_LIBRARY "")
+if(EXISTS "${VISIONG_LIB_DIR}/libvisiong.so")
+    set(VISIONG_LIBRARY "${VISIONG_LIB_DIR}/libvisiong.so")
+elseif(EXISTS "${VISIONG_LIB_DIR}/libvisiong.a")
+    set(VISIONG_LIBRARY "${VISIONG_LIB_DIR}/libvisiong.a")
+else()
+    message(FATAL_ERROR "VisionG library not found in ${VISIONG_LIB_DIR} (expected libvisiong.so or libvisiong.a)")
+endif()
+
+add_library(visiong_runtime UNKNOWN IMPORTED GLOBAL)
+set_target_properties(visiong_runtime PROPERTIES
+    IMPORTED_LOCATION "${VISIONG_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${VISIONG_INCLUDE_DIR}"
+)
 
 # libdatachannel (WebRTC 支持)
 # 配置选项
@@ -159,6 +166,13 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/model/
     PATTERN "*.rknn"
     PATTERN "*.txt"
 )
+
+# 安装 VisionG 动态库（便于部署）
+if(EXISTS "${VISIONG_LIB_DIR}/libvisiong.so")
+    install(FILES "${VISIONG_LIB_DIR}/libvisiong.so"
+        DESTINATION ${AIPC_INSTALL_LIB_DIR}
+    )
+endif()
 
 # 安装 Web 资源文件 (from www/dist)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/www/dist/

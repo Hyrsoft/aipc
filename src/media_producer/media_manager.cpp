@@ -9,10 +9,6 @@
 #define LOG_TAG "MediaMgr"
 
 #include "media_manager.h"
-#include "simple_ipc/simple_ipc_producer.h"
-#include "yolov5/yolo_producer.h"
-#include "retainface/retinaface_producer.h"
-#include "visiong/visiong_producer.h"
 #include "common/logger.h"
 
 #include <chrono>
@@ -329,35 +325,19 @@ const char* MediaManager::GetCurrentTypeName() const {
 // ============================================================================
 
 std::unique_ptr<IMediaProducer> MediaManager::CreateProducerInstance(ProducerMode mode) {
-    // AI 模式（YoloV5/RetinaFace）推荐使用 480p 以降低 DDR 带宽压力
+    // AI 模式推荐使用 480p 以降低 DDR 带宽压力
     ProducerConfig mode_config = config_;
     
     switch (mode) {
         case ProducerMode::SimpleIPC:
             // SimpleIPC 使用用户配置的分辨率（默认 1080p）
             return CreateSimpleIPCProducer(mode_config);
-            
-        case ProducerMode::YoloV5:
-        case ProducerMode::RetinaFace:
-            // AI 模式强制使用 480p，避免 DDR 带宽瓶颈
-            mode_config.resolution = Resolution::R_480P;
-            LOG_INFO("AI mode: using 480p resolution for DDR bandwidth optimization");
-            if (mode == ProducerMode::YoloV5) {
-                return CreateYoloProducer(mode_config);
-            } else {
-                return CreateRetinaFaceProducer(mode_config);
-            }
 
-        case ProducerMode::VisionG_YoloV5:
-        case ProducerMode::VisionG_RetinaFace:
-            // VisionG AI 模式强制使用 480p
+        case ProducerMode::VisionG:
+            // VisionG AI 模式（当前实现：YOLOv5）
             mode_config.resolution = Resolution::R_480P;
-            LOG_INFO("VisionG AI mode: using 480p resolution for DDR bandwidth optimization");
-            if (mode == ProducerMode::VisionG_YoloV5) {
-                return CreateVisionGYoloProducer(mode_config);
-            } else {
-                return CreateVisionGRetinaFaceProducer(mode_config);
-            }
+            LOG_INFO("AI mode: using VisionG producer at 480p for DDR bandwidth optimization");
+            return CreateVisionGYoloProducer(mode_config);
             
         default:
             LOG_ERROR("Unknown producer mode: {}", static_cast<int>(mode));
@@ -373,14 +353,8 @@ std::unique_ptr<IMediaProducer> CreateProducer(ProducerMode mode, const Producer
     switch (mode) {
         case ProducerMode::SimpleIPC:
             return CreateSimpleIPCProducer(config);
-        case ProducerMode::YoloV5:
-            return CreateYoloProducer(config);
-        case ProducerMode::RetinaFace:
-            return CreateRetinaFaceProducer(config);
-        case ProducerMode::VisionG_YoloV5:
+        case ProducerMode::VisionG:
             return CreateVisionGYoloProducer(config);
-        case ProducerMode::VisionG_RetinaFace:
-            return CreateVisionGRetinaFaceProducer(config);
         default:
             return nullptr;
     }

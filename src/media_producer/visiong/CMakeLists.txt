@@ -22,7 +22,7 @@ target_include_directories(visiong_producer_lib
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/media_producer   # for i_media_producer.h
-        ${CMAKE_SOURCE_DIR}/src/media_producer/common  # for ai_types.h
+        ${VISIONG_INCLUDE_DIR}
         ${LUCKFOX_MPI_INCLUDE_DIR}
         ${LUCKFOX_MPI_INCLUDE_DIR}/librga
         ${LUCKFOX_MPI_INCLUDE_DIR}/rkaiq
@@ -37,8 +37,7 @@ target_include_directories(visiong_producer_lib
 # 链接依赖库
 target_link_libraries(visiong_producer_lib
     PUBLIC
-        media_common       # AI类型、图像处理、OSD
-        visiong_runtime_static  # VisionG 静态库
+        visiong_runtime  # VisionG 预编译库
     PRIVATE
         common
         spdlog::spdlog

@@ -13,6 +13,3 @@
 [submodule "thirdparty/asio"]
 	path = thirdparty/asio
 	url = https://github.com/chriskohlhoff/asio.git
-[submodule "thirdparty/visiong"]
-	path = thirdparty/visiong
-	url = https://github.com/yiex/visiong.git

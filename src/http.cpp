@@ -441,7 +441,7 @@ void HttpApi::SetupRoutes() {
         json data;
         data["mode"] = media::ProducerModeToString(mgr.GetCurrentMode());
         data["running"] = mgr.IsRunning();
-        data["available_modes"] = json::array({"simple_ipc", "yolov5", "retinaface"});
+        data["available_modes"] = json::array({"simple_ipc", "visiong"});
         
         res.set_content(json_response(true, "ok", data), "application/json");
     });
@@ -455,10 +455,8 @@ void HttpApi::SetupRoutes() {
             
             // 解析模式字符串
             media::ProducerMode target_mode;
-            if (mode_str == "yolov5" || mode_str == "yolo") {
-                target_mode = media::ProducerMode::YoloV5;
-            } else if (mode_str == "retinaface" || mode_str == "face") {
-                target_mode = media::ProducerMode::RetinaFace;
+            if (mode_str == "visiong" || mode_str == "yolov5" || mode_str == "yolo") {
+                target_mode = media::ProducerMode::VisionG;
             } else {
                 target_mode = media::ProducerMode::SimpleIPC;
             }
@@ -496,15 +494,12 @@ void HttpApi::SetupRoutes() {
         
         json data;
         // has_model: 是否加载了 AI 模型
-        bool has_model = (mode == media::ProducerMode::YoloV5 || 
-                          mode == media::ProducerMode::RetinaFace);
+        bool has_model = (mode == media::ProducerMode::VisionG);
         data["has_model"] = has_model;
         
         // model_type: 模型类型名称
-        if (mode == media::ProducerMode::YoloV5) {
+        if (mode == media::ProducerMode::VisionG) {
             data["model_type"] = "yolov5";
-        } else if (mode == media::ProducerMode::RetinaFace) {
-            data["model_type"] = "retinaface";
         } else {
             data["model_type"] = "none";
         }
@@ -528,10 +523,8 @@ void HttpApi::SetupRoutes() {
             
             // 映射模型名称到生产者模式
             media::ProducerMode target_mode;
-            if (model_str == "yolov5" || model_str == "yolo") {
-                target_mode = media::ProducerMode::YoloV5;
-            } else if (model_str == "retinaface" || model_str == "face") {
-                target_mode = media::ProducerMode::RetinaFace;
+            if (model_str == "yolov5" || model_str == "yolo" || model_str == "visiong") {
+                target_mode = media::ProducerMode::VisionG;
             } else {
                 target_mode = media::ProducerMode::SimpleIPC;
             }
