@@ -36,6 +36,7 @@
 #include "media_distribution/webrtc/webrtc_service.h"
 #include "media_distribution/wspreview/ws_preview.h"
 #include "media_producer/media_manager.h"
+#include "media_producer/visiong/visiong_producer.h"
 
 // ========================================================================
 // 全局配置
@@ -43,7 +44,7 @@
 static std::atomic<bool> g_running{true};
 
 // 默认启动模式（修改这里可以切换初始模式）
-static media::ProducerMode g_startup_mode = media::ProducerMode::VisionG;
+static media::ProducerMode g_startup_mode = media::ProducerMode::SimpleIPC;
 
 // 全局 HTTP API 实例
 static std::unique_ptr<HttpApi> g_http_api;
@@ -113,6 +114,9 @@ int main(int argc, char *argv[]) {
     LogManager::Init();
 
     LOG_INFO("=== AIPC Application Starting ===");
+
+    // 在主线程早期预热 Python/visiong，避免首次切换 VisionG 时在工作线程中首次导入。
+    media::WarmupVisionGPythonRuntime();
 
     // 注册信号处理
     signal(SIGINT, signal_handler);

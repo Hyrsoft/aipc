@@ -325,7 +325,6 @@ const char* MediaManager::GetCurrentTypeName() const {
 // ============================================================================
 
 std::unique_ptr<IMediaProducer> MediaManager::CreateProducerInstance(ProducerMode mode) {
-    // AI 模式推荐使用 480p 以降低 DDR 带宽压力
     ProducerConfig mode_config = config_;
     
     switch (mode) {
@@ -334,8 +333,6 @@ std::unique_ptr<IMediaProducer> MediaManager::CreateProducerInstance(ProducerMod
             return CreateSimpleIPCProducer(mode_config);
 
         case ProducerMode::VisionG:
-            mode_config.resolution = Resolution::R_480P;
-            LOG_INFO("AI mode: using VisionG at 480p");
             return CreateVisionGProducer(mode_config);
             
         default:

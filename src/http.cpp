@@ -17,7 +17,6 @@
 #include "media_distribution/webrtc/webrtc_service.h"
 #include "media_producer/media_manager.h"
 #include "media_producer/visiong/visiong_producer.h"
-#include "media_producer/visiong/python/python_strategy.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
@@ -31,23 +30,88 @@ using json = nlohmann::json;
 // 模型文件目录（上传和管理）
 // ============================================================================
 static const std::string MODEL_DIR = "../model";
+static const std::string PYTHON_PROJECT_DIR = "../python_projects";
 static const size_t MAX_UPLOAD_SIZE = 50 * 1024 * 1024;  // 50MB
+
+static const char* DEFAULT_YOLOV5_PROJECT_CODE = R"PY(import visiong
+
+MODEL_PATH = "../model/yolov5.rknn"
+LABEL_PATH = "../model/coco_80_labels_list.txt"
+
+CAM_WIDTH = 640
+CAM_HEIGHT = 360
+CAM_FORMAT = "rgb"
+
+BOX_THRESHOLD = 0.25
+NMS_THRESHOLD = 0.45
+
+_cam = None
+_detector = None
+
+
+def init():
+    global _cam, _detector
+
+    try:
+        visiong.NpuClock().set_rate_mhz(
+            420,
+            update_cru_clk500m_src=True,
+            unbind_rebind_npu=True,
+        )
+    except Exception as e:
+        print("[YOLOV5][WARN] NPU clock setup skipped:", e)
+
+    _cam = visiong.Camera(CAM_WIDTH, CAM_HEIGHT, format=CAM_FORMAT)
+    _cam.skip(8)
+    _detector = visiong.NPU("yolov5", MODEL_PATH, LABEL_PATH, box=BOX_THRESHOLD, nms=NMS_THRESHOLD)
+
+
+def process():
+    if _cam is None or _detector is None:
+        return None
+
+    frame = _cam.snapshot()
+    if not frame.is_valid():
+        return None
+
+    out = frame.to_format("bgr888")
+    for result in _detector.infer(frame, model_format=CAM_FORMAT):
+        x, y, w, h = result.box
+        out.draw_rectangle(x, y, w, h, color=(0, 255, 0), thickness=2)
+        out.draw_string(
+            x,
+            max(0, y - 20),
+            f"{result.label} {result.score:.2f}",
+            color=(0, 255, 0),
+            scale=0.9,
+            thickness=2,
+        )
+
+    return out
+
+
+def cleanup():
+    global _cam, _detector
+
+    _detector = None
+    if _cam is not None:
+        _cam.release()
+        _cam = None
+)PY";
 
 // ============================================================================
 // 辅助函数
 // ============================================================================
 
 /**
- * @brief 获取当前 VisionGProducer 下的 PythonStrategy（如果处于 VisionG 模式）
+ * @brief 获取当前 VisionGProducer（如果处于 VisionG 模式）
  */
-static media::PythonStrategy* GetPythonStrategy() {
+static media::VisionGProducer* GetVisionGProducer() {
     auto& mgr = media::MediaManager::Instance();
     if (mgr.GetCurrentMode() != media::ProducerMode::VisionG) {
         return nullptr;
     }
-    auto* producer = dynamic_cast<media::VisionGProducer*>(mgr.GetProducer());
-    if (!producer) return nullptr;
-    return dynamic_cast<media::PythonStrategy*>(producer->GetStrategy());
+    return dynamic_cast<media::VisionGProducer*>(mgr.GetProducer());
 }
 
 /**
@@ -64,6 +128,25 @@ static std::string SanitizeFilename(const std::string& name) {
         return "";
     }
     return result;
+}
+
+static std::string EnsurePyExt(const std::string& name) {
+    if (name.size() >= 3 && name.substr(name.size() - 3) == ".py") {
+        return name;
+    }
+    return name + ".py";
+}
+
+static bool EnsureDirectory(const std::string& path) {
+    namespace fs = std::filesystem;
+    try {
+        if (!fs::exists(path)) {
+            fs::create_directories(path);
+        }
+        return fs::is_directory(path);
+    } catch (...) {
+        return false;
+    }
 }
 
 /**
@@ -436,7 +519,7 @@ void HttpApi::SetupRoutes() {
         res.set_content(json_response(true, "ok", data), "application/json");
     });
 
-    server_->Post("/api/record/start", [this](const HttpRequest& /*req*/, HttpResponse& res) {
+    server_->Post("/api/record/start", [](const HttpRequest& /*req*/, HttpResponse& res) {
         auto* mgr = GetStreamManager();
         if (!mgr || !mgr->GetFileService()) {
             res.set_content(json_response(false, "Recording not available"), "application/json");
@@ -498,7 +581,7 @@ void HttpApi::SetupRoutes() {
 
             // 解析模式字符串
             media::ProducerMode target_mode;
-            if (mode_str == "visiong" || mode_str == "python" || mode_str == "yolov5" || mode_str == "yolo") {
+            if (mode_str == "visiong") {
                 target_mode = media::ProducerMode::VisionG;
             } else {
                 target_mode = media::ProducerMode::SimpleIPC;
@@ -540,13 +623,7 @@ void HttpApi::SetupRoutes() {
         
         // model_type: 当前模型信息
         if (mode == media::ProducerMode::VisionG) {
-            auto* strategy = GetPythonStrategy();
-            if (strategy) {
-                auto info = strategy->GetModelInfo();
-                data["model_type"] = info.model_type;
-            } else {
-                data["model_type"] = "visiong";
-            }
+            data["model_type"] = "visiong_python";
         } else {
             data["model_type"] = "none";
         }
@@ -572,7 +649,7 @@ void HttpApi::SetupRoutes() {
 
             // 映射模型名称到生产者模式
             media::ProducerMode target_mode;
-            if (model_str == "visiong" || model_str == "python" || model_str == "yolov5" || model_str == "yolo") {
+            if (model_str == "visiong") {
                 target_mode = media::ProducerMode::VisionG;
             } else {
                 target_mode = media::ProducerMode::SimpleIPC;
@@ -641,9 +718,8 @@ void HttpApi::SetupRoutes() {
             data["available_resolutions"] = json::array({"1080p", "720p", "480p"});
             data["note"] = "";
         } else {
-            // AI 模式下只支持 480p
-            data["available_resolutions"] = json::array({"480p"});
-            data["note"] = "AI inference mode only supports 480p";
+            data["available_resolutions"] = json::array();
+            data["note"] = "Resolution is controlled by VisionG Python project";
         }
         
         res.set_content(json_response(true, "ok", data), "application/json");
@@ -668,10 +744,9 @@ void HttpApi::SetupRoutes() {
             
             auto& mgr = media::MediaManager::Instance();
             
-            // AI 模式下只支持 480p
-            if (mgr.GetCurrentMode() != media::ProducerMode::SimpleIPC && 
-                target_res != media::Resolution::R_480P) {
-                res.set_content(json_response(false, "AI mode only supports 480p"), "application/json");
+            // VisionG 模式下分辨率由 Python 工程决定
+            if (mgr.GetCurrentMode() != media::ProducerMode::SimpleIPC) {
+                res.set_content(json_response(false, "Resolution is managed by VisionG Python code"), "application/json");
                 return;
             }
             
@@ -815,66 +890,243 @@ void HttpApi::SetupRoutes() {
     // 注册模型列表 API
     // ========================================================================
 
-    // 获取 C++ 注册的可用模型类型列表
+    // 获取 C++ 注册的可用模型类型列表（Python 全权模式下不再维护）
     server_->Get("/api/models/registered", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        const auto& models = media::PythonStrategy::GetRegisteredModels();
         json list = json::array();
-        for (const auto& m : models) {
-            json item;
-            item["name"] = m.name;
-            item["type"] = m.type_str;
-            item["default_model"] = m.default_model;
-            item["default_labels"] = m.default_labels;
-            item["description"] = m.description;
-            list.push_back(item);
-        }
         res.set_content(json_response(true, "ok", list), "application/json");
     });
 
     // ========================================================================
-    // Python 编辑器 API
+    // Python 工程管理 API
     // ========================================================================
 
-    // 获取当前 Python 代码
-    server_->Get("/api/python/code", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* strategy = GetPythonStrategy();
-        if (!strategy) {
-            res.set_content(json_response(false, "Not in VisionG mode"), "application/json");
+    // 获取工程列表
+    server_->Get("/api/python/projects", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        namespace fs = std::filesystem;
+        json projects = json::array();
+
+        EnsureDirectory(PYTHON_PROJECT_DIR);
+
+        // 首次启动自动初始化默认工程，避免编辑器空列表
+        try {
+            bool has_user_project = false;
+            if (fs::exists(PYTHON_PROJECT_DIR)) {
+                for (const auto& entry : fs::directory_iterator(PYTHON_PROJECT_DIR)) {
+                    if (entry.is_regular_file() && entry.path().extension() == ".py") {
+                        has_user_project = true;
+                        break;
+                    }
+                }
+            }
+            if (!has_user_project) {
+                std::string default_path = PYTHON_PROJECT_DIR + "/yolov5_detection.py";
+                if (!fs::exists(default_path)) {
+                    std::ofstream ofs(default_path, std::ios::binary);
+                    ofs << DEFAULT_YOLOV5_PROJECT_CODE;
+                    ofs.close();
+                }
+            }
+        } catch (...) {
+        }
+
+        try {
+            if (fs::exists(PYTHON_PROJECT_DIR)) {
+                for (const auto& entry : fs::directory_iterator(PYTHON_PROJECT_DIR)) {
+                    if (!entry.is_regular_file() || entry.path().extension() != ".py") {
+                        continue;
+                    }
+                    json item;
+                    item["name"] = entry.path().stem().string();
+                    item["filename"] = entry.path().filename().string();
+                    projects.push_back(item);
+                }
+            }
+        } catch (const std::exception& e) {
+            res.set_content(json_response(false, std::string("Failed to list projects: ") + e.what()), "application/json");
             return;
         }
 
+        std::sort(projects.begin(), projects.end(), [](const json& a, const json& b) {
+            return a["name"].get<std::string>() < b["name"].get<std::string>();
+        });
+
+        res.set_content(json_response(true, "ok", projects), "application/json");
+    });
+
+    // 新建工程
+    server_->Post("/api/python/projects/create", [](const HttpRequest& req, HttpResponse& res) {
+        try {
+            json body = json::parse(req.body);
+            std::string name = body.value("name", "");
+
+            name = SanitizeFilename(name);
+            if (name.empty()) {
+                res.set_content(json_response(false, "Invalid project name"), "application/json");
+                return;
+            }
+
+            if (!EnsureDirectory(PYTHON_PROJECT_DIR)) {
+                res.set_content(json_response(false, "Failed to create project directory"), "application/json");
+                return;
+            }
+
+            std::string filename = EnsurePyExt(name);
+            std::string full_path = PYTHON_PROJECT_DIR + "/" + filename;
+            if (std::filesystem::exists(full_path)) {
+                res.set_content(json_response(false, "Project already exists"), "application/json");
+                return;
+            }
+
+            std::string content = "def process():\n    return None\n";
+
+            std::ofstream ofs(full_path, std::ios::binary);
+            if (!ofs) {
+                res.set_content(json_response(false, "Failed to create project file"), "application/json");
+                return;
+            }
+            ofs << content;
+            ofs.close();
+
+            json data;
+            data["name"] = std::filesystem::path(filename).stem().string();
+            data["filename"] = filename;
+            res.set_content(json_response(true, "Project created", data), "application/json");
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
+    });
+
+    // 读取工程内容
+    server_->Get(R"(/api/python/projects/(.+))", [](const HttpRequest& req, HttpResponse& res) {
+        std::string name = EnsurePyExt(SanitizeFilename(req.matches[1].str()));
+        if (name.empty()) {
+            res.set_content(json_response(false, "Invalid project name"), "application/json");
+            return;
+        }
+
+        std::string path = PYTHON_PROJECT_DIR + "/" + name;
+        if (!std::filesystem::exists(path)) {
+            res.set_content(json_response(false, "Project not found"), "application/json");
+            return;
+        }
+
+        std::ifstream ifs(path);
+        std::string code((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+
         json data;
-        data["code"] = strategy->GetCurrentCode();
+        data["name"] = std::filesystem::path(name).stem().string();
+        data["filename"] = name;
+        data["code"] = code;
         res.set_content(json_response(true, "ok", data), "application/json");
     });
 
-    // 提交 / 热更新 Python 代码
-    server_->Post("/api/python/code", [](const HttpRequest& req, HttpResponse& res) {
-        auto* strategy = GetPythonStrategy();
-        if (!strategy) {
-            res.set_content(json_response(false, "Not in VisionG mode"), "application/json");
+    // 保存用户工程内容
+    server_->Post(R"(/api/python/projects/(.+))", [](const HttpRequest& req, HttpResponse& res) {
+        std::string name = EnsurePyExt(SanitizeFilename(req.matches[1].str()));
+        if (name.empty()) {
+            res.set_content(json_response(false, "Invalid project name"), "application/json");
             return;
         }
 
         try {
             json body = json::parse(req.body);
             std::string code = body.value("code", "");
-            if (code.empty()) {
-                res.set_content(json_response(false, "Empty code"), "application/json");
+            if (!EnsureDirectory(PYTHON_PROJECT_DIR)) {
+                res.set_content(json_response(false, "Project directory unavailable"), "application/json");
                 return;
             }
 
-            std::string err = strategy->UpdateCode(code);
-            if (err.empty()) {
-                res.set_content(json_response(true, "Code updated"), "application/json");
-            } else {
-                json data;
-                data["error"] = err;
-                res.set_content(json_response(false, "Code error", data), "application/json");
+            std::string path = PYTHON_PROJECT_DIR + "/" + name;
+            std::ofstream ofs(path, std::ios::binary);
+            if (!ofs) {
+                res.set_content(json_response(false, "Failed to save project"), "application/json");
+                return;
             }
+            ofs << code;
+            ofs.close();
+
+            res.set_content(json_response(true, "Project saved"), "application/json");
         } catch (const json::exception& e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
         }
+    });
+
+    // 删除用户工程
+    server_->Delete(R"(/api/python/projects/(.+))", [](const HttpRequest& req, HttpResponse& res) {
+        std::string name = EnsurePyExt(SanitizeFilename(req.matches[1].str()));
+        if (name.empty()) {
+            res.set_content(json_response(false, "Invalid project name"), "application/json");
+            return;
+        }
+
+        std::string path = PYTHON_PROJECT_DIR + "/" + name;
+        if (!std::filesystem::exists(path)) {
+            res.set_content(json_response(false, "Project not found"), "application/json");
+            return;
+        }
+
+        std::filesystem::remove(path);
+        res.set_content(json_response(true, "Project deleted"), "application/json");
+    });
+
+    // ========================================================================
+    // Python 编辑器 API
+    // ========================================================================
+
+    // 部署指定工程
+    server_->Post("/api/python/deploy", [](const HttpRequest& req, HttpResponse& res) {
+        auto* producer = GetVisionGProducer();
+        if (!producer) {
+            res.set_content(json_response(false, "Not in VisionG mode"), "application/json");
+            return;
+        }
+
+        try {
+            json body = json::parse(req.body);
+            std::string name = EnsurePyExt(SanitizeFilename(body.value("project", "")));
+            if (name.empty()) {
+                res.set_content(json_response(false, "project is required"), "application/json");
+                return;
+            }
+
+            std::string path = PYTHON_PROJECT_DIR + "/" + name;
+            if (!std::filesystem::exists(path)) {
+                res.set_content(json_response(false, "Project not found"), "application/json");
+                return;
+            }
+
+            std::ifstream ifs(path);
+            std::string code((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+            if (code.empty()) {
+                res.set_content(json_response(false, "Project code is empty"), "application/json");
+                return;
+            }
+
+            std::string err = producer->UpdateCode(code);
+            if (!err.empty()) {
+                json data;
+                data["error"] = err;
+                res.set_content(json_response(false, "Code error", data), "application/json");
+                return;
+            }
+
+            json data;
+            data["project"] = std::filesystem::path(name).stem().string();
+            res.set_content(json_response(true, "Project deployed", data), "application/json");
+        } catch (const json::exception& e) {
+            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
+        }
+    });
+
+    // 获取当前 Python 代码
+    server_->Get("/api/python/code", [](const HttpRequest& /*req*/, HttpResponse& res) {
+        res.set_content(json_response(false, "Deprecated: use /api/python/projects/* and /api/python/deploy"), "application/json");
+    });
+
+    // 提交 / 热更新 Python 代码
+    server_->Post("/api/python/code", [](const HttpRequest& req, HttpResponse& res) {
+        (void)req;
+        res.set_content(json_response(false, "Deprecated: use /api/python/projects/* and /api/python/deploy"), "application/json");
     });
 
     // Python 模式状态
@@ -886,114 +1138,22 @@ void HttpApi::SetupRoutes() {
         data["active"] = is_visiong;
 
         if (is_visiong) {
-            auto* strategy = GetPythonStrategy();
-            if (strategy) {
-                data["last_error"] = strategy->GetLastError();
-                auto info = strategy->GetModelInfo();
-                data["model"]["path"] = info.model_path;
-                data["model"]["label_path"] = info.label_path;
-                data["model"]["type"] = info.model_type;
+            auto* producer = GetVisionGProducer();
+            if (producer) {
+                data["last_error"] = producer->GetLastError();
+                data["model"]["path"] = "managed_by_python";
+                data["model"]["label_path"] = "managed_by_python";
+                data["model"]["type"] = "managed_by_python";
             }
         }
 
         res.set_content(json_response(true, "ok", data), "application/json");
     });
 
-    // 切换 NPU 模型（Python 模式下）
+    // 切换 NPU 模型（Python 全权模式下不再支持）
     server_->Post("/api/python/model", [](const HttpRequest& req, HttpResponse& res) {
-        try {
-            json body = json::parse(req.body);
-            std::string model_path = body.value("model_path", "");
-            std::string label_path = body.value("label_path", "");
-            std::string model_type = body.value("model_type", "YOLOV5");
-
-            if (model_path.empty()) {
-                res.set_content(json_response(false, "model_path is required"), "application/json");
-                return;
-            }
-
-            // 净化路径：仅允许纯文件名
-            model_path = SanitizeFilename(model_path);
-            label_path = SanitizeFilename(label_path);
-            if (model_path.empty()) {
-                res.set_content(json_response(false, "Invalid model_path"), "application/json");
-                return;
-            }
-
-            // 检查文件存在
-            std::string full_model = MODEL_DIR + "/" + model_path;
-            if (!std::filesystem::exists(full_model)) {
-                res.set_content(json_response(false, "Model file not found: " + model_path), "application/json");
-                return;
-            }
-
-            auto* strategy = GetPythonStrategy();
-            if (!strategy) {
-                res.set_content(json_response(false, "Not in VisionG mode"), "application/json");
-                return;
-            }
-
-            auto* producer = dynamic_cast<media::VisionGProducer*>(
-                media::MediaManager::Instance().GetProducer());
-            if (!producer) {
-                res.set_content(json_response(false, "Producer not available"), "application/json");
-                return;
-            }
-
-            // 暂停帧循环 → 重建 NPU → 恢复帧循环
-            producer->PauseFrameLoop();
-
-            std::string full_label = label_path.empty() ? "" : (MODEL_DIR + "/" + label_path);
-            auto new_npu = strategy->UpdateModel(full_model, full_label, model_type);
-            if (!new_npu) {
-                producer->ResumeFrameLoop();
-                res.set_content(json_response(false, "Failed to load model"), "application/json");
-                return;
-            }
-
-            producer->ReplaceNPU(std::move(new_npu));
-            producer->ResumeFrameLoop();
-
-            json data;
-            data["model_path"] = model_path;
-            data["model_type"] = model_type;
-            LOG_INFO("Python mode model switched: {} ({})", model_path, model_type);
-            res.set_content(json_response(true, "Model switched", data), "application/json");
-
-        } catch (const json::exception& e) {
-            res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
-        }
-    });
-
-    // 获取 Python 模板列表
-    server_->Get("/api/python/templates", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        namespace fs = std::filesystem;
-        json templates = json::array();
-        std::string template_dir = "../python_templates";
-
-        try {
-            if (fs::exists(template_dir)) {
-                for (const auto& entry : fs::directory_iterator(template_dir)) {
-                    if (!entry.is_regular_file()) continue;
-                    auto ext = entry.path().extension().string();
-                    if (ext != ".py") continue;
-
-                    std::ifstream ifs(entry.path());
-                    std::string content((std::istreambuf_iterator<char>(ifs)),
-                                        std::istreambuf_iterator<char>());
-
-                    json tmpl;
-                    tmpl["name"] = entry.path().stem().string();
-                    tmpl["filename"] = entry.path().filename().string();
-                    tmpl["code"] = content;
-                    templates.push_back(tmpl);
-                }
-            }
-        } catch (const fs::filesystem_error& e) {
-            LOG_WARN("Failed to list templates: {}", e.what());
-        }
-
-        res.set_content(json_response(true, "ok", templates), "application/json");
+        (void)req;
+        res.set_content(json_response(false, "Deprecated: model selection is fully managed by Python project code"), "application/json");
     });
 
     LOG_INFO("HTTP API 路由配置完成");

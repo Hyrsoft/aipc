@@ -1,33 +1,29 @@
-/**
- * @file visiong_producer.cpp
- * @brief VisionG 库驱动的 AI 推理模式生产者实现
- *
- * 使用 VisionG Camera 取帧 + NPU 推理 + ImageBuffer OSD + VencManager 编码。
- * 输出侧通过适配层转换为 EncodedStreamPtr，保持现有分发接口兼容。
- */
-
 #define LOG_TAG "VisionGProd"
 
 #include "visiong_producer.h"
+
 #include "common/asio_context.h"
 #include "common/logger.h"
 #include "common/media_buffer.h"
 
-#include "python/python_strategy.h"
-
-#include "visiong/core/Camera.h"
 #include "visiong/core/ImageBuffer.h"
 #include "visiong/modules/VencManager.h"
-#include "visiong/npu/NPU.h"
 
 #include "rk_mpi_mb.h"
 #include "rk_mpi_sys.h"
 
 #include <algorithm>
+#include <chrono>
+#include <mutex>
 #include <cstring>
 #include <ctime>
+#include <optional>
 #include <utility>
 #include <vector>
+
+#include <pybind11/embed.h>
+
+namespace py = pybind11;
 
 namespace media {
 
@@ -46,7 +42,9 @@ public:
         LOG_INFO("Registered stream consumer: {}", name);
     }
 
-    void ClearConsumers() { consumers_.clear(); }
+    void ClearConsumers() {
+        consumers_.clear();
+    }
 
     void DispatchFrame(const EncodedStreamPtr& stream) {
         for (auto& c : consumers_) {
@@ -118,11 +116,7 @@ static EncodedStreamPtr ConvertPacketToEncodedStream(const VencEncodedPacket& pa
     pack->pMbBlk = mb_blk;
     pack->u32Len = static_cast<RK_U32>(packet.data.size());
     pack->u64PTS = GetNowUs();
-    if (packet.is_keyframe) {
-        pack->DataType.enH264EType = H264E_NALU_IDRSLICE;
-    } else {
-        pack->DataType.enH264EType = H264E_NALU_PSLICE;
-    }
+    pack->DataType.enH264EType = packet.is_keyframe ? H264E_NALU_IDRSLICE : H264E_NALU_PSLICE;
 
     return EncodedStreamPtr(stream, [](VENC_STREAM_S* p) {
         if (!p) {
@@ -137,63 +131,215 @@ static EncodedStreamPtr ConvertPacketToEncodedStream(const VencEncodedPacket& pa
     });
 }
 
+static const char* kDefaultVisionGScript = R"PY(
+def init():
+    return None
+
+
+def process():
+    return None
+
+
+def cleanup():
+    return None
+)PY";
+
+void EnsureEmbeddedPythonReady() {
+    static std::once_flag init_once;
+    std::call_once(init_once, []() {
+        LOG_INFO("[PythonInit] initialize_interpreter begin");
+        py::initialize_interpreter(false, 0, nullptr, false);
+        LOG_INFO("[PythonInit] initialize_interpreter done");
+        py::module sys = py::module::import("sys");
+        auto path = sys.attr("path").cast<py::list>();
+        path.append("../python");
+        LOG_INFO("[PythonInit] sys.path updated, Embedded Python interpreter initialized");
+    });
+}
+
+class PythonRuntime {
+public:
+    PythonRuntime() {
+        LOG_INFO("[PythonInit] PythonRuntime ctor begin");
+        EnsureEmbeddedPythonReady();
+        LOG_INFO("[PythonInit] PythonRuntime ctor after EnsureEmbeddedPythonReady");
+        py::gil_scoped_acquire gil;
+        LOG_INFO("[PythonInit] PythonRuntime ctor acquired GIL");
+        globals_ = py::dict();
+        process_fn_ = py::none();
+        init_fn_ = py::none();
+        cleanup_fn_ = py::none();
+        LOG_INFO("[PythonInit] PythonRuntime ctor finished");
+    }
+
+    ~PythonRuntime() {
+        Shutdown();
+    }
+
+    std::string LoadCode(const std::string& code) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        py::gil_scoped_acquire gil;
+        LOG_INFO("[PythonInit] LoadCode begin");
+
+        try {
+            if (!cleanup_fn_.is_none()) {
+                LOG_INFO("[PythonInit] LoadCode calling previous cleanup()");
+                cleanup_fn_();
+            }
+
+            py::dict globals;
+            globals["__builtins__"] = py::module::import("builtins");
+            LOG_INFO("[PythonInit] LoadCode exec begin");
+            py::exec(code, globals);
+            LOG_INFO("[PythonInit] LoadCode exec done");
+
+            py::object process_fn = globals.contains("process") ? globals["process"] : py::none();
+            if (process_fn.is_none() || !py::isinstance<py::function>(process_fn)) {
+                return "Python code must define callable function: process()";
+            }
+
+            py::object init_fn = globals.contains("init") ? globals["init"] : py::none();
+            py::object cleanup_fn = globals.contains("cleanup") ? globals["cleanup"] : py::none();
+
+            globals_ = std::move(globals);
+            process_fn_ = std::move(process_fn);
+            init_fn_ = std::move(init_fn);
+            cleanup_fn_ = std::move(cleanup_fn);
+
+            if (!init_fn_.is_none()) {
+                LOG_INFO("[PythonInit] LoadCode calling init()");
+                init_fn_();
+                LOG_INFO("[PythonInit] LoadCode init() done");
+            }
+
+            code_ = code;
+            last_error_.clear();
+            LOG_INFO("[PythonInit] LoadCode finished");
+            return "";
+        } catch (const std::exception& e) {
+            last_error_ = e.what();
+            LOG_ERROR("[PythonInit] LoadCode exception: {}", last_error_);
+            return last_error_;
+        }
+    }
+
+    std::optional<ImageBuffer> ProcessFrame() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        py::gil_scoped_acquire gil;
+
+        try {
+            if (process_fn_.is_none()) {
+                last_error_ = "process() function is not ready";
+                return std::nullopt;
+            }
+
+            py::object result = process_fn_();
+            if (result.is_none()) {
+                return std::nullopt;
+            }
+            if (!py::isinstance<ImageBuffer>(result)) {
+                last_error_ = "process() must return visiong.ImageBuffer or None";
+                return std::nullopt;
+            }
+
+            ImageBuffer frame = result.cast<ImageBuffer>();
+            if (!frame.is_valid()) {
+                return std::nullopt;
+            }
+
+            return frame;
+        } catch (const std::exception& e) {
+            last_error_ = e.what();
+            return std::nullopt;
+        }
+    }
+
+    std::string GetCode() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return code_;
+    }
+
+    std::string GetLastError() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return last_error_;
+    }
+
+    void Shutdown() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        py::gil_scoped_acquire gil;
+        try {
+            if (!cleanup_fn_.is_none()) {
+                cleanup_fn_();
+            }
+        } catch (...) {
+        }
+
+        cleanup_fn_ = py::none();
+        init_fn_ = py::none();
+        process_fn_ = py::none();
+        globals_ = py::dict();
+    }
+
+private:
+    mutable std::mutex mutex_;
+    py::object globals_;
+    py::object process_fn_;
+    py::object init_fn_;
+    py::object cleanup_fn_;
+    std::string code_;
+    std::string last_error_;
+};
+
 }  // namespace
 
 struct VisionGProducer::Impl {
     SerialStreamDispatcher dispatcher;
+    std::unique_ptr<PythonRuntime> runtime;
 };
 
-VisionGProducer::VisionGProducer(const ProducerConfig& config,
-                                 std::unique_ptr<IModelStrategy> strategy)
-    : config_(config),
-      strategy_(std::move(strategy)),
-      impl_(std::make_unique<Impl>()) {
+void WarmupVisionGPythonRuntime() {
+    try {
+        EnsureEmbeddedPythonReady();
+        LOG_INFO("VisionG Python runtime warmup finished");
+    } catch (const std::exception& e) {
+        LOG_ERROR("VisionG Python runtime warmup failed: {}", e.what());
+    }
+}
 
-    type_name_ = std::string("VisionG/") + strategy_->GetName();
-
-    LOG_DEBUG("VisionGProducer created ({})", type_name_);
+VisionGProducer::VisionGProducer(const ProducerConfig& config)
+    : config_(config), type_name_("VisionG/Python"), impl_(std::make_unique<Impl>()) {
 }
 
 VisionGProducer::~VisionGProducer() {
     Deinit();
-    LOG_DEBUG("VisionGProducer destroyed ({})", type_name_);
 }
 
 int VisionGProducer::Init() {
     if (initialized_.load()) {
-        LOG_WARN("Already initialized");
         return 0;
     }
 
-    auto res = config_.GetResolutionConfig();
-    LOG_INFO("Initializing VisionG producer ({}): {}x{} @ {}fps",
-             type_name_, res.width, res.height, res.framerate);
+    LOG_INFO("Initializing VisionG producer (python-managed frame pipeline)");
 
-    camera_ = std::make_unique<Camera>(res.width, res.height, "yuv");
-    if (!camera_ || !camera_->is_initialized()) {
-        LOG_ERROR("VisionG Camera init failed");
-        camera_.reset();
-        return -1;
-    }
+    impl_->runtime = std::make_unique<PythonRuntime>();
 
-    camera_->skip(5);
-
-    npu_ = strategy_->CreateNPU();
-    if (!npu_) {
-        LOG_DEBUG("Strategy {} does not use NPU (will manage its own engine)", strategy_->GetName());
-    }
-
-    if (!strategy_->Init()) {
-        LOG_ERROR("Strategy init failed ({})", strategy_->GetName());
-        npu_.reset();
-        camera_->release();
-        camera_.reset();
-        return -1;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (current_code_.empty()) {
+            current_code_ = kDefaultVisionGScript;
+        }
+        const std::string err = impl_->runtime->LoadCode(current_code_);
+        if (!err.empty()) {
+            last_error_ = err;
+            LOG_ERROR("Failed to load initial Python code: {}", err);
+            impl_->runtime.reset();
+            return -1;
+        }
+        last_error_.clear();
     }
 
     initialized_.store(true);
-    LOG_INFO("VisionG producer ({}) initialized successfully", type_name_);
-    LOG_INFO("Pipeline: Camera::snapshot() -> {}::ProcessFrame() -> VencManager", strategy_->GetName());
+    LOG_INFO("VisionG producer initialized");
     return 0;
 }
 
@@ -204,35 +350,31 @@ int VisionGProducer::Deinit() {
 
     Stop();
 
-    strategy_->Deinit();
-    npu_.reset();
-
-    if (camera_) {
-        camera_->release();
-        camera_.reset();
+    if (impl_->runtime) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        impl_->runtime->Shutdown();
+        impl_->runtime.reset();
     }
 
     VencManager::getInstance().releaseVencIfUnused();
 
     initialized_.store(false);
-    LOG_INFO("VisionG producer ({}) deinitialized", type_name_);
+    LOG_INFO("VisionG producer deinitialized");
     return 0;
 }
 
 bool VisionGProducer::Start() {
     if (!initialized_.load()) {
-        LOG_ERROR("Not initialized");
+        LOG_ERROR("VisionG producer not initialized");
         return false;
     }
-
     if (running_.load()) {
-        LOG_WARN("Already running");
         return true;
     }
 
     running_.store(true);
     frame_thread_ = std::thread(&VisionGProducer::FrameLoop, this);
-    LOG_INFO("VisionG producer ({}) started", type_name_);
+    LOG_INFO("VisionG producer started");
     return true;
 }
 
@@ -245,7 +387,8 @@ void VisionGProducer::Stop() {
     if (frame_thread_.joinable()) {
         frame_thread_.join();
     }
-    LOG_INFO("VisionG producer ({}) stopped", type_name_);
+
+    LOG_INFO("VisionG producer stopped");
 }
 
 void VisionGProducer::RegisterStreamConsumer(const std::string& name, StreamCallback callback,
@@ -259,92 +402,88 @@ void VisionGProducer::ClearStreamConsumers() {
 }
 
 int VisionGProducer::SetResolution(Resolution preset) {
-    if (running_.load()) {
-        LOG_WARN("Cannot change resolution while running");
-        return -1;
-    }
     config_.resolution = preset;
     return 0;
 }
 
 int VisionGProducer::SetFrameRate(int fps) {
-    if (running_.load()) {
-        LOG_WARN("Cannot change framerate while running");
-        return -1;
-    }
     config_.framerate = std::max(1, std::min(fps, 30));
     return 0;
 }
 
-void VisionGProducer::ReplaceNPU(std::unique_ptr<NPU> new_npu) {
-    npu_ = std::move(new_npu);
+std::string VisionGProducer::GetCurrentCode() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return current_code_;
 }
 
-void VisionGProducer::PauseFrameLoop() {
-    paused_.store(true);
-    LOG_INFO("Frame loop paused");
+std::string VisionGProducer::GetLastError() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return last_error_;
 }
 
-void VisionGProducer::ResumeFrameLoop() {
-    paused_.store(false);
-    LOG_INFO("Frame loop resumed");
+std::string VisionGProducer::UpdateCode(const std::string& code) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (!impl_->runtime) {
+        last_error_ = "Python runtime not initialized";
+        return last_error_;
+    }
+
+    const std::string err = impl_->runtime->LoadCode(code);
+
+    if (err.empty()) {
+        current_code_ = code;
+        last_error_.clear();
+    } else {
+        last_error_ = err;
+    }
+    return err;
 }
 
 void VisionGProducer::FrameLoop() {
-    LOG_INFO("VisionG frame loop started ({})", type_name_);
-
     auto& venc = VencManager::getInstance();
-    VencManager::ScopedUser venc_user(venc);
+    VencManager::ScopedUser user(venc);
 
     while (running_.load()) {
-        // 暂停期间跳过处理（用于 NPU 模型切换）
-        if (paused_.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!impl_->runtime) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
             continue;
         }
 
-        ImageBuffer frame = camera_->snapshot();
-        if (!frame.is_valid()) {
-            LOG_WARN("Camera snapshot failed, retrying...");
+        auto frame_opt = impl_->runtime->ProcessFrame();
+        if (!frame_opt.has_value()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
-        frame_count_++;
-
-        ImageBuffer draw_frame = strategy_->ProcessFrame(frame, npu_.get());
-        inference_count_++;
 
         VencEncodedPacket packet;
-        bool ok = venc.encodeToVideo(
-            draw_frame,
+        const bool ok = venc.encodeToVideo(
+            *frame_opt,
             VencCodec::H264,
             75,
             packet,
             config_.framerate,
             VencRcMode::CBR);
         if (!ok) {
-            LOG_WARN("VencManager encodeToVideo failed");
+            LOG_WARN("VisionG encode failed");
             continue;
         }
 
         auto stream = ConvertPacketToEncodedStream(packet);
         if (!stream) {
-            LOG_WARN("Failed to convert VencEncodedPacket to EncodedStreamPtr");
             continue;
         }
 
+        frame_count_++;
+        encode_count_++;
         impl_->dispatcher.DispatchFrame(stream);
     }
 
-    LOG_INFO("VisionG frame loop exited ({}), total frames: {}, inferences: {}",
-             type_name_, frame_count_.load(), inference_count_.load());
+    LOG_INFO("VisionG frame loop exited, frames={}, encoded={}", frame_count_.load(), encode_count_.load());
 }
 
 std::unique_ptr<IMediaProducer> CreateVisionGProducer(const ProducerConfig& config) {
-    auto strategy = std::make_unique<PythonStrategy>(
-        "../model/yolov5.rknn",
-        "../model/coco_80_labels_list.txt",
-        "YOLOV5");
-    return std::make_unique<VisionGProducer>(config, std::move(strategy));
+    return std::make_unique<VisionGProducer>(config);
 }
 
 }  // namespace media

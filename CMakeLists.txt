@@ -61,8 +61,8 @@ set(VISIONG_INCLUDE_DIR ${VISIONG_PREBUILT_DIR}/include CACHE PATH "VisionG incl
 set(VISIONG_LIB_DIR ${VISIONG_PREBUILT_DIR}/lib CACHE PATH "VisionG library dir")
 set(VISIONG_EXTRA_LIB_DIR ${CMAKE_SOURCE_DIR}/../media/out/lib CACHE PATH "Extra vendor libs for VisionG (ivs/rve)")
 
-# VisionG Python 预编译包路径
-set(VISIONG_PYTHON_PREBUILT_DIR ${CMAKE_BINARY_DIR}/visiong_python CACHE PATH "VisionG Python package root")
+# VisionG Python 模块路径（由用户手工部署，不自动下载）
+set(VISIONG_PYTHON_PREBUILT_DIR "" CACHE PATH "VisionG Python package root (manual deployment)")
 
 # ========================================
 # Python 3.11 配置（用于 pybind11::embed）
@@ -90,8 +90,8 @@ set(OPENSSL_LIBRARIES "${OPENSSL_SSL_LIBRARY};${OPENSSL_CRYPTO_LIBRARY}" CACHE S
 # 添加第三方库
 # ========================================
 
-# spdlog (静态库模式 - 强制静态链接，避免嵌入式设备上的动态库问题)
-set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "Build spdlog as static library" FORCE)
+# spdlog (动态库模式)
+set(SPDLOG_BUILD_SHARED ON CACHE BOOL "Build spdlog as shared library" FORCE)
 add_subdirectory(${SPDLOG_PATH} ${CMAKE_BINARY_DIR}/spdlog)
 
 # cpp-httplib (header-only)
@@ -151,32 +151,6 @@ set_target_properties(visiong_runtime PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${VISIONG_INCLUDE_DIR}"
 )
 
-# VisionG Python 预编译包（_visiong.so + visiong.py）
-set(VISIONG_PYTHON_ZIP_URL "https://github.com/yiex/visiong/releases/download/v1.0.1/visiong_python.zip")
-set(VISIONG_PYTHON_ZIP_PATH "${CMAKE_BINARY_DIR}/visiong_python.zip")
-
-if(NOT EXISTS "${VISIONG_PYTHON_PREBUILT_DIR}/_visiong.so")
-    if(NOT EXISTS "${VISIONG_PYTHON_ZIP_PATH}")
-        message(STATUS "Downloading VisionG Python package from ${VISIONG_PYTHON_ZIP_URL} ...")
-        file(DOWNLOAD "${VISIONG_PYTHON_ZIP_URL}" "${VISIONG_PYTHON_ZIP_PATH}"
-            STATUS VISIONG_PY_DL_STATUS
-            SHOW_PROGRESS
-            TLS_VERIFY ON
-        )
-        list(GET VISIONG_PY_DL_STATUS 0 VISIONG_PY_DL_CODE)
-        if(NOT VISIONG_PY_DL_CODE EQUAL 0)
-            list(GET VISIONG_PY_DL_STATUS 1 VISIONG_PY_DL_MSG)
-            file(REMOVE "${VISIONG_PYTHON_ZIP_PATH}")
-            message(WARNING "Failed to download VisionG Python: ${VISIONG_PY_DL_MSG}")
-        endif()
-    endif()
-
-    if(EXISTS "${VISIONG_PYTHON_ZIP_PATH}")
-        message(STATUS "Extracting VisionG Python package to ${VISIONG_PYTHON_PREBUILT_DIR} ...")
-        file(ARCHIVE_EXTRACT INPUT "${VISIONG_PYTHON_ZIP_PATH}" DESTINATION "${VISIONG_PYTHON_PREBUILT_DIR}")
-    endif()
-endif()
-
 # libdatachannel (WebRTC 支持)
 # 配置选项
 set(NO_WEBSOCKET OFF CACHE BOOL "Disable WebSocket support" FORCE)
@@ -206,12 +180,30 @@ set(AIPC_INSTALL_ASSETS_DIR "assets")
 set(AIPC_INSTALL_WWW_DIR "www")
 set(AIPC_INSTALL_MODEL_DIR "model")
 
-# 安装可执行文件
+# 安装可执行文件，设置 RPATH 让可执行文件能找到 ../lib 下的动态库
+set_target_properties(aipc PROPERTIES
+    INSTALL_RPATH "$ORIGIN/../lib"
+    BUILD_WITH_INSTALL_RPATH OFF
+)
 install(TARGETS aipc
     RUNTIME DESTINATION ${AIPC_INSTALL_BIN_DIR}
 )
 
-# 注意：libdatachannel 动态库已手动部署到设备中，无需安装
+# 安装 libdatachannel 动态库到项目 lib 目录
+if(TARGET datachannel)
+    install(TARGETS datachannel
+        LIBRARY DESTINATION ${AIPC_INSTALL_LIB_DIR}
+        ARCHIVE DESTINATION ${AIPC_INSTALL_LIB_DIR}
+    )
+endif()
+
+# 安装 spdlog 动态库到项目 lib 目录
+if(TARGET spdlog)
+    install(TARGETS spdlog
+        LIBRARY DESTINATION ${AIPC_INSTALL_LIB_DIR}
+        ARCHIVE DESTINATION ${AIPC_INSTALL_LIB_DIR}
+    )
+endif()
 
 # 安装启动/停止脚本
 install(PROGRAMS 
@@ -234,26 +226,30 @@ if(EXISTS "${VISIONG_LIB_DIR}/libvisiong.so")
     )
 endif()
 
-# 安装 VisionG Python 模块（_visiong.so + visiong.py）
-set(AIPC_INSTALL_PYTHON_DIR "python")
-if(EXISTS "${VISIONG_PYTHON_PREBUILT_DIR}/_visiong.so")
-    install(FILES
-        "${VISIONG_PYTHON_PREBUILT_DIR}/_visiong.so"
-        DESTINATION ${AIPC_INSTALL_PYTHON_DIR}
-    )
-endif()
-# visiong.py 加载器从源码获取
-if(EXISTS "${CMAKE_SOURCE_DIR}/3rdparty/visiong/src/python/visiong.py")
-    install(FILES
-        "${CMAKE_SOURCE_DIR}/3rdparty/visiong/src/python/visiong.py"
-        DESTINATION ${AIPC_INSTALL_PYTHON_DIR}
-    )
-endif()
+# 安装 VisionG 的依赖库 ivs / rve（来自 media/out/lib）
+foreach(_vg_dep ivs rve)
+    if(EXISTS "${VISIONG_EXTRA_LIB_DIR}/lib${_vg_dep}.so")
+        install(FILES "${VISIONG_EXTRA_LIB_DIR}/lib${_vg_dep}.so"
+            DESTINATION ${AIPC_INSTALL_LIB_DIR}
+        )
+    else()
+        message(WARNING "lib${_vg_dep}.so not found in ${VISIONG_EXTRA_LIB_DIR}")
+    endif()
+endforeach()
+
+# VisionG Python 模块由用户手工部署，不在本项目中自动下载或安装
 
 # 安装 Python 模板代码
 set(AIPC_INSTALL_TEMPLATES_DIR "python_templates")
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/python_templates/
     DESTINATION ${AIPC_INSTALL_TEMPLATES_DIR}
+    FILES_MATCHING PATTERN "*.py"
+)
+
+# 安装默认 Python 工程
+set(AIPC_INSTALL_PROJECTS_DIR "python_projects")
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/python_projects/
+    DESTINATION ${AIPC_INSTALL_PROJECTS_DIR}
     FILES_MATCHING PATTERN "*.py"
 )
 
