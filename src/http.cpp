@@ -11,14 +11,14 @@
 #define LOG_TAG "http"
 
 #include "http.h"
+#include <httplib.h>
+#include <nlohmann/json.hpp>
 #include "common/logger.h"
-#include "media_distribution/rtsp/rtsp_service.h"
 #include "media_distribution/file/file_service.h"
+#include "media_distribution/rtsp/rtsp_service.h"
 #include "media_distribution/webrtc/webrtc_service.h"
 #include "media_producer/media_manager.h"
 #include "media_producer/visiong/visiong_producer.h"
-#include <httplib.h>
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -31,27 +31,38 @@ using json = nlohmann::json;
 // ============================================================================
 static const std::string MODEL_DIR = "../model";
 static const std::string PYTHON_PROJECT_DIR = "../python_projects";
-static const size_t MAX_UPLOAD_SIZE = 50 * 1024 * 1024;  // 50MB
+static const size_t MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
 
-static const char* DEFAULT_YOLOV5_PROJECT_CODE = R"PY(import visiong
+// Phase B 契约：C++ 驱动帧循环，Python 只负责推理与绘制。
+// process(frame) 接收 C++ Camera::snapshot() 的帧，返回处理后的 ImageBuffer 或 None。
+static const char *DEFAULT_YOLOV5_PROJECT_CODE = R"PY(# YOLOv5 目标检测工程
+#
+# Phase B 契约：C++ 驱动帧循环，Python 只负责推理与绘制。
+#   init()         可选，加载模型等一次性资源
+#   process(frame) 必须，每帧调用；返回 ImageBuffer 或 None（跳过该帧）
+#   cleanup()      可选，释放资源
+#
+# 不再需要在 init() 中创建 Camera，也不需要在 process() 中调用 snapshot()。
+# C++ 已经完成采集，frame 是当前帧的 ImageBuffer（rgb 格式）。
+
+import visiong
 
 MODEL_PATH = "../model/yolov5.rknn"
 LABEL_PATH = "../model/coco_80_labels_list.txt"
 
-CAM_WIDTH = 640
-CAM_HEIGHT = 360
+# 必须与 C++ ProducerConfig.ai_width / ai_height 以及摄像头格式一致
 CAM_FORMAT = "rgb"
 
 BOX_THRESHOLD = 0.25
 NMS_THRESHOLD = 0.45
 
-_cam = None
 _detector = None
 
 
 def init():
-    global _cam, _detector
+    global _detector
 
+    # 可选：提升 NPU 时钟以降低推理延迟
     try:
         visiong.NpuClock().set_rate_mhz(
             420,
@@ -61,20 +72,28 @@ def init():
     except Exception as e:
         print("[YOLOV5][WARN] NPU clock setup skipped:", e)
 
-    _cam = visiong.Camera(CAM_WIDTH, CAM_HEIGHT, format=CAM_FORMAT)
-    _cam.skip(8)
-    _detector = visiong.NPU("yolov5", MODEL_PATH, LABEL_PATH, box=BOX_THRESHOLD, nms=NMS_THRESHOLD)
+    _detector = visiong.NPU(
+        "yolov5",
+        MODEL_PATH,
+        LABEL_PATH,
+        box=BOX_THRESHOLD,
+        nms=NMS_THRESHOLD,
+    )
+    print("[YOLOV5][INFO] detector loaded:", MODEL_PATH)
 
 
-def process():
-    if _cam is None or _detector is None:
+def process(frame):
+    """
+    C++ 每帧调用本函数。
+    :param frame: visiong.ImageBuffer，rgb 格式，尺寸由 C++ ProducerConfig 决定
+    :return: 绘制了检测框的 ImageBuffer（bgr888），或 None 表示跳过本帧
+    """
+    if _detector is None or not frame.is_valid():
         return None
 
-    frame = _cam.snapshot()
-    if not frame.is_valid():
-        return None
-
+    # 转为 BGR 用于绘制（infer 仍使用原始 rgb 帧以匹配模型输入格式）
     out = frame.to_format("bgr888")
+
     for result in _detector.infer(frame, model_format=CAM_FORMAT):
         x, y, w, h = result.box
         out.draw_rectangle(x, y, w, h, color=(0, 255, 0), thickness=2)
@@ -91,12 +110,9 @@ def process():
 
 
 def cleanup():
-    global _cam, _detector
-
+    global _detector
     _detector = None
-    if _cam is not None:
-        _cam.release()
-        _cam = None
+    print("[YOLOV5][INFO] detector released")
 )PY";
 
 // ============================================================================
@@ -106,21 +122,22 @@ def cleanup():
 /**
  * @brief 获取当前 VisionGProducer（如果处于 VisionG 模式）
  */
-static media::VisionGProducer* GetVisionGProducer() {
-    auto& mgr = media::MediaManager::Instance();
+static media::VisionGProducer *GetVisionGProducer() {
+    auto &mgr = media::MediaManager::Instance();
     if (mgr.GetCurrentMode() != media::ProducerMode::VisionG) {
         return nullptr;
     }
-    return dynamic_cast<media::VisionGProducer*>(mgr.GetProducer());
+    return dynamic_cast<media::VisionGProducer *>(mgr.GetProducer());
 }
 
 /**
  * @brief 净化文件名，移除路径穿越字符
  */
-static std::string SanitizeFilename(const std::string& name) {
+static std::string SanitizeFilename(const std::string &name) {
     std::string result;
-    for (char c : name) {
-        if (c == '/' || c == '\\' || c == '\0') continue;
+    for (char c: name) {
+        if (c == '/' || c == '\\' || c == '\0')
+            continue;
         result += c;
     }
     // 防止 ".." 路径穿越
@@ -130,14 +147,14 @@ static std::string SanitizeFilename(const std::string& name) {
     return result;
 }
 
-static std::string EnsurePyExt(const std::string& name) {
+static std::string EnsurePyExt(const std::string &name) {
     if (name.size() >= 3 && name.substr(name.size() - 3) == ".py") {
         return name;
     }
     return name + ".py";
 }
 
-static bool EnsureDirectory(const std::string& path) {
+static bool EnsureDirectory(const std::string &path) {
     namespace fs = std::filesystem;
     try {
         if (!fs::exists(path)) {
@@ -152,8 +169,7 @@ static bool EnsureDirectory(const std::string& path) {
 /**
  * @brief 生成 JSON 响应
  */
-static std::string json_response(bool success, const std::string& message, 
-                                  const json& data = nullptr) {
+static std::string json_response(bool success, const std::string &message, const json &data = nullptr) {
     json response;
     response["success"] = success;
     response["message"] = message;
@@ -169,11 +185,9 @@ static std::string json_response(bool success, const std::string& message,
 
 HttpApi::HttpApi() = default;
 
-HttpApi::~HttpApi() {
-    Stop();
-}
+HttpApi::~HttpApi() { Stop(); }
 
-bool HttpApi::Init(const HttpApiConfig& config, const StreamConfig& stream_config) {
+bool HttpApi::Init(const HttpApiConfig &config, const StreamConfig &stream_config) {
     LOG_INFO("初始化 HTTP API: {}:{}", config.host, config.port);
 
     config_ = config;
@@ -223,9 +237,7 @@ void HttpApi::Stop() {
     }
 }
 
-bool HttpApi::IsRunning() const {
-    return server_ && server_->IsRunning();
-}
+bool HttpApi::IsRunning() const { return server_ && server_->IsRunning(); }
 
 void HttpApi::SetupRoutes() {
     if (!server_) {
@@ -235,50 +247,50 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     // 系统状态 API
     // ========================================================================
-    server_->Get("/api/status", [this](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Get("/api/status", [this](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         json data;
-        
+
         // RTSP 状态
         data["rtsp"]["enabled"] = stream_config_.enable_rtsp;
         if (mgr && mgr->GetRtspService()) {
             data["rtsp"]["valid"] = mgr->GetRtspService()->IsValid();
             data["rtsp"]["running"] = mgr->GetRtspService()->IsRunning();
         }
-        
+
         // WebRTC 状态
         data["webrtc"]["enabled"] = stream_config_.enable_webrtc;
         if (mgr && mgr->GetWebRTCService()) {
             data["webrtc"]["running"] = mgr->GetWebRTCService()->IsRunning();
         }
-        
+
         // 录制状态
         data["recording"]["enabled"] = stream_config_.enable_file;
         if (mgr && mgr->GetFileService()) {
-            auto* fs = mgr->GetFileService();
+            auto *fs = mgr->GetFileService();
             data["recording"]["active"] = fs->IsRecording();
             data["recording"]["output_dir"] = stream_config_.mp4_config.outputDir;
         }
-        
+
         // 媒体生产者状态
-        auto& media_mgr = media::MediaManager::Instance();
+        auto &media_mgr = media::MediaManager::Instance();
         data["producer"]["mode"] = media::ProducerModeToString(media_mgr.GetCurrentMode());
         data["producer"]["running"] = media_mgr.IsRunning();
-        
+
         res.set_content(json_response(true, "ok", data), "application/json");
     });
 
     // ========================================================================
     // RTSP 状态 API
     // ========================================================================
-    server_->Get("/api/rtsp/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Get("/api/rtsp/status", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetRtspService()) {
             res.set_content(json_response(false, "RTSP not available"), "application/json");
             return;
         }
-        
-        auto* rtsp = mgr->GetRtspService();
+
+        auto *rtsp = mgr->GetRtspService();
         auto stats = rtsp->GetStats();
         json data;
         data["valid"] = rtsp->IsValid();
@@ -292,19 +304,19 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     // RTSP 控制 API
     // ========================================================================
-    server_->Post("/api/rtsp/start", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Post("/api/rtsp/start", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetRtspService()) {
             res.set_content(json_response(false, "RTSP not available"), "application/json");
             return;
         }
-        
-        auto* rtsp = mgr->GetRtspService();
+
+        auto *rtsp = mgr->GetRtspService();
         if (rtsp->IsRunning()) {
             res.set_content(json_response(true, "RTSP already running"), "application/json");
             return;
         }
-        
+
         if (rtsp->Start()) {
             res.set_content(json_response(true, "RTSP started"), "application/json");
         } else {
@@ -312,19 +324,19 @@ void HttpApi::SetupRoutes() {
         }
     });
 
-    server_->Post("/api/rtsp/stop", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Post("/api/rtsp/stop", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetRtspService()) {
             res.set_content(json_response(false, "RTSP not available"), "application/json");
             return;
         }
-        
-        auto* rtsp = mgr->GetRtspService();
+
+        auto *rtsp = mgr->GetRtspService();
         if (!rtsp->IsRunning()) {
             res.set_content(json_response(true, "RTSP already stopped"), "application/json");
             return;
         }
-        
+
         rtsp->Stop();
         res.set_content(json_response(true, "RTSP stopped"), "application/json");
     });
@@ -332,32 +344,32 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     // WebRTC 状态和控制 API
     // ========================================================================
-    server_->Get("/api/webrtc/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Get("/api/webrtc/status", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
-        
-        auto* webrtc = mgr->GetWebRTCService();
+
+        auto *webrtc = mgr->GetWebRTCService();
         json data;
         data["running"] = webrtc->IsRunning();
         res.set_content(json_response(true, "ok", data), "application/json");
     });
 
-    server_->Post("/api/webrtc/start", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Post("/api/webrtc/start", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
-        
-        auto* webrtc = mgr->GetWebRTCService();
+
+        auto *webrtc = mgr->GetWebRTCService();
         if (webrtc->IsRunning()) {
             res.set_content(json_response(true, "WebRTC already running"), "application/json");
             return;
         }
-        
+
         if (webrtc->Start()) {
             res.set_content(json_response(true, "WebRTC started"), "application/json");
         } else {
@@ -365,19 +377,19 @@ void HttpApi::SetupRoutes() {
         }
     });
 
-    server_->Post("/api/webrtc/stop", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Post("/api/webrtc/stop", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
-        
-        auto* webrtc = mgr->GetWebRTCService();
+
+        auto *webrtc = mgr->GetWebRTCService();
         if (!webrtc->IsRunning()) {
             res.set_content(json_response(true, "WebRTC already stopped"), "application/json");
             return;
         }
-        
+
         webrtc->Stop();
         res.set_content(json_response(true, "WebRTC stopped"), "application/json");
     });
@@ -385,153 +397,153 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     // WebRTC HTTP 信令 API
     // ========================================================================
-    server_->Post("/api/webrtc/offer", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Post("/api/webrtc/offer", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
-        
-        auto* webrtc = mgr->GetWebRTCService();
+
+        auto *webrtc = mgr->GetWebRTCService();
         if (!webrtc->IsRunning()) {
             res.set_content(json_response(false, "WebRTC service not running"), "application/json");
             return;
         }
-        
+
         try {
             std::string offer = webrtc->CreateOfferForHttp();
             if (offer.empty()) {
                 res.set_content(json_response(false, "Failed to create offer"), "application/json");
                 return;
             }
-            
+
             json data;
             data["sdp"] = offer;
             data["type"] = "offer";
             res.set_content(json_response(true, "ok", data), "application/json");
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             res.set_content(json_response(false, std::string("Error: ") + e.what()), "application/json");
         }
     });
-    
-    server_->Post("/api/webrtc/answer", [](const HttpRequest& req, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+
+    server_->Post("/api/webrtc/answer", [](const HttpRequest &req, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
-        
-        auto* webrtc = mgr->GetWebRTCService();
-        
+
+        auto *webrtc = mgr->GetWebRTCService();
+
         try {
             json body = json::parse(req.body);
             std::string sdp = body.value("sdp", "");
-            
+
             if (sdp.empty()) {
                 res.set_content(json_response(false, "Missing SDP"), "application/json");
                 return;
             }
-            
+
             if (webrtc->SetAnswerFromHttp(sdp)) {
                 res.set_content(json_response(true, "Answer set"), "application/json");
             } else {
                 res.set_content(json_response(false, "Failed to set answer"), "application/json");
             }
-        } catch (const json::exception& e) {
+        } catch (const json::exception &e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
         }
     });
-    
-    server_->Post("/api/webrtc/ice", [](const HttpRequest& req, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+
+    server_->Post("/api/webrtc/ice", [](const HttpRequest &req, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
-        
-        auto* webrtc = mgr->GetWebRTCService();
-        
+
+        auto *webrtc = mgr->GetWebRTCService();
+
         try {
             json body = json::parse(req.body);
             std::string candidate = body.value("candidate", "");
             std::string mid = body.value("sdpMid", "0");
-            
+
             if (candidate.empty()) {
                 // 空候选表示 ICE 收集完成
                 res.set_content(json_response(true, "ICE gathering complete"), "application/json");
                 return;
             }
-            
+
             if (webrtc->AddIceCandidateFromHttp(candidate, mid)) {
                 res.set_content(json_response(true, "ICE candidate added"), "application/json");
             } else {
                 res.set_content(json_response(false, "Failed to add ICE candidate"), "application/json");
             }
-        } catch (const json::exception& e) {
+        } catch (const json::exception &e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
         }
     });
-    
-    server_->Get("/api/webrtc/candidates", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+
+    server_->Get("/api/webrtc/candidates", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetWebRTCService()) {
             res.set_content(json_response(false, "WebRTC not available"), "application/json");
             return;
         }
-        
-        auto* webrtc = mgr->GetWebRTCService();
+
+        auto *webrtc = mgr->GetWebRTCService();
         auto candidates = webrtc->GetLocalIceCandidates();
-        
+
         json data = json::array();
-        for (const auto& [candidate, mid] : candidates) {
+        for (const auto &[candidate, mid]: candidates) {
             json c;
             c["candidate"] = candidate;
             c["sdpMid"] = mid;
             data.push_back(c);
         }
-        
+
         res.set_content(json_response(true, "ok", data), "application/json");
     });
 
     // ========================================================================
     // 录制状态和控制 API
     // ========================================================================
-    server_->Get("/api/record/status", [this](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Get("/api/record/status", [this](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetFileService()) {
             res.set_content(json_response(false, "Recording not available"), "application/json");
             return;
         }
-        
-        auto* fs = mgr->GetFileService();
+
+        auto *fs = mgr->GetFileService();
         json data;
         data["enabled"] = stream_config_.enable_file;
         data["active"] = fs->IsRecording();
         data["output_dir"] = stream_config_.mp4_config.outputDir;
-        
+
         if (fs->IsRecording()) {
             auto stats = fs->GetRecordStats();
             data["stats"]["frames_written"] = stats.frames_written;
             data["stats"]["bytes_written"] = stats.bytes_written;
             data["stats"]["duration_sec"] = stats.duration_sec;
         }
-        
+
         res.set_content(json_response(true, "ok", data), "application/json");
     });
 
-    server_->Post("/api/record/start", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Post("/api/record/start", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetFileService()) {
             res.set_content(json_response(false, "Recording not available"), "application/json");
             return;
         }
-        
-        auto* fs = mgr->GetFileService();
+
+        auto *fs = mgr->GetFileService();
         if (fs->IsRecording()) {
             res.set_content(json_response(true, "Recording already active"), "application/json");
             return;
         }
-        
+
         if (fs->StartRecording()) {
             res.set_content(json_response(true, "Recording started"), "application/json");
         } else {
@@ -539,19 +551,19 @@ void HttpApi::SetupRoutes() {
         }
     });
 
-    server_->Post("/api/record/stop", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto* mgr = GetStreamManager();
+    server_->Post("/api/record/stop", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto *mgr = GetStreamManager();
         if (!mgr || !mgr->GetFileService()) {
             res.set_content(json_response(false, "Recording not available"), "application/json");
             return;
         }
-        
-        auto* fs = mgr->GetFileService();
+
+        auto *fs = mgr->GetFileService();
         if (!fs->IsRecording()) {
             res.set_content(json_response(true, "Recording already stopped"), "application/json");
             return;
         }
-        
+
         fs->StopRecording();
         res.set_content(json_response(true, "Recording stopped"), "application/json");
     });
@@ -559,25 +571,25 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     // 生产者模式 API（基于新的 MediaManager）
     // ========================================================================
-    server_->Get("/api/producer/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto& mgr = media::MediaManager::Instance();
-        
+    server_->Get("/api/producer/status", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto &mgr = media::MediaManager::Instance();
+
         json data;
         data["mode"] = media::ProducerModeToString(mgr.GetCurrentMode());
         data["running"] = mgr.IsRunning();
         data["available_modes"] = json::array({"simple_ipc", "visiong"});
-        
+
         res.set_content(json_response(true, "ok", data), "application/json");
     });
-    
-    server_->Post("/api/producer/switch", [](const HttpRequest& req, HttpResponse& res) {
+
+    server_->Post("/api/producer/switch", [](const HttpRequest &req, HttpResponse &res) {
         try {
             json body = json::parse(req.body);
             std::string mode_str = body.value("mode", "simple_ipc");
-            
+
             LOG_INFO("Producer mode switch requested: {}", mode_str);
-            
-            auto& mgr = media::MediaManager::Instance();
+
+            auto &mgr = media::MediaManager::Instance();
 
             // 解析模式字符串
             media::ProducerMode target_mode;
@@ -586,25 +598,25 @@ void HttpApi::SetupRoutes() {
             } else {
                 target_mode = media::ProducerMode::SimpleIPC;
             }
-            
+
             if (mgr.GetCurrentMode() == target_mode) {
                 json data;
                 data["mode"] = media::ProducerModeToString(target_mode);
                 res.set_content(json_response(true, "Already in requested mode", data), "application/json");
                 return;
             }
-            
+
             // 切换模式（冷切换）
             if (mgr.SwitchMode(target_mode) != 0) {
                 res.set_content(json_response(false, "Failed to switch producer mode"), "application/json");
                 return;
             }
-            
+
             json data;
             data["mode"] = media::ProducerModeToString(target_mode);
             res.set_content(json_response(true, "Producer mode switched", data), "application/json");
-            
-        } catch (const json::exception& e) {
+
+        } catch (const json::exception &e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
         }
     });
@@ -612,40 +624,40 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     // AI API（前端兼容接口）
     // ========================================================================
-    server_->Get("/api/ai/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto& mgr = media::MediaManager::Instance();
+    server_->Get("/api/ai/status", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto &mgr = media::MediaManager::Instance();
         auto mode = mgr.GetCurrentMode();
-        
+
         json data;
         // has_model: 是否加载了 AI 模型
         bool has_model = (mode == media::ProducerMode::VisionG);
         data["has_model"] = has_model;
-        
+
         // model_type: 当前模型信息
         if (mode == media::ProducerMode::VisionG) {
             data["model_type"] = "visiong_python";
         } else {
             data["model_type"] = "none";
         }
-        
+
         // stats: AI 统计信息（当前未实现详细统计，返回占位数据）
         json stats;
         stats["frames_processed"] = 0;
         stats["avg_inference_ms"] = 0;
         stats["total_detections"] = 0;
         data["stats"] = stats;
-        
+
         res.set_content(json_response(true, "ok", data), "application/json");
     });
-    
-    server_->Post("/api/ai/switch", [](const HttpRequest& req, HttpResponse& res) {
+
+    server_->Post("/api/ai/switch", [](const HttpRequest &req, HttpResponse &res) {
         try {
             json body = json::parse(req.body);
             std::string model_str = body.value("model", "none");
-            
+
             LOG_INFO("AI model switch requested: {}", model_str);
-            
-            auto& mgr = media::MediaManager::Instance();
+
+            auto &mgr = media::MediaManager::Instance();
 
             // 映射模型名称到生产者模式
             media::ProducerMode target_mode;
@@ -654,25 +666,25 @@ void HttpApi::SetupRoutes() {
             } else {
                 target_mode = media::ProducerMode::SimpleIPC;
             }
-            
+
             if (mgr.GetCurrentMode() == target_mode) {
                 json data;
                 data["model"] = model_str;
                 res.set_content(json_response(true, "Already using requested model", data), "application/json");
                 return;
             }
-            
+
             // 切换模式（冷切换）
             if (mgr.SwitchMode(target_mode) != 0) {
                 res.set_content(json_response(false, "Failed to switch AI model"), "application/json");
                 return;
             }
-            
+
             json data;
             data["model"] = model_str;
             res.set_content(json_response(true, "AI model switched", data), "application/json");
-            
-        } catch (const json::exception& e) {
+
+        } catch (const json::exception &e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
         }
     });
@@ -680,21 +692,21 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
     // Pipeline API（前端兼容接口）
     // ========================================================================
-    server_->Get("/api/pipeline/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto& mgr = media::MediaManager::Instance();
+    server_->Get("/api/pipeline/status", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto &mgr = media::MediaManager::Instance();
         auto mode = mgr.GetCurrentMode();
         auto cfg = mgr.GetConfig();
         auto res_cfg = cfg.GetResolutionConfig();
-        
+
         json data;
-        
+
         // mode: parallel (纯 IPC) / serial (AI 推理)
         if (mode == media::ProducerMode::SimpleIPC) {
             data["mode"] = "parallel";
         } else {
             data["mode"] = "serial";
         }
-        
+
         // resolution 信息
         json resolution;
         if (cfg.resolution == media::Resolution::R_1080P) {
@@ -708,30 +720,37 @@ void HttpApi::SetupRoutes() {
         resolution["height"] = res_cfg.height;
         resolution["framerate"] = res_cfg.framerate;
         data["resolution"] = resolution;
-        
+
         // 状态信息
         data["initialized"] = mgr.IsInitialized();
         data["streaming"] = mgr.IsRunning();
-        
+
         // 可用分辨率
         if (mode == media::ProducerMode::SimpleIPC) {
             data["available_resolutions"] = json::array({"1080p", "720p", "480p"});
             data["note"] = "";
         } else {
+            // Phase B: camera dimensions are controlled by C++ ProducerConfig (ai_width/ai_height)
+            auto vg_cfg = mgr.GetConfig();
             data["available_resolutions"] = json::array();
-            data["note"] = "Resolution is controlled by VisionG Python project";
+            data["note"] = "Camera resolution is controlled by C++ ProducerConfig (ai_width/ai_height)";
+            json cam_info;
+            cam_info["width"] = vg_cfg.ai_width;
+            cam_info["height"] = vg_cfg.ai_height;
+            cam_info["format"] = "rgb";
+            data["camera"] = cam_info;
         }
-        
+
         res.set_content(json_response(true, "ok", data), "application/json");
     });
-    
-    server_->Post("/api/pipeline/resolution", [](const HttpRequest& req, HttpResponse& res) {
+
+    server_->Post("/api/pipeline/resolution", [](const HttpRequest &req, HttpResponse &res) {
         try {
             json body = json::parse(req.body);
             std::string preset_str = body.value("resolution", "1080p");
-            
+
             LOG_INFO("Resolution switch requested: {}", preset_str);
-            
+
             // 解析分辨率预设
             media::Resolution target_res;
             if (preset_str == "720p") {
@@ -741,15 +760,19 @@ void HttpApi::SetupRoutes() {
             } else {
                 target_res = media::Resolution::R_1080P;
             }
-            
-            auto& mgr = media::MediaManager::Instance();
-            
-            // VisionG 模式下分辨率由 Python 工程决定
+
+            auto &mgr = media::MediaManager::Instance();
+
+            // Phase B: VisionG 模式下摄像头尺寸由 C++ ProducerConfig 管理，
+            // 不支持通过此接口动态切换（需重新 Init 才能生效）
             if (mgr.GetCurrentMode() != media::ProducerMode::SimpleIPC) {
-                res.set_content(json_response(false, "Resolution is managed by VisionG Python code"), "application/json");
+                res.set_content(
+                        json_response(false, "In VisionG mode camera resolution is set via ProducerConfig "
+                                             "(ai_width/ai_height); switch back to SimpleIPC to use this endpoint"),
+                        "application/json");
                 return;
             }
-            
+
             if (mgr.GetConfig().resolution == target_res) {
                 auto res_cfg = media::ResolutionConfig::FromPreset(target_res);
                 json data;
@@ -759,21 +782,21 @@ void HttpApi::SetupRoutes() {
                 res.set_content(json_response(true, "Already using requested resolution", data), "application/json");
                 return;
             }
-            
+
             // 切换分辨率（需要重新初始化）
             if (mgr.SetResolution(target_res) != 0) {
                 res.set_content(json_response(false, "Failed to switch resolution"), "application/json");
                 return;
             }
-            
+
             auto res_cfg = media::ResolutionConfig::FromPreset(target_res);
             json data;
             data["resolution"] = preset_str;
             data["width"] = res_cfg.width;
             data["height"] = res_cfg.height;
             res.set_content(json_response(true, "Resolution switched", data), "application/json");
-            
-        } catch (const json::exception& e) {
+
+        } catch (const json::exception &e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
         }
     });
@@ -783,13 +806,14 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
 
     // 列出所有模型文件
-    server_->Get("/api/model/list", [](const HttpRequest& /*req*/, HttpResponse& res) {
+    server_->Get("/api/model/list", [](const HttpRequest & /*req*/, HttpResponse &res) {
         namespace fs = std::filesystem;
         json models = json::array();
 
         try {
-            for (const auto& entry : fs::directory_iterator(MODEL_DIR)) {
-                if (!entry.is_regular_file()) continue;
+            for (const auto &entry: fs::directory_iterator(MODEL_DIR)) {
+                if (!entry.is_regular_file())
+                    continue;
                 auto ext = entry.path().extension().string();
                 // 小写化扩展名
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -797,12 +821,13 @@ void HttpApi::SetupRoutes() {
                     json item;
                     item["name"] = entry.path().filename().string();
                     item["size"] = entry.file_size();
-                    item["type"] = ext.substr(1);  // "rknn" or "txt"
+                    item["type"] = ext.substr(1); // "rknn" or "txt"
                     models.push_back(item);
                 }
             }
-        } catch (const fs::filesystem_error& e) {
-            res.set_content(json_response(false, std::string("Failed to list models: ") + e.what()), "application/json");
+        } catch (const fs::filesystem_error &e) {
+            res.set_content(json_response(false, std::string("Failed to list models: ") + e.what()),
+                            "application/json");
             return;
         }
 
@@ -810,13 +835,13 @@ void HttpApi::SetupRoutes() {
     });
 
     // 上传模型文件
-    server_->Post("/api/model/upload", [](const HttpRequest& req, HttpResponse& res) {
+    server_->Post("/api/model/upload", [](const HttpRequest &req, HttpResponse &res) {
         if (!req.form.has_file("file")) {
             res.set_content(json_response(false, "No file in request"), "application/json");
             return;
         }
 
-        const auto& file = req.form.get_file("file");
+        const auto &file = req.form.get_file("file");
         std::string filename = SanitizeFilename(file.filename);
 
         if (filename.empty()) {
@@ -861,7 +886,7 @@ void HttpApi::SetupRoutes() {
     });
 
     // 删除模型文件
-    server_->Delete(R"(/api/model/(.+))", [](const HttpRequest& req, HttpResponse& res) {
+    server_->Delete(R"(/api/model/(.+))", [](const HttpRequest &req, HttpResponse &res) {
         std::string filename = SanitizeFilename(req.matches[1].str());
 
         if (filename.empty()) {
@@ -891,7 +916,7 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
 
     // 获取 C++ 注册的可用模型类型列表（Python 全权模式下不再维护）
-    server_->Get("/api/models/registered", [](const HttpRequest& /*req*/, HttpResponse& res) {
+    server_->Get("/api/models/registered", [](const HttpRequest & /*req*/, HttpResponse &res) {
         json list = json::array();
         res.set_content(json_response(true, "ok", list), "application/json");
     });
@@ -901,7 +926,7 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
 
     // 获取工程列表
-    server_->Get("/api/python/projects", [](const HttpRequest& /*req*/, HttpResponse& res) {
+    server_->Get("/api/python/projects", [](const HttpRequest & /*req*/, HttpResponse &res) {
         namespace fs = std::filesystem;
         json projects = json::array();
 
@@ -911,7 +936,7 @@ void HttpApi::SetupRoutes() {
         try {
             bool has_user_project = false;
             if (fs::exists(PYTHON_PROJECT_DIR)) {
-                for (const auto& entry : fs::directory_iterator(PYTHON_PROJECT_DIR)) {
+                for (const auto &entry: fs::directory_iterator(PYTHON_PROJECT_DIR)) {
                     if (entry.is_regular_file() && entry.path().extension() == ".py") {
                         has_user_project = true;
                         break;
@@ -931,7 +956,7 @@ void HttpApi::SetupRoutes() {
 
         try {
             if (fs::exists(PYTHON_PROJECT_DIR)) {
-                for (const auto& entry : fs::directory_iterator(PYTHON_PROJECT_DIR)) {
+                for (const auto &entry: fs::directory_iterator(PYTHON_PROJECT_DIR)) {
                     if (!entry.is_regular_file() || entry.path().extension() != ".py") {
                         continue;
                     }
@@ -941,12 +966,13 @@ void HttpApi::SetupRoutes() {
                     projects.push_back(item);
                 }
             }
-        } catch (const std::exception& e) {
-            res.set_content(json_response(false, std::string("Failed to list projects: ") + e.what()), "application/json");
+        } catch (const std::exception &e) {
+            res.set_content(json_response(false, std::string("Failed to list projects: ") + e.what()),
+                            "application/json");
             return;
         }
 
-        std::sort(projects.begin(), projects.end(), [](const json& a, const json& b) {
+        std::sort(projects.begin(), projects.end(), [](const json &a, const json &b) {
             return a["name"].get<std::string>() < b["name"].get<std::string>();
         });
 
@@ -954,7 +980,7 @@ void HttpApi::SetupRoutes() {
     });
 
     // 新建工程
-    server_->Post("/api/python/projects/create", [](const HttpRequest& req, HttpResponse& res) {
+    server_->Post("/api/python/projects/create", [](const HttpRequest &req, HttpResponse &res) {
         try {
             json body = json::parse(req.body);
             std::string name = body.value("name", "");
@@ -991,13 +1017,13 @@ void HttpApi::SetupRoutes() {
             data["name"] = std::filesystem::path(filename).stem().string();
             data["filename"] = filename;
             res.set_content(json_response(true, "Project created", data), "application/json");
-        } catch (const json::exception& e) {
+        } catch (const json::exception &e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
         }
     });
 
     // 读取工程内容
-    server_->Get(R"(/api/python/projects/(.+))", [](const HttpRequest& req, HttpResponse& res) {
+    server_->Get(R"(/api/python/projects/(.+))", [](const HttpRequest &req, HttpResponse &res) {
         std::string name = EnsurePyExt(SanitizeFilename(req.matches[1].str()));
         if (name.empty()) {
             res.set_content(json_response(false, "Invalid project name"), "application/json");
@@ -1021,7 +1047,7 @@ void HttpApi::SetupRoutes() {
     });
 
     // 保存用户工程内容
-    server_->Post(R"(/api/python/projects/(.+))", [](const HttpRequest& req, HttpResponse& res) {
+    server_->Post(R"(/api/python/projects/(.+))", [](const HttpRequest &req, HttpResponse &res) {
         std::string name = EnsurePyExt(SanitizeFilename(req.matches[1].str()));
         if (name.empty()) {
             res.set_content(json_response(false, "Invalid project name"), "application/json");
@@ -1046,13 +1072,13 @@ void HttpApi::SetupRoutes() {
             ofs.close();
 
             res.set_content(json_response(true, "Project saved"), "application/json");
-        } catch (const json::exception& e) {
+        } catch (const json::exception &e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
         }
     });
 
     // 删除用户工程
-    server_->Delete(R"(/api/python/projects/(.+))", [](const HttpRequest& req, HttpResponse& res) {
+    server_->Delete(R"(/api/python/projects/(.+))", [](const HttpRequest &req, HttpResponse &res) {
         std::string name = EnsurePyExt(SanitizeFilename(req.matches[1].str()));
         if (name.empty()) {
             res.set_content(json_response(false, "Invalid project name"), "application/json");
@@ -1074,8 +1100,8 @@ void HttpApi::SetupRoutes() {
     // ========================================================================
 
     // 部署指定工程
-    server_->Post("/api/python/deploy", [](const HttpRequest& req, HttpResponse& res) {
-        auto* producer = GetVisionGProducer();
+    server_->Post("/api/python/deploy", [](const HttpRequest &req, HttpResponse &res) {
+        auto *producer = GetVisionGProducer();
         if (!producer) {
             res.set_content(json_response(false, "Not in VisionG mode"), "application/json");
             return;
@@ -1113,34 +1139,47 @@ void HttpApi::SetupRoutes() {
             json data;
             data["project"] = std::filesystem::path(name).stem().string();
             res.set_content(json_response(true, "Project deployed", data), "application/json");
-        } catch (const json::exception& e) {
+        } catch (const json::exception &e) {
             res.set_content(json_response(false, std::string("Invalid JSON: ") + e.what()), "application/json");
         }
     });
 
     // 获取当前 Python 代码
-    server_->Get("/api/python/code", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        res.set_content(json_response(false, "Deprecated: use /api/python/projects/* and /api/python/deploy"), "application/json");
+    server_->Get("/api/python/code", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        res.set_content(json_response(false, "Deprecated: use /api/python/projects/* and /api/python/deploy"),
+                        "application/json");
     });
 
     // 提交 / 热更新 Python 代码
-    server_->Post("/api/python/code", [](const HttpRequest& req, HttpResponse& res) {
-        (void)req;
-        res.set_content(json_response(false, "Deprecated: use /api/python/projects/* and /api/python/deploy"), "application/json");
+    server_->Post("/api/python/code", [](const HttpRequest &req, HttpResponse &res) {
+        (void) req;
+        res.set_content(json_response(false, "Deprecated: use /api/python/projects/* and /api/python/deploy"),
+                        "application/json");
     });
 
     // Python 模式状态
-    server_->Get("/api/python/status", [](const HttpRequest& /*req*/, HttpResponse& res) {
-        auto& mgr = media::MediaManager::Instance();
+    server_->Get("/api/python/status", [](const HttpRequest & /*req*/, HttpResponse &res) {
+        auto &mgr = media::MediaManager::Instance();
         bool is_visiong = (mgr.GetCurrentMode() == media::ProducerMode::VisionG);
 
         json data;
         data["active"] = is_visiong;
 
         if (is_visiong) {
-            auto* producer = GetVisionGProducer();
+            auto *producer = GetVisionGProducer();
             if (producer) {
+                const auto &cfg = producer->GetConfig();
                 data["last_error"] = producer->GetLastError();
+
+                // Phase B: 摄像头由 C++ 管理，不再是 Python 脚本内部创建
+                json cam_info;
+                cam_info["managed_by"] = "c++";
+                cam_info["width"] = cfg.ai_width;
+                cam_info["height"] = cfg.ai_height;
+                cam_info["format"] = "rgb";
+                data["camera"] = cam_info;
+
+                // 模型仍由 Python 脚本自行管理（init() 中加载）
                 data["model"]["path"] = "managed_by_python";
                 data["model"]["label_path"] = "managed_by_python";
                 data["model"]["type"] = "managed_by_python";
@@ -1151,9 +1190,10 @@ void HttpApi::SetupRoutes() {
     });
 
     // 切换 NPU 模型（Python 全权模式下不再支持）
-    server_->Post("/api/python/model", [](const HttpRequest& req, HttpResponse& res) {
-        (void)req;
-        res.set_content(json_response(false, "Deprecated: model selection is fully managed by Python project code"), "application/json");
+    server_->Post("/api/python/model", [](const HttpRequest &req, HttpResponse &res) {
+        (void) req;
+        res.set_content(json_response(false, "Deprecated: model selection is fully managed by Python project code"),
+                        "application/json");
     });
 
     LOG_INFO("HTTP API 路由配置完成");

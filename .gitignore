@@ -1,5 +1,6 @@
 .vscode/
 .idea/
+.zed/
 *.log
 .DS_Store
 
