@@ -6,13 +6,19 @@
  *
  * 核心设计思想：
  * - 外部接口统一，内部硬件资源分配逻辑完全独立且差异巨大
- * - 每个子类是一个独立的"黑盒"，内部包含各自的 VI/VPSS/VENC 配置
+ * - 每个子类是一个独立的"黑盒"，内部包含各自的配置与资源管理
  * - 运行时通过多态 (vtable) 动态分发到具体实现
  *
  * 子类实现：
  * - SimpleIPCProducer: 纯监控模式（VI -> VPSS -> VENC 硬件绑定，零拷贝）
- * - YoloProducer: YOLOv5 AI 推理模式（手动帧控制 + NPU 推理 + OSD）
- * - RetinaFaceProducer: RetinaFace 人脸检测模式
+ *   分辨率由 SimpleIPCConfig 决定，支持预设切换（需重新初始化）。
+ * - VisionGProducer: Python 驱动的 AI 视觉模式
+ *   Python 脚本全权负责摄像头（visiong.Camera）、帧循环、模型推理与分辨率；
+ *   C++ 负责 Python 解释器生命周期、VENC 编码和流媒体分发。
+ *
+ * 注意：分辨率相关配置（Resolution 枚举、ResolutionConfig 结构体、
+ * SimpleIPCConfig）定义在 simple_ipc/simple_ipc_config.h，
+ * 仅属于 SimpleIPC 模式，不在本共有接口中暴露。
  *
  * @author 好软，好温暖
  * @date 2026-02-12
@@ -47,66 +53,21 @@ namespace media {
     using StreamCallback = std::function<void(EncodedStreamPtr)>;
 
     // ============================================================================
-    // 分辨率配置
-    // ============================================================================
-
-    /**
-     * @brief 分辨率预设
-     */
-    enum class Resolution {
-        R_1080P, ///< 1920x1080 @ 30fps (IPC 默认)
-        R_720P, ///< 1280x720 @ 30fps
-        R_480P, ///< 720x480 @ 30fps (推理模式推荐)
-    };
-
-    /**
-     * @brief 分辨率配置
-     */
-    struct ResolutionConfig {
-        int width = 1920;
-        int height = 1080;
-        int framerate = 30;
-
-        static ResolutionConfig FromPreset(Resolution preset) {
-            switch (preset) {
-                case Resolution::R_1080P:
-                    return {1920, 1080, 30};
-                case Resolution::R_720P:
-                    return {1280, 720, 30};
-                case Resolution::R_480P:
-                    return {720, 480, 30};
-                default:
-                    return {1920, 1080, 30};
-            }
-        }
-    };
-
-    // ============================================================================
-    // 生产者配置
+    // 生产者通用配置
     // ============================================================================
 
     /**
      * @brief 媒体生产者通用配置
+     *
+     * 仅包含两种模式共同需要的参数。
+     * - SimpleIPC 专有的分辨率配置见 simple_ipc/simple_ipc_config.h 中的
+     *   SimpleIPCConfig。
+     * - VisionG 的摄像头分辨率由 Python 脚本通过 visiong.Camera(w, h, ...)
+     *   自行决定，C++ 层无需感知。
      */
     struct ProducerConfig {
-        Resolution resolution = Resolution::R_1080P;
         int framerate = 30;
         int bitrate_kbps = 10 * 1024; // 10 Mbps
-
-        // AI 相关（仅对 AI 模式有效）
-        // AI 摄像头采集尺寸（VisionG 模式，Phase B：由 C++ Camera 使用）
-        // 16:9 宽高比，与摄像头硬件输出匹配
-        int ai_width = 640;
-        int ai_height = 360;
-
-        /**
-         * @brief 获取分辨率配置
-         */
-        ResolutionConfig GetResolutionConfig() const {
-            auto cfg = ResolutionConfig::FromPreset(resolution);
-            cfg.framerate = framerate;
-            return cfg;
-        }
     };
 
     // ============================================================================
@@ -121,36 +82,17 @@ namespace media {
      *
      * 生命周期：
      * 1. 构造函数 - 创建实例（不分配硬件资源）
-     * 2. Init() - 初始化硬件资源（VI/VPSS/VENC）
+     * 2. Init() - 初始化硬件/软件资源
      * 3. RegisterStreamConsumer() - 注册编码流消费者
-     * 4. Start() - 启动视频流
+     *
+ 4. Start() - 启动视频流
      * 5. Stop() - 停止视频流
-     * 6. Deinit() - 释放硬件资源
+     * 6. Deinit() - 释放资源
      * 7. 析构函数 - 销毁实例
      *
-     * 使用方式：
-     * @code
-     * // 通过工厂方法创建具体实现
-     * auto producer = CreateSimpleIPCProducer(config);
-     *
-     * // 初始化
-     * if (producer->Init() != 0) {
-     *     // 处理错误
-     * }
-     *
-     * // 注册消费者
-     * producer->RegisterStreamConsumer("rtsp", rtsp_callback);
-     *
-     * // 启动
-     * producer->Start();
-     *
-     * // ... 运行中 ...
-     *
-     * // 停止并销毁
-     * producer->Stop();
-     * producer->Deinit();
-     * // producer 被销毁时自动释放资源
-     * @endcode
+     * 注意：分辨率等模式专有配置不在此接口中暴露。
+     * SimpleIPC 通过 SimpleIPCConfig 在构造时传入分辨率，
+     * 并通过 SimpleIPCProducer 的具体方法（非虚）进行切换。
      */
     class IMediaProducer {
     public:
@@ -161,18 +103,18 @@ namespace media {
         /**
          * @brief 初始化媒体生产者
          *
-         * 分配硬件资源（ISP/VI/VPSS/VENC），建立视频采集与编码链路。
+         * 分配资源，建立视频采集与编码链路。
+         * - SimpleIPC：分配 ISP/VI/VPSS/VENC 等硬件资源。
+         * - VisionG：初始化 Python 运行时，加载初始脚本。
          *
          * @return 0 成功，-1 失败
-         *
-         * @note 每个子类有独立的硬件配置逻辑
          */
         virtual int Init() = 0;
 
         /**
          * @brief 反初始化媒体生产者
          *
-         * 释放所有硬件资源，停止视频采集与编码。
+         * 释放所有资源，停止视频采集与编码。
          *
          * @return 0 成功
          */
@@ -182,6 +124,8 @@ namespace media {
          * @brief 启动视频流
          *
          * 开始视频采集、编码和分发。
+         * - SimpleIPC：启动 VENC fetch 线程。
+         * - VisionG：在后台线程中启动 Python 脚本的 run() 函数。
          *
          * @return true 成功，false 失败
          */
@@ -190,7 +134,9 @@ namespace media {
         /**
          * @brief 停止视频流
          *
-         * 停止视频采集和分发，但不释放硬件资源。
+         * 停止采集和分发，但不释放资源。
+         * - VisionG：向 Python 的 aipc.is_running() 发送停止信号，
+         *   等待 Python run() 函数返回。
          */
         virtual void Stop() = 0;
 
@@ -231,38 +177,12 @@ namespace media {
         virtual const char *GetTypeName() const = 0;
 
         /**
-         * @brief 获取当前配置
+         * @brief 获取当前通用配置
+         *
+         * 返回 framerate、bitrate_kbps 等共有参数。
+         * 模式专有配置（分辨率等）通过具体子类接口获取。
          */
         virtual const ProducerConfig &GetConfig() const = 0;
-
-        // ========== 可选配置接口 ==========
-
-        /**
-         * @brief 设置分辨率
-         *
-         * @param preset 分辨率预设
-         * @return 0 成功，-1 失败
-         *
-         * @note 需要在 Init() 之前调用，或者在 Stop() 后重新 Init()
-         * @note 默认实现返回 -1（不支持）
-         */
-        virtual int SetResolution(Resolution preset) {
-            (void) preset;
-            return -1;
-        }
-
-        /**
-         * @brief 设置帧率
-         *
-         * @param fps 帧率（1-30）
-         * @return 0 成功，-1 失败
-         *
-         * @note 默认实现返回 -1（不支持）
-         */
-        virtual int SetFrameRate(int fps) {
-            (void) fps;
-            return -1;
-        }
 
     protected:
         IMediaProducer() = default;
@@ -276,6 +196,9 @@ namespace media {
     // 工厂函数
     // ============================================================================
 
+    // 前向声明
+    struct SimpleIPCConfig;
+
     /**
      * @brief 创建纯 IPC 模式生产者
      *
@@ -284,18 +207,22 @@ namespace media {
      * - CPU 不参与数据流
      * - 最高性能，最低延迟
      *
-     * @param config 配置参数
+     * @param config SimpleIPC 配置（包含分辨率预设、帧率、码率）
      * @return 生产者实例
      */
-    std::unique_ptr<IMediaProducer> CreateSimpleIPCProducer(const ProducerConfig &config);
+    std::unique_ptr<IMediaProducer> CreateSimpleIPCProducer(const SimpleIPCConfig &config);
 
     /**
-     * @brief 创建 VisionG AI 推理模式生产者
+     * @brief 创建 VisionG Python 驱动模式生产者
      *
-     * 统一使用 PythonStrategy：C++ 负责 NPU 初始化和推理，Python 负责后处理绘制。
-     * 默认加载 YOLOv5 模型，用户可通过 Web 编辑器切换模型和自定义 Python 代码。
+     * Python 脚本全权负责：摄像头初始化（visiong.Camera）、帧循环、
+     * 模型推理与绘制，并通过 aipc.submit_frame() 将处理后的帧提交给
+     * C++ 进行 VENC 编码和流媒体分发。
      *
-     * @param config 配置参数
+     * C++ 负责：Python 解释器生命周期管理、Python 工程的加载与热更新、
+     * VENC 编码、流媒体分发（RTSP/WebRTC 等）。
+     *
+     * @param config 通用配置（framerate、bitrate_kbps）
      * @return 生产者实例
      */
     std::unique_ptr<IMediaProducer> CreateVisionGProducer(const ProducerConfig &config);
@@ -308,15 +235,9 @@ namespace media {
      * @brief 生产者模式枚举
      */
     enum class ProducerMode {
-        SimpleIPC, ///< 纯监控模式
-        VisionG ///< VisionG AI 推理模式
+        SimpleIPC, ///< 纯监控模式（高清、低延迟、零 CPU 拷贝）
+        VisionG ///< Python 驱动的 AI 视觉模式
     };
-
-
-    /**
-     * @brief 通过模式枚举创建生产者
-     */
-    std::unique_ptr<IMediaProducer> CreateProducer(ProducerMode mode, const ProducerConfig &config);
 
     /**
      * @brief 模式枚举转字符串

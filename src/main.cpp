@@ -253,7 +253,6 @@ int main(int argc, char *argv[]) {
     // 初始化 MediaManager（新的 Producer-based 架构）
     // ========================================================================
     media::ProducerConfig producer_config;
-    producer_config.resolution = media::Resolution::R_1080P;
     producer_config.framerate = 30;
     producer_config.bitrate_kbps = 10 * 1024; // 10 Mbps
 

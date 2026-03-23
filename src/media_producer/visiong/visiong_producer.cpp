@@ -1,26 +1,14 @@
 /**
  * @file visiong_producer.cpp
- * @brief VisionG Python 模式生产者 — 全量重写（Phase A + B + C）
+ * @brief VisionG Python 驱动模式生产者实现
  *
- * Phase A（稳定性止血）
- *   - LoadCode 修复：先清旧态 → exec → 验签名 → 调 init() → 成功后才提交
- *     任何阶段失败均携带分类前缀 [exec error] / [signature error] / [init error]
- *   - 旧 cleanup() 失败只记 WARN，不阻止新代码加载
- *   - impl_->runtime 改为 shared_ptr，FrameLoop 每次迭代持有局部引用
- *     → 彻底消除检查/使用分离窗口
- *   - UpdateCode 仅在极短区间持有 state_mutex_（取副本和写结果），
- *     LoadCode 本身由 PythonRuntime 内部 mutex + GIL 自行保护
+ * 架构：Python 脚本通过 visiong.Camera 自主驱动帧循环，
+ * 调用 aipc.submit_frame(frame) 将处理后的帧推送给 C++ 进行 VENC 编码和流媒体分发。
+ * C++ 仅负责 Python 解释器生命周期、工程加载/热更新、编码和分发。
  *
- * Phase B（架构对齐：C++ 主控采集）
- *   - Impl 新增 std::unique_ptr<Camera>，由 Init() 创建、Deinit() 释放
- *   - FrameLoop 变为：camera->snapshot() → runtime->ProcessFrame(frame) → encode
- *   - Python 契约从 process() 改为 process(frame)，脚本不再自建采集循环
- *   - kDefaultVisionGScript 更新为最简透传示例
- *
- * Phase C（吞吐与质量优化）
- *   - ComputeQualityFromFrame()：按帧像素数动态选质量档位，替代固定 75
- *   - 移除 process() 返回 None 时的 5ms sleep（camera 天然限速）
- *   - 每 300 帧记录一次统计日志
+ * aipc 模块（pybind11 embedded）：
+ *   aipc.submit_frame(frame)  将 ImageBuffer 推入 C++ 编码流水线
+ *   aipc.is_running()         返回 bool，供 Python 帧循环条件判断
  */
 
 #define LOG_TAG "VisionGProd"
@@ -31,19 +19,17 @@
 #include "common/logger.h"
 #include "common/media_buffer.h"
 
-#include "visiong/core/Camera.h"
 #include "visiong/core/ImageBuffer.h"
 #include "visiong/modules/VencManager.h"
 
 #include "rk_mpi_mb.h"
 #include "rk_mpi_sys.h"
 
-#include <algorithm>
-#include <chrono>
+#include <atomic>
 #include <cstring>
 #include <ctime>
+#include <functional>
 #include <mutex>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -161,19 +147,17 @@ namespace media {
         }
 
         // ============================================================================
-        // Phase C: dynamic quality
+        // Dynamic quality helper
         // ============================================================================
 
         /**
- * @brief 按
-帧像素数动态选编码质量档位
- *
- * 替代原先固定 quality=75 的策略：
- *   ≥ 1080p → 80   高码率，保画质
- *   ≥  720p → 75   中等码率
- *   ≥  480p → 70   低码率，节省带宽
- *    < 480p → 65   更小分辨率
- */
+         * @brief 按帧像素数动态选编码质量档位
+         *
+         *   >= 1080p → 80   高码率，保画质
+         *   >=  720p → 75   中等码率
+         *   >=  480p → 70   低码率，节省带宽
+         *    < 480p  → 65   更小分辨率
+         */
         static int ComputeQualityFromFrame(const ImageBuffer &frame) {
             const int pixels = frame.width * frame.height;
             if (pixels >= 1920 * 1080)
@@ -186,33 +170,45 @@ namespace media {
         }
 
         // ============================================================================
-        // Default Python script (Phase B contract: process(frame) -> frame | None)
+        // Default Python script (Python-driven passthrough)
         // ============================================================================
 
         static const char *kDefaultVisionGScript = R"PY(
-# Default VisionG project: passthrough
+# Default VisionG project: camera passthrough
 #
-# C++ 驱动帧循环：Camera.snapshot() -> process(frame) -> encode -> distribute
-# 本脚本直接透传输入帧；
-替换 process() 内容即可实现自定义推理与绘制。
+# Python 驱动架构：Python 自主创建摄像头、驱动帧循环，
+# 通过 aipc.submit_frame() 将帧送 C++ 进行 H.264 编码和流媒体分发。
 #
 # 契约：
-#   init()        可选，模块加载时调用一次（初始化模型等资源）
-#   process(frame) 必须，每帧调用；返回 ImageBuffer 或 None（跳过该帧）
-#   cleanup()     可选，模块卸载时调用一次（释放资源）
+#   init()      可选，初始化摄像头和模型等资源
+#   run()       必须，驱动帧循环直至 aipc.is_running() 返回 False
+#   cleanup()   可选，释放资源
+
+import visiong
+import aipc
+
+_cam = None
+
 
 def init():
-    pass
+    global _cam
+    _cam = visiong.Camera(640, 360, format='rgb')
+    _cam.skip(8)
 
 
-def process(frame):
-    # Passthrough: return the frame as-is.
-    # Replace with your own inference / drawing logic.
-    return frame
+def run():
+    while aipc.is_running():
+        frame = _cam.snapshot()
+        if not frame.is_valid():
+            continue
+        aipc.submit_frame(frame)
 
 
 def cleanup():
-    pass
+    global _cam
+    if _cam:
+        _cam.release()
+        _cam = None
 )PY";
 
         // ============================================================================
@@ -221,6 +217,8 @@ def cleanup():
 
         void EnsureEmbeddedPythonReady() {
             static std::once_flag init_once;
+
+            // 只会执行一次lambda
             std::call_once(init_once, []() {
                 LOG_INFO("[PythonInit] initialize_interpreter begin");
                 py::initialize_interpreter(false, 0, nullptr, false);
@@ -236,35 +234,57 @@ def cleanup():
         }
 
         // ============================================================================
-        // PythonRuntime — Phase A + B
+        // aipc pybind11 嵌入模块全局状态
+        // ============================================================================
+        static std::mutex g_aipc_mutex;
+        static std::function<void(const ImageBuffer &)> g_submit_frame_cb;
+        static std::atomic<bool> g_is_running{false};
+
+        PYBIND11_EMBEDDED_MODULE(aipc, m) {
+            m.doc() = "aipc: C++ 编码接口，供 VisionG Python 脚本调用";
+            m.def(
+                    "submit_frame",
+                    [](const ImageBuffer &frame) {
+                        std::function<void(const ImageBuffer &)> cb;
+                        {
+                            std::lock_guard<std::mutex> lock(g_aipc_mutex);
+                            cb = g_submit_frame_cb;
+                        }
+                        if (cb) {
+                            cb(frame);
+                        }
+                    },
+                    py::arg("frame"), "将处理后的 ImageBuffer 推入 C++ VENC 编码队列。");
+            m.def(
+                    "is_running", []() -> bool { return g_is_running.load(); },
+                    "返回 True 表示生产者正在运行，False 表示应退出帧循环。");
+        }
+
+        // ============================================================================
+        // PythonRuntime
         // ============================================================================
 
         /**
          * @class PythonRuntime
-         * @brief 管理单个 Python 脚本的生命周期与帧处理
+         * @brief 管理单个 Python 脚本的生命周期
          *
-         * Phase A 修复要点
-         * ────────────────
-         * 1. LoadCode 操作序：
-         *      旧 cleanup()（尽力）→ 清空旧 state → exec 新代码 →
-         *      验签名 → 调新 init()（失败则回滚+回调新 cleanup） →
-         *      全部通过后才提交到成员变量。
-         * 2. 错误分三类：[exec error] / [signature error] / [init error]
-         * 3. 旧 cleanup() 抛异常仅记 WARN，不阻断新代码加载。
+         * LoadCode 操作序：
+         *   旧 cleanup()（尽力）→ 清空旧 state → exec 新代码 →
+         *   验签名（run 必须存在）→ 调新 init()（失败则回滚）→
+         *   全部通过后才提交到成员变量。
          *
-         * Phase B 修复要点
-         * ────────────────
-         * ProcessFrame(const ImageBuffer&)：接收 C++ 采集的帧，
-         * 通过 pybind11 传给 Python 的 process(frame)，返回处理后的帧。
+         * 错误分三类：[exec error] / [signature error] / [init error]
          */
         class PythonRuntime {
         public:
             PythonRuntime() {
                 LOG_INFO("[PythonRuntime] ctor begin");
+
+                // 这个函数调用了 std::call_once，确保 Python 解释器在任何 PythonRuntime 实例创建前就已初始化，因此只会执行一次。
                 EnsureEmbeddedPythonReady();
                 py::gil_scoped_acquire gil;
                 globals_ = py::dict();
-                process_fn_ = py::none();
+                run_fn_ = py::none();
                 init_fn_ = py::none();
                 cleanup_fn_ = py::none();
                 LOG_INFO("[PythonRuntime] ctor done");
@@ -277,7 +297,7 @@ def cleanup():
             PythonRuntime &operator=(const PythonRuntime &) = delete;
 
             // ------------------------------------------------------------------
-            // LoadCode（Phase A 重写）
+            // LoadCode
             // ------------------------------------------------------------------
 
             /**
@@ -306,7 +326,7 @@ def cleanup():
                 // 无论旧 cleanup 成败，立即清空旧 state，避免残留
                 cleanup_fn_ = py::none();
                 init_fn_ = py::none();
-                process_fn_ = py::none();
+                run_fn_ = py::none();
                 globals_ = py::dict();
 
                 // ── Step 2: exec 新代码 ──────────────────────────────────────
@@ -322,10 +342,10 @@ def cleanup():
                 }
                 LOG_INFO("[LoadCode] exec done");
 
-                // ── Step 3: 验签名 ───────────────────────────────────────────
-                py::object new_process = new_globals.contains("process") ? new_globals["process"] : py::none();
-                if (new_process.is_none() || !py::isinstance<py::function>(new_process)) {
-                    last_error_ = "[signature error] Python code must define callable: process(frame)";
+                // ── Step 3: 验签名（run 必须存在） ───────────────────────────
+                py::object new_run = new_globals.contains("run") ? new_globals["run"] : py::none();
+                if (new_run.is_none() || !py::isinstance<py::function>(new_run)) {
+                    last_error_ = "[signature error] Python code must define callable: run()";
                     LOG_ERROR("[LoadCode] {}", last_error_);
                     return last_error_;
                 }
@@ -355,7 +375,7 @@ def cleanup():
 
                 // ── Step 5: 提交新 state ─────────────────────────────────────
                 globals_ = std::move(new_globals);
-                process_fn_ = std::move(new_process);
+                run_fn_ = std::move(new_run);
                 init_fn_ = std::move(new_init);
                 cleanup_fn_ = std::move(new_cleanup);
                 code_ = code;
@@ -366,49 +386,30 @@ def cleanup():
             }
 
             // ------------------------------------------------------------------
-            // ProcessFrame（Phase B：接受 C++ 提供的输入帧）
+            // CallRun
             // ------------------------------------------------------------------
 
-            /**
-             * @brief 调用 Python process(frame)
-             *
-             * @param input_frame  由 Camera::snapshot() 获取的输入帧
-             * @return 处理后的 ImageBuffer；Python 返回 None 或出错则 std::nullopt
-             */
-            std::optional<ImageBuffer> ProcessFrame(const ImageBuffer &input_frame) {
-                std::lock_guard<std::mutex> lock(mutex_);
+            void CallRun() {
                 py::gil_scoped_acquire gil;
-
+                py::object fn;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    fn = run_fn_;
+                }
+                if (fn.is_none()) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    last_error_ = "run() not ready";
+                    LOG_ERROR("[CallRun] {}", last_error_);
+                    return;
+                }
+                LOG_INFO("[CallRun] calling Python run()");
                 try {
-                    if (process_fn_.is_none()) {
-                        last_error_ = "process() not ready";
-                        return std::nullopt;
-                    }
-
-                    // pybind11 自动将 C++ ImageBuffer 包装为 Python 对象传入
-                    py::object result = process_fn_(input_frame);
-
-                    if (result.is_none()) {
-                        return std::nullopt;
-                    }
-
-                    if (!py::isinstance<ImageBuffer>(result)) {
-                        last_error_ = "process(frame) must return visiong.ImageBuffer or None";
-                        LOG_WARN("[ProcessFrame] {}", last_error_);
-                        return std::nullopt;
-                    }
-
-                    ImageBuffer out = result.cast<ImageBuffer>();
-                    if (!out.is_valid()) {
-                        return std::nullopt;
-                    }
-
-                    return out;
-
+                    fn();
+                    LOG_INFO("[CallRun] Python run() returned normally");
                 } catch (const std::exception &e) {
+                    std::lock_guard<std::mutex> lock(mutex_);
                     last_error_ = e.what();
-                    LOG_WARN("[ProcessFrame] exception: {}", last_error_);
-                    return std::nullopt;
+                    LOG_WARN("[CallRun] Python run() threw: {}", last_error_);
                 }
             }
 
@@ -434,7 +435,7 @@ def cleanup():
                 }
                 cleanup_fn_ = py::none();
                 init_fn_ = py::none();
-                process_fn_ = py::none();
+                run_fn_ = py::none();
                 globals_ = py::dict();
             }
 
@@ -442,7 +443,7 @@ def cleanup():
             mutable std::mutex mutex_;
 
             py::object globals_;
-            py::object process_fn_;
+            py::object run_fn_;
             py::object init_fn_;
             py::object cleanup_fn_;
 
@@ -454,23 +455,12 @@ def cleanup():
 
     // ============================================================================
     // VisionGProducer::Impl
-    // Phase A: runtime is shared_ptr so FrameLoop holds a safe local reference.
-    // Phase B: camera is owned by C++; Python scripts no longer create cameras.
     // ============================================================================
 
     struct VisionGProducer::Impl {
         SerialStreamDispatcher dispatcher;
-
-        // Phase A: shared_ptr allows FrameLoop and UpdateCode to coexist safely.
-        // FrameLoop captures a local copy each iteration; even if Deinit resets
-        // the pointer concurrently, the PythonRuntime object is not destroyed
-        // until the last reference is released.
+        // runtime は shared_ptr なので UpdateCode と RunPythonScript が安全に共存できる
         std::shared_ptr<PythonRuntime> runtime;
-
-        // Phase B: C++ owns the camera; lifecycle managed by Init/Deinit.
-        // Python scripts receive each frame via process(frame) instead of
-        // creating their own capture loop.
-        std::unique_ptr<Camera> camera;
     };
 
     // ============================================================================
@@ -500,31 +490,18 @@ def cleanup():
             return 0;
         }
 
-        const int cam_w = config_.ai_width;
-        const int cam_h = config_.ai_height;
+        LOG_INFO("Initializing VisionG producer (Python-driven: Python owns camera + frame loop)");
 
-        LOG_INFO("Initializing VisionG producer "
-                 "(C++ camera {}x{} rgb + Python processing pipeline)",
-                 cam_w, cam_h);
-
-        // ── 创建 Python 运行时 ───────────────────────────────────────────
+        // ── 创建 Python 运行时 ───────────────────────────────────────────────────
         impl_->runtime = std::make_shared<PythonRuntime>();
 
-        // ── 创建并初始化摄像头（Phase B）────────────────────────────────
-        auto camera = std::make_unique<Camera>(cam_w, cam_h, "rgb");
-        if (!camera->is_initialized()) {
-            LOG_ERROR("Camera init failed ({}x{} rgb). "
-                      "Check ISP/VI hardware availability.",
-                      cam_w, cam_h);
-            impl_->runtime.reset();
-            return -1;
+        // ── 注册 aipc.submit_frame 回调（编码并分发） ───────────────────────────
+        {
+            std::lock_guard<std::mutex> lock(g_aipc_mutex);
+            g_submit_frame_cb = [this](const ImageBuffer &frame) { EncodeAndDispatch(frame); };
         }
-        // 跳过初始帧，等待 ISP AE/AWB 稳定
-        camera->skip(8);
-        impl_->camera = std::move(camera);
-        LOG_INFO("[Init] camera ready: {}x{} rgb", cam_w, cam_h);
 
-        // ── 加载初始 Python 代码（不持 state_mutex_ 期间调 LoadCode）────
+        // ── 加载初始 Python 脚本 ─────────────────────────────────────────────────
         std::string code_to_load;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
@@ -533,13 +510,16 @@ def cleanup():
 
         const std::string err = impl_->runtime->LoadCode(code_to_load);
         if (!err.empty()) {
-            LOG_ERROR("[Init] Failed to load initial Python code: {}", err);
+            LOG_ERROR("[Init] Failed to load initial Python script: {}", err);
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
                 last_error_ = err;
             }
-            impl_->camera.reset();
             impl_->runtime.reset();
+            {
+                std::lock_guard<std::mutex> lock(g_aipc_mutex);
+                g_submit_frame_cb = nullptr;
+            }
             return -1;
         }
 
@@ -552,7 +532,7 @@ def cleanup():
         }
 
         initialized_.store(true);
-        LOG_INFO("VisionG producer initialized");
+        LOG_INFO("VisionG producer initialized (Python will drive camera + frame loop via aipc)");
         return 0;
     }
 
@@ -561,26 +541,19 @@ def cleanup():
             return 0;
         }
 
-        // Stop() 内部 join frame_thread_，之后 FrameLoop 一定已退出
         Stop();
 
+        // 清空 aipc 回调，防止 Python 脚本退出后残留调用
         {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-
-            // 先 Shutdown Python（执行旧 cleanup），再 reset
-            if (impl_->runtime) {
-                impl_->runtime->Shutdown();
-                impl_->runtime.reset();
-            }
-
-            // 释放摄像头
-            if (impl_->camera) {
-                impl_->camera->release();
-                impl_->camera.reset();
-            }
+            std::lock_guard<std::mutex> lock(g_aipc_mutex);
+            g_submit_frame_cb = nullptr;
         }
+        g_is_running.store(false);
 
-        VencManager::getInstance().releaseVencIfUnused();
+        if (impl_->runtime) {
+            impl_->runtime->Shutdown();
+            impl_->runtime.reset();
+        }
 
         initialized_.store(false);
         LOG_INFO("VisionG producer deinitialized");
@@ -589,16 +562,18 @@ def cleanup():
 
     bool VisionGProducer::Start() {
         if (!initialized_.load()) {
-            LOG_ERROR("VisionG producer not initialized");
+            LOG_ERROR("[VisionG] Not initialized");
             return false;
         }
         if (running_.load()) {
+            LOG_WARN("[VisionG] Already running");
             return true;
         }
 
+        g_is_running.store(true);
         running_.store(true);
-        frame_thread_ = std::thread(&VisionGProducer::FrameLoop, this);
-        LOG_INFO("VisionG producer started");
+        script_thread_ = std::thread(&VisionGProducer::RunPythonScript, this);
+        LOG_INFO("[VisionG] started: Python script thread launched");
         return true;
     }
 
@@ -607,12 +582,15 @@ def cleanup():
             return;
         }
 
+        LOG_INFO("[VisionG] Stop: signaling Python run() to exit via aipc.is_running() = false");
+        g_is_running.store(false);
         running_.store(false);
-        if (frame_thread_.joinable()) {
-            frame_thread_.join();
+
+        if (script_thread_.joinable()) {
+            script_thread_.join();
         }
 
-        LOG_INFO("VisionG producer stopped");
+        LOG_INFO("[VisionG] stopped (frames={}, encoded={})", frame_count_.load(), encode_count_.load());
     }
 
     // ============================================================================
@@ -628,21 +606,7 @@ def cleanup():
     void VisionGProducer::ClearStreamConsumers() { impl_->dispatcher.ClearConsumers(); }
 
     // ============================================================================
-    // 配置接口
-    // ============================================================================
-
-    int VisionGProducer::SetResolution(Resolution preset) {
-        config_.resolution = preset;
-        return 0;
-    }
-
-    int VisionGProducer::SetFrameRate(int fps) {
-        config_.framerate = std::max(1, std::min(fps, 30));
-        return 0;
-    }
-
-    // ============================================================================
-    // Python 代码管理（Phase A 修复）
+    // Python 代码管理
     // ============================================================================
 
     std::string VisionGProducer::GetCurrentCode() const {
@@ -655,136 +619,111 @@ def cleanup():
         return last_error_;
     }
 
-    /**
-     * @brief 热更新 Python 代码（Phase A 修复）
-     *
-     * 修复原始实现的两个问题：
-     *  1. 原实现在持有 state_mutex_ 期间调用 LoadCode()，LoadCode 内又持有
-     *     runtime->mutex_ + GIL；而 FrameLoop 持有 runtime->mutex_ 时若触发
-     *     Deinit/Stop 请求 state_mutex_，可形成长时阻塞窗口。
-     *  2. 原实现 init() 调用在赋值之后，init() 失败时新 cleanup_fn_ 已写入，
-     *     下次 LoadCode 会对未完全初始化的资源调 cleanup，可导致崩溃。
-     *
-     * 修复方式：仅在极短区间持有 state_mutex_（取 runtime 副本 / 写结果），
-     * LoadCode 本身由 PythonRuntime 内部 mutex + GIL 自行序列化。
-     */
     std::string VisionGProducer::UpdateCode(const std::string &code) {
-        // ── Step 1: 在短临界区内获取 runtime 的 shared_ptr 副本 ──────────
+        // 1. 停止当前运行的脚本（向 aipc.is_running() 发 false，等待 run() 返回）
+        bool was_running = running_.load();
+        if (was_running) {
+            LOG_INFO("[UpdateCode] stopping running script before reload");
+            g_is_running.store(false);
+            running_.store(false);
+            if (script_thread_.joinable()) {
+                script_thread_.join();
+            }
+        }
+
+        // 2. 获取运行时并加载新代码
         std::shared_ptr<PythonRuntime> runtime;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            if (!impl_ || !impl_->runtime) {
-                last_error_ = "Python runtime not initialized";
-                return last_error_;
-            }
             runtime = impl_->runtime;
         }
 
-        // ── Step 2: 在 state_mutex_ 之外调用 LoadCode ────────────────────
-        // LoadCode 内部持有 PythonRuntime::mutex_ + GIL，与 FrameLoop 的
-        // ProcessFrame() 自然序列化，不需要 state_mutex_ 参与。
+        if (!runtime) {
+            return "[error] Runtime not initialized";
+        }
+
         const std::string err = runtime->LoadCode(code);
 
-        // ── Step 3: 写回结果 ─────────────────────────────────────────────
-        {
+        if (err.empty()) {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            if (err.empty()) {
-                current_code_ = code;
-                last_error_.clear();
-            } else {
-                last_error_ = err;
-            }
+            current_code_ = code;
+            last_error_.clear();
+        } else {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            last_error_ = err;
+        }
+
+        // 3. 若之前在运行且加载成功，重新启动脚本线程
+        if (was_running && err.empty()) {
+            LOG_INFO("[UpdateCode] restarting script thread with new code");
+            g_is_running.store(true);
+            running_.store(true);
+            script_thread_ = std::thread(&VisionGProducer::RunPythonScript, this);
         }
 
         return err;
     }
 
     // ============================================================================
-    // FrameLoop（Phase A + B + C）
+    // EncodeAndDispatch（由 aipc.submit_frame 回调调用）
     // ============================================================================
 
-    /**
-     * @brief 帧处理主循环
-     *
-     * 流水线：camera->snapshot() → runtime->ProcessFrame(frame) → encode → dispatch
-     *
-     * Phase A：每次迭代持有 runtime 的 shared_ptr 局部副本，消除 TOCTOU。
-     * Phase B：C++ Camera 提供原始帧，Python 只做推理与绘制。
-     * Phase C：动态质量策略 + 每 300 帧记录统计日志。
-     */
-    void VisionGProducer::FrameLoop() {
+    void VisionGProducer::EncodeAndDispatch(const ImageBuffer &frame) {
+        auto &venc = VencManager::getInstance();
+
+        const int quality = ComputeQualityFromFrame(frame);
+        VencEncodedPacket packet;
+        const bool encoded =
+                venc.encodeToVideo(frame, VencCodec::H264, quality, packet, config_.framerate, VencRcMode::CBR);
+
+        if (!encoded) {
+            LOG_WARN("[VisionG] encode failed (quality={}, size={}x{})", quality, frame.width, frame.height);
+            return;
+        }
+
+        auto stream = ConvertPacketToEncodedStream(packet);
+        if (!stream) {
+            return;
+        }
+
+        ++frame_count_;
+        ++encode_count_;
+        impl_->dispatcher.DispatchFrame(stream);
+
+        const uint64_t fc = frame_count_.load();
+        if (fc > 0 && fc % 300 == 0) {
+            LOG_INFO("[VisionG] stats: frames={}, encoded={}", fc, encode_count_.load());
+        }
+    }
+
+    // ============================================================================
+    // RunPythonScript（后台线程入口）
+    // ============================================================================
+
+    void VisionGProducer::RunPythonScript() {
         auto &venc = VencManager::getInstance();
         VencManager::ScopedUser user(venc);
 
-        // Camera 在整个 FrameLoop 生命周期内不变（Deinit 必先 join 本线程）
-        Camera *const camera = impl_->camera.get();
+        LOG_INFO("[RunPythonScript] started");
 
-        LOG_INFO("[FrameLoop] started (camera: {}x{})", camera ? camera->target_width() : 0,
-                 camera ? camera->target_height() : 0);
-
-        while (running_.load()) {
-
-            // ── Phase A: 每次迭代持有 runtime shared_ptr 副本 ────────────
-            std::shared_ptr<PythonRuntime> runtime;
-            {
-                std::lock_guard<std::mutex> lock(state_mutex_);
-                runtime = impl_->runtime;
-            }
-
-            if (!runtime || !camera) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                continue;
-            }
-
-            // ── Phase B: C++ 采集帧 ──────────────────────────────────────
-            // camera->snapshot() 在 ISP/VI 层阻塞直到新帧就绪，
-            // 天然限速到摄像头帧率，不需要额外 sleep。
-            ImageBuffer frame = camera->snapshot();
-            if (!frame.is_valid()) {
-                LOG_WARN("[FrameLoop] camera->snapshot() returned invalid frame");
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                continue;
-            }
-
-            // ── Phase B: 传帧给 Python process(frame) ────────────────────
-            auto out_opt = runtime->ProcessFrame(frame);
-            if (!out_opt.has_value()) {
-                // Python 返回 None：跳过本帧（无需 sleep，摄像头已限速）
-                continue;
-            }
-
-            // ── Phase C: 动态质量 + 编码 ─────────────────────────────────
-            const int quality = ComputeQualityFromFrame(*out_opt);
-
-            VencEncodedPacket packet;
-            const bool encoded =
-                    venc.encodeToVideo(*out_opt, VencCodec::H264, quality, packet, config_.framerate, VencRcMode::CBR);
-
-            if (!encoded) {
-                LOG_WARN("[FrameLoop] encode failed (quality={}, size={}x{})", quality, out_opt->width,
-                         out_opt->height);
-                continue;
-            }
-
-            auto stream = ConvertPacketToEncodedStream(packet);
-            if (!stream) {
-                continue;
-            }
-
-            ++frame_count_;
-            ++encode_count_;
-            impl_->dispatcher.DispatchFrame(stream);
-
-            // ── Phase C: 定期统计日志 ─────────────────────────────────────
-            const uint64_t fc = frame_count_.load();
-            if (fc > 0 && fc % 300 == 0) {
-                LOG_INFO("[FrameLoop] stats: frames={}, encoded={}, "
-                         "last_quality={}, out={}x{}",
-                         fc, encode_count_.load(), quality, out_opt->width, out_opt->height);
-            }
+        std::shared_ptr<PythonRuntime> runtime;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            runtime = impl_->runtime;
         }
 
-        LOG_INFO("[FrameLoop] exited (frames={}, encoded={})", frame_count_.load(), encode_count_.load());
+        if (!runtime) {
+            LOG_ERROR("[RunPythonScript] No runtime available");
+            return;
+        }
+
+        // 调用 Python 脚本的 run() 函数（阻塞直到 Python run() 返回）
+        // Python 脚本通过 aipc.is_running() 判断是否继续循环，
+        // 通过 aipc.submit_frame(frame) 将帧推入 C++ 编码。
+        runtime->CallRun();
+
+        LOG_INFO("[RunPythonScript] Python run() exited (frames={}, encoded={})", frame_count_.load(),
+                 encode_count_.load());
     }
 
     // ============================================================================

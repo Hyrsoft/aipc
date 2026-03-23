@@ -18,6 +18,7 @@
 #include "media_distribution/rtsp/rtsp_service.h"
 #include "media_distribution/webrtc/webrtc_service.h"
 #include "media_producer/media_manager.h"
+#include "media_producer/simple_ipc/simple_ipc_config.h"
 #include "media_producer/visiong/visiong_producer.h"
 
 #include <algorithm>
@@ -33,36 +34,30 @@ static const std::string MODEL_DIR = "../model";
 static const std::string PYTHON_PROJECT_DIR = "../python_projects";
 static const size_t MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
 
-// Phase B 契约：C++ 驱动帧循环，Python 只负责推理与绘制。
-// process(frame) 接收 C++ Camera::snapshot() 的帧，返回处理后的 ImageBuffer 或 None。
 static const char *DEFAULT_YOLOV5_PROJECT_CODE = R"PY(# YOLOv5 目标检测工程
 #
-# Phase B 契约：C++ 驱动帧循环，Python 只负责推理与绘制。
-#   init()         可选，加载模型等一次性资源
-#   process(frame) 必须，每帧调用；返回 ImageBuffer 或 None（跳过该帧）
-#   cleanup()      可选，释放资源
+# Python 驱动架构：Python 自主创建摄像头、驱动帧循环、加载模型，
+# 通过 aipc.submit_frame() 将处理后的帧送 C++ 进行 H.264 编码和流媒体分发。
 #
-# 不再需要在 init() 中创建 Camera，也不需要在 process() 中调用 snapshot()。
-# C++ 已经完成采集，frame 是当前帧的 ImageBuffer（rgb 格式）。
+#   init()      可选，初始化摄像头和模型等资源
+#   run()       必须，驱动帧循环直至 aipc.is_running() 返回 False
+#   cleanup()   可选，释放资源
 
 import visiong
+import aipc
 
 MODEL_PATH = "../model/yolov5.rknn"
 LABEL_PATH = "../model/coco_80_labels_list.txt"
-
-# 必须与 C++ ProducerConfig.ai_width / ai_height 以及摄像头格式一致
-CAM_FORMAT = "rgb"
-
 BOX_THRESHOLD = 0.25
 NMS_THRESHOLD = 0.45
 
+_cam = None
 _detector = None
 
 
 def init():
-    global _detector
+    global _cam, _detector
 
-    # 可选：提升 NPU 时钟以降低推理延迟
     try:
         visiong.NpuClock().set_rate_mhz(
             420,
@@ -71,6 +66,9 @@ def init():
         )
     except Exception as e:
         print("[YOLOV5][WARN] NPU clock setup skipped:", e)
+
+    _cam = visiong.Camera(640, 360, format='rgb')
+    _cam.skip(8)
 
     _detector = visiong.NPU(
         "yolov5",
@@ -82,37 +80,36 @@ def init():
     print("[YOLOV5][INFO] detector loaded:", MODEL_PATH)
 
 
-def process(frame):
-    """
-    C++ 每帧调用本函数。
-    :param frame: visiong.ImageBuffer，rgb 格式，尺寸由 C++ ProducerConfig 决定
-    :return: 绘制了检测框的 ImageBuffer（bgr888），或 None 表示跳过本帧
-    """
-    if _detector is None or not frame.is_valid():
-        return None
+def run():
+    while aipc.is_running():
+        frame = _cam.snapshot()
+        if not frame.is_valid():
+            continue
 
-    # 转为 BGR 用于绘制（infer 仍使用原始 rgb 帧以匹配模型输入格式）
-    out = frame.to_format("bgr888")
+        out = frame.to_format("bgr888")
 
-    for result in _detector.infer(frame, model_format=CAM_FORMAT):
-        x, y, w, h = result.box
-        out.draw_rectangle(x, y, w, h, color=(0, 255, 0), thickness=2)
-        out.draw_string(
-            x,
-            max(0, y - 20),
-            f"{result.label} {result.score:.2f}",
-            color=(0, 255, 0),
-            scale=0.9,
-            thickness=2,
-        )
+        for result in _detector.infer(frame, model_format="rgb"):
+            x, y, w, h = result.box
+            out.draw_rectangle(x, y, w, h, color=(0, 255, 0), thickness=2)
+            out.draw_string(
+                x,
+                max(0, y - 20),
+                f"{result.label} {result.score:.2f}",
+                color=(0, 255, 0),
+                scale=0.9,
+                thickness=2,
+            )
 
-    return out
+        aipc.submit_frame(out)
 
 
 def cleanup():
-    global _detector
+    global _cam, _detector
+    if _cam:
+        _cam.release()
+        _cam = None
     _detector = None
-    print("[YOLOV5][INFO] detector released")
+    print("[YOLOV5][INFO] resources released")
 )PY";
 
 // ============================================================================
@@ -696,7 +693,9 @@ void HttpApi::SetupRoutes() {
         auto &mgr = media::MediaManager::Instance();
         auto mode = mgr.GetCurrentMode();
         auto cfg = mgr.GetConfig();
-        auto res_cfg = cfg.GetResolutionConfig();
+        auto sipc_res = mgr.GetSIPCResolution();
+        auto res_cfg = media::simple_ipc::ResolutionConfig::FromPreset(sipc_res);
+        res_cfg.framerate = cfg.framerate;
 
         json data;
 
@@ -709,9 +708,9 @@ void HttpApi::SetupRoutes() {
 
         // resolution 信息
         json resolution;
-        if (cfg.resolution == media::Resolution::R_1080P) {
+        if (sipc_res == media::simple_ipc::Resolution::R_1080P) {
             resolution["preset"] = "1080p";
-        } else if (cfg.resolution == media::Resolution::R_720P) {
+        } else if (sipc_res == media::simple_ipc::Resolution::R_720P) {
             resolution["preset"] = "720p";
         } else {
             resolution["preset"] = "480p";
@@ -730,15 +729,9 @@ void HttpApi::SetupRoutes() {
             data["available_resolutions"] = json::array({"1080p", "720p", "480p"});
             data["note"] = "";
         } else {
-            // Phase B: camera dimensions are controlled by C++ ProducerConfig (ai_width/ai_height)
-            auto vg_cfg = mgr.GetConfig();
+            // VisionG: 摄像头由 Python 脚本通过 visiong.Camera(...) 自行管理
             data["available_resolutions"] = json::array();
-            data["note"] = "Camera resolution is controlled by C++ ProducerConfig (ai_width/ai_height)";
-            json cam_info;
-            cam_info["width"] = vg_cfg.ai_width;
-            cam_info["height"] = vg_cfg.ai_height;
-            cam_info["format"] = "rgb";
-            data["camera"] = cam_info;
+            data["note"] = "Camera and resolution are fully managed by the Python project script (visiong.Camera).";
         }
 
         res.set_content(json_response(true, "ok", data), "application/json");
@@ -752,13 +745,13 @@ void HttpApi::SetupRoutes() {
             LOG_INFO("Resolution switch requested: {}", preset_str);
 
             // 解析分辨率预设
-            media::Resolution target_res;
+            media::simple_ipc::Resolution target_res;
             if (preset_str == "720p") {
-                target_res = media::Resolution::R_720P;
+                target_res = media::simple_ipc::Resolution::R_720P;
             } else if (preset_str == "480p") {
-                target_res = media::Resolution::R_480P;
+                target_res = media::simple_ipc::Resolution::R_480P;
             } else {
-                target_res = media::Resolution::R_1080P;
+                target_res = media::simple_ipc::Resolution::R_1080P;
             }
 
             auto &mgr = media::MediaManager::Instance();
@@ -766,15 +759,15 @@ void HttpApi::SetupRoutes() {
             // Phase B: VisionG 模式下摄像头尺寸由 C++ ProducerConfig 管理，
             // 不支持通过此接口动态切换（需重新 Init 才能生效）
             if (mgr.GetCurrentMode() != media::ProducerMode::SimpleIPC) {
-                res.set_content(
-                        json_response(false, "In VisionG mode camera resolution is set via ProducerConfig "
-                                             "(ai_width/ai_height); switch back to SimpleIPC to use this endpoint"),
-                        "application/json");
+                res.set_content(json_response(false,
+                                              "In VisionG mode camera resolution is set via ProducerConfig "
+                                              "(ai_width/ai_height); switch back to SimpleIPC to use this endpoint"),
+                                "application/json");
                 return;
             }
 
-            if (mgr.GetConfig().resolution == target_res) {
-                auto res_cfg = media::ResolutionConfig::FromPreset(target_res);
+            if (mgr.GetSIPCResolution() == target_res) {
+                auto res_cfg = media::simple_ipc::ResolutionConfig::FromPreset(target_res);
                 json data;
                 data["resolution"] = preset_str;
                 data["width"] = res_cfg.width;
@@ -789,7 +782,7 @@ void HttpApi::SetupRoutes() {
                 return;
             }
 
-            auto res_cfg = media::ResolutionConfig::FromPreset(target_res);
+            auto res_cfg = media::simple_ipc::ResolutionConfig::FromPreset(target_res);
             json data;
             data["resolution"] = preset_str;
             data["width"] = res_cfg.width;
@@ -1168,15 +1161,12 @@ void HttpApi::SetupRoutes() {
         if (is_visiong) {
             auto *producer = GetVisionGProducer();
             if (producer) {
-                const auto &cfg = producer->GetConfig();
                 data["last_error"] = producer->GetLastError();
 
-                // Phase B: 摄像头由 C++ 管理，不再是 Python 脚本内部创建
+                // Python 驱动架构：摄像头由 Python 脚本通过 visiong.Camera(...) 自行管理
                 json cam_info;
-                cam_info["managed_by"] = "c++";
-                cam_info["width"] = cfg.ai_width;
-                cam_info["height"] = cfg.ai_height;
-                cam_info["format"] = "rgb";
+                cam_info["managed_by"] = "python";
+                cam_info["note"] = "Camera is created and managed by the Python project script via visiong.Camera(...)";
                 data["camera"] = cam_info;
 
                 // 模型仍由 Python 脚本自行管理（init() 中加载）
