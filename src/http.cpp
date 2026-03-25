@@ -996,7 +996,13 @@ void HttpApi::SetupRoutes() {
                 return;
             }
 
-            std::string content = "def process():\n    return None\n";
+            std::string content = body.value("code", "");
+            if (content.empty()) {
+                content = "def run():\n"
+                          "    import aipc\n"
+                          "    while aipc.is_running():\n"
+                          "        pass\n";
+            }
 
             std::ofstream ofs(full_path, std::ios::binary);
             if (!ofs) {
@@ -1094,8 +1100,8 @@ void HttpApi::SetupRoutes() {
 
     // 部署指定工程
     server_->Post("/api/python/deploy", [](const HttpRequest &req, HttpResponse &res) {
-        auto *producer = GetVisionGProducer();
-        if (!producer) {
+        auto &mgr = media::MediaManager::Instance();
+        if (mgr.GetCurrentMode() != media::ProducerMode::VisionG) {
             res.set_content(json_response(false, "Not in VisionG mode"), "application/json");
             return;
         }
@@ -1121,11 +1127,34 @@ void HttpApi::SetupRoutes() {
                 return;
             }
 
+            bool was_running = mgr.IsRunning();
+            if (was_running) {
+                mgr.Stop();
+            }
+
+            auto *producer = GetVisionGProducer();
+            if (!producer) {
+                if (was_running) {
+                    mgr.Start();
+                }
+                res.set_content(json_response(false, "VisionG producer unavailable"), "application/json");
+                return;
+            }
+
             std::string err = producer->UpdateCode(code);
             if (!err.empty()) {
+                if (was_running) {
+                    mgr.Start();
+                }
                 json data;
                 data["error"] = err;
                 res.set_content(json_response(false, "Code error", data), "application/json");
+                return;
+            }
+
+            if (was_running && !mgr.Start()) {
+                res.set_content(json_response(false, "Project deployed but failed to restart VisionG"),
+                                "application/json");
                 return;
             }
 

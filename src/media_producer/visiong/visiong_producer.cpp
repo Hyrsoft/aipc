@@ -658,6 +658,10 @@ def cleanup():
             script_thread_.join();
         }
 
+        // VisionG 与 SimpleIPC 共享 RK VENC 通道号。脚本线程退出后释放 VENC，
+        // 避免跨模式切换时使用到已失效的通道状态。
+        VencManager::getInstance().releaseVencIfUnused();
+
         LOG_INFO("[VisionG] stopped (frames={}, encoded={})", frame_count_.load(), encode_count_.load());
     }
 

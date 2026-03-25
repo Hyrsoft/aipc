@@ -78,6 +78,7 @@ namespace media {
         }
 
         initialized_ = false;
+        manager_running_ = false;
         LOG_INFO("Media manager deinitialized");
         return 0;
     }
@@ -99,6 +100,8 @@ namespace media {
             return false;
         }
 
+        manager_running_ = true;
+
         LOG_INFO("Media manager started with mode: {}", ProducerModeToString(current_mode_));
         return true;
     }
@@ -109,6 +112,8 @@ namespace media {
         if (producer_) {
             producer_->Stop();
         }
+
+        manager_running_ = false;
 
         LOG_INFO("Media manager stopped");
     }
@@ -142,7 +147,7 @@ namespace media {
         auto start_time = std::chrono::steady_clock::now();
 
         // 1. 停止当前生产者
-        bool was_running = producer_ && producer_->IsRunning();
+        bool was_running = manager_running_;
         if (was_running && producer_) {
             producer_->Stop();
         }

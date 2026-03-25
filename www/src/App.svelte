@@ -279,15 +279,15 @@
       // 分辨率切换后需要重新连接流
       if (previewMode === 'websocket') {
           if (wsConnected) {
-              disconnectWS();
+              wsDisconnect();
               await new Promise(r => setTimeout(r, 500));
-              connectWS();
+              wsConnect();
           }
       } else {
           if (webrtcConnected) {
-              disconnectWebRTC();
+              webrtcDisconnect();
               await new Promise(r => setTimeout(r, 500));
-              connectWebRTC();
+              webrtcConnect();
           }
       }
   }

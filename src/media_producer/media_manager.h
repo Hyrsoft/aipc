@@ -283,6 +283,9 @@ namespace media {
 
         // 统计
         uint64_t mode_switch_count_ = 0;
+
+        // 记录管理器语义上的运行状态，避免依赖单个 producer 短暂状态。
+        bool manager_running_ = false;
     };
 
 } // namespace media
