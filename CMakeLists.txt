@@ -101,7 +101,7 @@ target_include_directories(httplib INTERFACE ${CPP_HTTPLIB_PATH})
 # Asio (header-only, standalone mode)
 add_library(asio INTERFACE)
 target_include_directories(asio INTERFACE ${ASIO_PATH}/asio/include)
-target_compile_definitions(asio INTERFACE 
+target_compile_definitions(asio INTERFACE
     ASIO_STANDALONE
     ASIO_NO_DEPRECATED
 )
@@ -206,7 +206,7 @@ if(TARGET spdlog)
 endif()
 
 # 安装启动/停止脚本
-install(PROGRAMS 
+install(PROGRAMS
     ${CMAKE_SOURCE_DIR}/assets/start_app.sh
     ${CMAKE_SOURCE_DIR}/assets/stop_app.sh
     DESTINATION ${AIPC_INSTALL_BIN_DIR}
@@ -237,7 +237,12 @@ foreach(_vg_dep ivs rve)
     endif()
 endforeach()
 
-# VisionG Python 模块由用户手工部署，不在本项目中自动下载或安装
+# 安装 visiong Python 模块（3rdparty/visiong/src/python/visiong.py）
+# sys.path 追加了 ../python，即 /root/aipc/python/，将 visiong.py 安装到该目录
+set(AIPC_INSTALL_PYTHON_DIR "python")
+install(FILES ${CMAKE_SOURCE_DIR}/3rdparty/visiong/src/python/visiong.py
+    DESTINATION ${AIPC_INSTALL_PYTHON_DIR}
+)
 
 # 安装 Python 模板代码
 set(AIPC_INSTALL_TEMPLATES_DIR "python_templates")
@@ -276,7 +281,7 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/images/
 )
 
 # 生成版本信息文件
-file(WRITE ${CMAKE_BINARY_DIR}/version.txt 
+file(WRITE ${CMAKE_BINARY_DIR}/version.txt
     "AIPC Version: ${PROJECT_VERSION}\n"
     "Build Type: ${CMAKE_BUILD_TYPE}\n"
     "Build Date: ${CMAKE_CURRENT_SOURCE_DIR}\n"

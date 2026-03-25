@@ -228,8 +228,17 @@ def cleanup():
                     py::module_ sys = py::module_::import("sys");
                     auto path = sys.attr("path").cast<py::list>();
                     path.append("../python");
+
+                    // 设置 _VISIONG_LD_PATH_READY=1，阻止 visiong.py 触发 os.execv
+                    // 在 pybind11 嵌入环境里 sys.executable=/usr/bin/python3，
+                    // os.execv 会把进程替换为系统 python3 导致崩溃。
+                    py::module_::import("os").attr("environ")["_VISIONG_LD_PATH_READY"] = py::str("1");
                 }
-                LOG_INFO("[PythonInit] Embedded Python ready, sys.path updated");
+                // initialize_interpreter 后调用线程持有 GIL。
+                // 用 PyEval_SaveThread() 永久交还，使解释器进入多线程待机状态。
+                // 不能用 gil_scoped_release（析构时重新获取，main 线程永久持有 GIL）。
+                PyEval_SaveThread();
+                LOG_INFO("[PythonInit] Embedded Python ready, GIL released via PyEval_SaveThread");
             });
         }
 
@@ -280,7 +289,8 @@ def cleanup():
             PythonRuntime() {
                 LOG_INFO("[PythonRuntime] ctor begin");
 
-                // 这个函数调用了 std::call_once，确保 Python 解释器在任何 PythonRuntime 实例创建前就已初始化，因此只会执行一次。
+                // 这个函数调用了 std::call_once，确保 Python 解释器在任何 PythonRuntime
+                // 实例创建前就已初始化，因此只会执行一次。
                 EnsureEmbeddedPythonReady();
                 py::gil_scoped_acquire gil;
                 globals_ = py::dict();
@@ -305,8 +315,8 @@ def cleanup():
              * @return 空字符串表示成功；非空字符串为带分类前缀的错误描述
              */
             std::string LoadCode(const std::string &code) {
-                std::lock_guard<std::mutex> lock(mutex_);
                 py::gil_scoped_acquire gil;
+                std::lock_guard<std::mutex> lock(mutex_);
 
                 LOG_INFO("[LoadCode] begin");
 
@@ -343,15 +353,46 @@ def cleanup():
                 LOG_INFO("[LoadCode] exec done");
 
                 // ── Step 3: 验签名（run 必须存在） ───────────────────────────
-                py::object new_run = new_globals.contains("run") ? new_globals["run"] : py::none();
-                if (new_run.is_none() || !py::isinstance<py::function>(new_run)) {
-                    last_error_ = "[signature error] Python code must define callable: run()";
+                py::object new_run = py::none();
+                if (new_globals.contains("run")) {
+                    new_run = new_globals["run"];
+                }
+                // 用 try/catch 包裹整个验签名步骤：
+                // callable_fn(new_run).cast<bool>() 在某些 pybind11 版本可能抛 py::error_already_set，
+                // 若不捕获会穿透到 HTTP handler 层产生 500 错误。
+                try {
+                    bool run_ok = false;
+                    if (!new_run.is_none()) {
+                        auto callable_fn = py::module_::import("builtins").attr("callable");
+                        run_ok = callable_fn(new_run).cast<bool>();
+                    }
+                    if (!run_ok) {
+                        last_error_ = "[signature error] Python code must define callable: run()";
+                        LOG_ERROR("[LoadCode] {}", last_error_);
+                        return last_error_;
+                    }
+                } catch (py::error_already_set &e) {
+                    std::string msg = e.what();
+                    e.restore();
+                    PyErr_Clear();
+                    last_error_ = "[signature error] failed to check run(): " + msg;
+                    LOG_ERROR("[LoadCode] {}", last_error_);
+                    return last_error_;
+                } catch (const std::exception &e) {
+                    last_error_ = std::string("[signature error] failed to check run(): ") + e.what();
                     LOG_ERROR("[LoadCode] {}", last_error_);
                     return last_error_;
                 }
 
-                py::object new_init = new_globals.contains("init") ? new_globals["init"] : py::none();
-                py::object new_cleanup = new_globals.contains("cleanup") ? new_globals["cleanup"] : py::none();
+                py::object new_init = py::none();
+                if (new_globals.contains("init")) {
+                    new_init = new_globals["init"];
+                }
+
+                py::object new_cleanup = py::none();
+                if (new_globals.contains("cleanup")) {
+                    new_cleanup = new_globals["cleanup"];
+                }
 
                 // ── Step 4: 调新 init()（成功后才提交，失败则回滚）────────────
                 if (!new_init.is_none()) {
@@ -359,8 +400,20 @@ def cleanup():
                     try {
                         new_init();
                         LOG_INFO("[LoadCode] new init() done");
+                    } catch (py::error_already_set &e) {
+                        std::string msg = e.what();
+                        e.restore();
+                        PyErr_Clear();
+                        if (!new_cleanup.is_none()) {
+                            try {
+                                new_cleanup();
+                            } catch (...) {
+                            }
+                        }
+                        last_error_ = "[init error] " + msg;
+                        LOG_ERROR("[LoadCode] init() py error, rolled back: {}", last_error_);
+                        return last_error_;
                     } catch (const std::exception &e) {
-                        // init 失败：尝试回调 new_cleanup 清理本次已分配的资源
                         if (!new_cleanup.is_none()) {
                             try {
                                 new_cleanup();
@@ -369,6 +422,16 @@ def cleanup():
                         }
                         last_error_ = std::string("[init error] ") + e.what();
                         LOG_ERROR("[LoadCode] init() failed, rolled back: {}", last_error_);
+                        return last_error_;
+                    } catch (...) {
+                        if (!new_cleanup.is_none()) {
+                            try {
+                                new_cleanup();
+                            } catch (...) {
+                            }
+                        }
+                        last_error_ = "[init error] unknown exception";
+                        LOG_ERROR("[LoadCode] init() unknown error, rolled back: {}", last_error_);
                         return last_error_;
                     }
                 }
@@ -424,8 +487,8 @@ def cleanup():
             }
 
             void Shutdown() {
-                std::lock_guard<std::mutex> lock(mutex_);
                 py::gil_scoped_acquire gil;
+                std::lock_guard<std::mutex> lock(mutex_);
                 try {
                     if (!cleanup_fn_.is_none()) {
                         cleanup_fn_();
@@ -515,7 +578,11 @@ def cleanup():
                 std::lock_guard<std::mutex> lock(state_mutex_);
                 last_error_ = err;
             }
-            impl_->runtime.reset();
+            {
+                py::gil_scoped_acquire gil;
+                impl_->runtime->Shutdown();
+                impl_->runtime.reset();
+            }
             {
                 std::lock_guard<std::mutex> lock(g_aipc_mutex);
                 g_submit_frame_cb = nullptr;
@@ -551,6 +618,7 @@ def cleanup():
         g_is_running.store(false);
 
         if (impl_->runtime) {
+            py::gil_scoped_acquire gil;
             impl_->runtime->Shutdown();
             impl_->runtime.reset();
         }

@@ -74,7 +74,10 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 # 设置库路径
-export LD_LIBRARY_PATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR:$LD_LIBRARY_PATH"
+# 包含 python/ 目录：visiong.py 的 _ensure_loader_library_path() 会检查 LD_LIBRARY_PATH
+# 是否包含 _MODULE_DIR（即 visiong.py 所在目录），缺失时会调用 os.execv 重启进程导致崩溃
+# 包含 /oem/usr/lib：visiong.py 同样要求该路径存在（librockit.so 等依赖）
+export LD_LIBRARY_PATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR/../python:$SCRIPT_DIR:/oem/usr/lib:$LD_LIBRARY_PATH"
 
 # 切换到脚本目录
 cd "$SCRIPT_DIR"
