@@ -94,8 +94,8 @@ mgr.RegisterStreamConsumer("webrtc", webrtc_callback);
 // 启动
 mgr.Start();
 
-// 切换到 YOLOv5 模式（冷切换）
-mgr.SwitchMode(ProducerMode::YoloV5);
+// 切换到 VisionG AI 模式（当前实现：YOLOv5）
+mgr.SwitchMode(ProducerMode::VisionG);
 
 // 切回纯 IPC 模式
 mgr.SwitchMode(ProducerMode::SimpleIPC);
@@ -105,7 +105,7 @@ mgr.Stop();
 mgr.Deinit();
 ```
 
-## 三种模式的硬件架构
+## 两种模式的硬件架构
 
 ### SimpleIPC（纯监控）
 
@@ -116,7 +116,7 @@ VI -> VPSS -> VENC (硬件绑定，零拷贝)
 - CPU 不参与数据流
 - 最高性能
 
-### YoloV5 / RetinaFace（AI 推理）
+### VisionG（AI 推理，当前实现：YOLOv5）
 
 ```
 VI -> VPSS --(手动获取)--> NPU 推理 --(手动发送)--> VENC

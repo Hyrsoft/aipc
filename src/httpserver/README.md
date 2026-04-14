@@ -106,7 +106,7 @@ server.Get("/api/search", [](const HttpRequest& req, HttpResponse& res) {
 
 ## 依赖
 
-- cpp-httplib (thirdparty/cpp-httplib)
+- cpp-httplib (3rdparty/cpp-httplib)
 - spdlog (日志)
 - pthread (线程)
 

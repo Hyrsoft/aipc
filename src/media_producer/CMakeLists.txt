@@ -26,13 +26,26 @@ set(MEDIA_PRODUCER_HEADERS
     ${MEDIA_PRODUCER_CORE_HEADERS}
 )
 
+# MPI / NPU / ISP 依赖库（原先由已删除的旧 AI 模块间接提供）
+set(MEDIA_PRODUCER_MPI_LIBS
+    sample_comm
+    rockit
+    rockchip_mpp
+    rkaiq
+    rga
+    rknnmrt
+    rockiva
+    ivs
+    rve
+    pthread
+    dl
+)
+
 # ========================================
 # 添加子模块
 # ========================================
-add_subdirectory(common)             # 共用工具（AI类型、图像处理、OSD）
 add_subdirectory(simple_ipc)         # SimpleIPC 纯监控模式
-add_subdirectory(yolov5)             # YOLOv5 目标检测模式
-add_subdirectory(retainface)         # RetinaFace 人脸检测模式
+add_subdirectory(visiong)            # VisionG 库驱动的 AI 推理模式
 
 # ========================================
 # 创建静态库
@@ -52,14 +65,19 @@ target_include_directories(media_producer
         ${LUCKFOX_MPI_INCLUDE_DIR}
 )
 
+    target_link_directories(media_producer
+        PUBLIC
+        ${LUCKFOX_MPI_LIB_DIR}
+        ${VISIONG_EXTRA_LIB_DIR}
+    )
+
 # 链接依赖库
 target_link_libraries(media_producer
     PUBLIC
         common
-        media_common     # AI类型、图像处理、OSD
         simple_ipc_lib   # SimpleIPC 纯监控模式
-        yolov5_lib       # YOLOv5 目标检测
-        retinaface_lib   # RetinaFace 人脸检测
+        visiong_producer_lib  # VisionG 库驱动的 AI 推理
+    ${MEDIA_PRODUCER_MPI_LIBS}
 )
 
 # 设置编译选项

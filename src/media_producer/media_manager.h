@@ -10,11 +10,18 @@
  * 3. 实现"冷切换"逻辑：销毁旧实例 -> 创建新实例 -> 重新连线
  * 4. 保存流消费者注册信息，模式切换时自动重新注册
  *
+ * 分辨率配置说明：
+ * - SimpleIPC 模式：通过 SetResolution(simple_ipc::Resolution) 切换分辨率预设，
+ *   内部会执行 Stop -> Deinit -> 更新配置 -> Init -> Start 流程。
+ *   仅在当前模式为 SimpleIPC 时才允许调用，VisionG 模式下直接返回 -1。
+ * - VisionG 模式：摄像头分辨率由 Python 脚本（visiong.Camera）自行决定，
+ *   C++ 层不感知，因此 MediaManager 不提供 VisionG 分辨率设置接口。
+ *
  * 冷切换流程：
  * 1. 停止当前生产者 (Stop)
- * 2. 销毁当前生产者 (触发析构函数，释放硬件资源)
+ * 2. 销毁当前生产者 (触发析构函数，释放硬件/软件资源)
  * 3. 创建新生产者 (根据目标模式)
- * 4. 初始化新生产者 (分配硬件资源)
+ * 4. 初始化新生产者 (分配资源)
  * 5. 重新注册流消费者
  * 6. 启动新生产者 (Start)
  *
@@ -25,227 +32,260 @@
 #pragma once
 
 #include "i_media_producer.h"
+#include "simple_ipc/simple_ipc_config.h"
 
-#include <memory>
-#include <vector>
-#include <mutex>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <vector>
 
 namespace media {
 
-/**
- * @brief 流消费者注册信息
- */
-struct StreamConsumerRegistration {
-    std::string name;
-    StreamCallback callback;
-    StreamConsumerType type = StreamConsumerType::AsyncIO;
-    int queue_size = 3;
-};
-
-/**
- * @brief 模式切换回调
- */
-using ModeSwitchCallback = std::function<void(ProducerMode old_mode, ProducerMode new_mode)>;
-
-/**
- * @class MediaManager
- * @brief 媒体管理器（单例）
- *
- * 统一管理视频生产者的生命周期和模式切换。
- * 对外提供简洁的接口，隐藏内部的硬件复杂性。
- *
- * 使用方式：
- * @code
- * auto& mgr = MediaManager::Instance();
- * 
- * // 配置并初始化
- * ProducerConfig config;
- * config.resolution = Resolution::R_1080P;
- * mgr.Init(ProducerMode::SimpleIPC, config);
- * 
- * // 注册流消费者（切换模式时自动重新注册）
- * mgr.RegisterStreamConsumer("rtsp", rtsp_callback);
- * mgr.RegisterStreamConsumer("webrtc", webrtc_callback);
- * 
- * // 启动
- * mgr.Start();
- * 
- * // 切换到 YOLOv5 模式（冷切换）
- * mgr.SwitchMode(ProducerMode::YoloV5);
- * 
- * // 切回纯 IPC 模式
- * mgr.SwitchMode(ProducerMode::SimpleIPC);
- * 
- * // 停止
- * mgr.Stop();
- * mgr.Deinit();
- * @endcode
- */
-class MediaManager {
-public:
     /**
-     * @brief 获取单例实例
+     * @brief 流消费者注册信息
      */
-    static MediaManager& Instance();
-
-    // 禁止拷贝
-    MediaManager(const MediaManager&) = delete;
-    MediaManager& operator=(const MediaManager&) = delete;
-
-    // ========== 生命周期管理 ==========
+    struct StreamConsumerRegistration {
+        std::string name;
+        StreamCallback callback;
+        StreamConsumerType type = StreamConsumerType::AsyncIO;
+        int queue_size = 3;
+    };
 
     /**
-     * @brief 初始化媒体管理器
-     * 
-     * @param mode 初始模式
-     * @param config 配置参数
-     * @return 0 成功，-1 失败
+     * @brief 模式切换回调
      */
-    int Init(ProducerMode mode, const ProducerConfig& config);
+    using ModeSwitchCallback = std::function<void(ProducerMode old_mode, ProducerMode new_mode)>;
 
     /**
-     * @brief 反初始化
-     * @return 0 成功
+     * @class MediaManager
+     * @brief 媒体管理器（单例）
+     *
+     * 统一管理视频生产者的生命周期和模式切换。
+     * 对外提供简洁的接口，隐藏内部的硬件复杂性。
+     *
+     * 使用方式：
+     * @code
+     * auto& mgr = MediaManager::Instance();
+     *
+     * // 配置并初始化（共有参数）
+     * ProducerConfig config;
+     * config.framerate = 30;
+     * mgr.Init(ProducerMode::SimpleIPC, config);
+     *
+     * // 注册流消费者（切换模式时自动重新注册）
+     * mgr.RegisterStreamConsumer("rtsp", rtsp_callback);
+     * mgr.RegisterStreamConsumer("webrtc", webrtc_callback);
+     *
+     * // 启动
+     * mgr.Start();
+     *
+     * // 切换到 VisionG AI 模式（冷切换）
+     * mgr.SwitchMode(ProducerMode::VisionG);
+     *
+     * // 切回纯 IPC 模式
+     * mgr.SwitchMode(ProducerMode::SimpleIPC);
+     *
+     * // 仅在 SimpleIPC 模式下，切换分辨率（冷切换）
+     * mgr.SetResolution(simple_ipc::Resolution::R_720P);
+     *
+     * // 停止
+     * mgr.Stop();
+     * mgr.Deinit();
+     * @endcode
      */
-    int Deinit();
+    class MediaManager {
+    public:
+        /**
+         * @brief 获取单例实例
+         */
+        static MediaManager &Instance();
 
-    /**
-     * @brief 启动媒体流
-     * @return true 成功
-     */
-    bool Start();
+        // 禁止拷贝
+        MediaManager(const MediaManager &) = delete;
+        MediaManager &operator=(const MediaManager &) = delete;
 
-    /**
-     * @brief 停止媒体流
-     */
-    void Stop();
+        // ========== 生命周期管理 ==========
 
-    // ========== 模式切换 ==========
+        /**
+         * @brief 初始化媒体管理器
+         *
+         * @param mode   初始模式
+         * @param config 通用配置（framerate、bitrate_kbps）
+         * @return 0 成功，-1 失败
+         */
+        int Init(ProducerMode mode, const ProducerConfig &config);
 
-    /**
-     * @brief 切换生产者模式（冷切换）
-     * 
-     * 执行完整的"销毁-创建-连线"流程。
-     * 
-     * @param mode 目标模式
-     * @return 0 成功，-1 失败
-     * 
-     * @note 切换过程中会有短暂的停流时间
-     */
-    int SwitchMode(ProducerMode mode);
+        /**
+         * @brief 反初始化
+         * @return 0 成功
+         */
+        int Deinit();
 
-    /**
-     * @brief 获取当前模式
-     */
-    ProducerMode GetCurrentMode() const { return current_mode_; }
+        /**
+         * @brief 启动媒体流
+         * @return true 成功
+         */
+        bool Start();
 
-    /**
-     * @brief 检查是否已初始化
-     */
-    bool IsInitialized() const { return initialized_; }
+        /**
+         * @brief 停止媒体流
+         */
+        void Stop();
 
-    /**
-     * @brief 检查是否正在运行
-     */
-    bool IsRunning() const;
+        // ========== 模式切换 ==========
 
-    // ========== 配置接口 ==========
+        /**
+         * @brief 切换生产者模式（冷切换）
+         *
+         * 执行完整的"销毁-创建-连线"流程。
+         *
+         * @param mode 目标模式
+         * @return 0 成功，-1 失败
+         *
+         * @note 切换过程中会有短暂的停流时间
+         */
+        int SwitchMode(ProducerMode mode);
 
-    /**
-     * @brief 设置分辨率（需要重新初始化）
-     * @param preset 分辨率预设
-     * @return 0 成功，-1 失败
-     */
-    int SetResolution(Resolution preset);
+        /**
+         * @brief 获取当前模式
+         */
+        ProducerMode GetCurrentMode() const { return current_mode_; }
 
-    /**
-     * @brief 设置帧率
-     * @param fps 帧率
-     * @return 0 成功，-1 失败
-     */
-    int SetFrameRate(int fps);
+        /**
+         * @brief 检查是否已初始化
+         */
+        bool IsInitialized() const { return initialized_; }
 
-    /**
-     * @brief 获取当前配置
-     */
-    const ProducerConfig& GetConfig() const { return config_; }
+        /**
+         * @brief 检查是否正在运行
+         */
+        bool IsRunning() const;
 
-    // ========== 流消费者管理 ==========
+        // ========== 配置接口 ==========
 
-    /**
-     * @brief 注册流消费者
-     * 
-     * 消费者信息会被保存，模式切换时自动重新注册。
-     * 
-     * @param name 消费者名称
-     * @param callback 回调函数
-     * @param type 消费者类型
-     * @param queue_size 队列大小
-     */
-    void RegisterStreamConsumer(
-        const std::string& name,
-        StreamCallback callback,
-        StreamConsumerType type = StreamConsumerType::AsyncIO,
-        int queue_size = 3);
+        /**
+         * @brief 切换 SimpleIPC 模式的分辨率预设（冷切换）
+         *
+         * 仅在当前模式为 SimpleIPC 时有效。
+         * VisionG 模式由 Python 脚本管理摄像头分辨率，调用此接口将返回 -1。
+         *
+         * 内部执行：Stop -> Deinit -> 更新分辨率 -> Init -> Start
+         *
+         * @param preset 目标分辨率预设
+         * @return 0 成功，-1 失败（非 SimpleIPC 模式或重新初始化失败）
+         */
+        int SetResolution(simple_ipc::Resolution preset);
 
-    /**
-     * @brief 清除所有流消费者
-     */
-    void ClearStreamConsumers();
+        /**
+         * @brief 设置帧率
+         *
+         * 更新共有配置中的 framerate 字段。
+         * 对于已运行的生产者，实际生效时间取决于具体实现。
+         *
+         * @param fps 帧率（1-30）
+         * @return 0 成功
+         */
+        int SetFrameRate(int fps);
 
-    // ========== 回调设置 ==========
+        /**
+         * @brief 获取当前通用配置（framerate、bitrate_kbps）
+         */
+        const ProducerConfig &GetConfig() const { return config_; }
 
-    /**
-     * @brief 设置模式切换回调
-     */
-    void SetModeSwitchCallback(ModeSwitchCallback callback);
+        /**
+         * @brief 获取当前 SimpleIPC 分辨率预设
+         *
+         * 始终返回已保存的 SimpleIPC 分辨率预设（即使当前不在 SimpleIPC 模式下）。
+         * 切换回 SimpleIPC 模式时将使用此值初始化。
+         */
+        simple_ipc::Resolution GetSIPCResolution() const { return sipc_resolution_; }
 
-    // ========== 状态查询 ==========
+        // ========== 流消费者管理 ==========
 
-    /**
-     * @brief 获取当前生产者类型名称
-     */
-    const char* GetCurrentTypeName() const;
+        /**
+         * @brief 注册流消费者
+         *
+         * 消费者信息会被保存，模式切换时自动重新注册。
+         *
+         * @param name       消费者名称
+         * @param callback   回调函数
+         * @param type       消费者类型
+         * @param queue_size 队列大小
+         */
+        void RegisterStreamConsumer(const std::string &name, StreamCallback callback,
+                                    StreamConsumerType type = StreamConsumerType::AsyncIO, int queue_size = 3);
 
-    /**
-     * @brief 获取模式切换次数
-     */
-    uint64_t GetModeSwitchCount() const { return mode_switch_count_; }
+        /**
+         * @brief 清除所有流消费者
+         */
+        void ClearStreamConsumers();
 
-private:
-    MediaManager() = default;
-    ~MediaManager();
+        // ========== 回调设置 ==========
 
-    /**
-     * @brief 创建生产者实例
-     */
-    std::unique_ptr<IMediaProducer> CreateProducerInstance(ProducerMode mode);
+        /**
+         * @brief 设置模式切换回调
+         */
+        void SetModeSwitchCallback(ModeSwitchCallback callback);
 
-    /**
-     * @brief 重新注册所有流消费者
-     */
-    void ReregisterConsumers();
+        // ========== 状态查询 ==========
 
-private:
-    std::mutex mutex_;
-    
-    bool initialized_ = false;
-    ProducerMode current_mode_ = ProducerMode::SimpleIPC;
-    ProducerConfig config_;
-    
-    // 当前生产者实例
-    std::unique_ptr<IMediaProducer> producer_;
-    
-    // 保存的流消费者列表（用于模式切换后重新注册）
-    std::vector<StreamConsumerRegistration> consumers_;
-    
-    // 回调
-    ModeSwitchCallback mode_switch_callback_;
-    
-    // 统计
-    uint64_t mode_switch_count_ = 0;
-};
+        /**
+         * @brief 获取当前生产者类型名称
+         */
+        const char *GetCurrentTypeName() const;
 
-}  // namespace media
+        /**
+         * @brief 获取模式切换次数
+         */
+        uint64_t GetModeSwitchCount() const { return mode_switch_count_; }
+
+        /**
+         * @brief 获取当前生产者的原始指针（用于 Python 编辑器等直接操作）
+         * @note 仅在持有 mutex 或确保线程安全的情况下使用
+         */
+        IMediaProducer *GetProducer() { return producer_.get(); }
+
+    private:
+        MediaManager() = default;
+        ~MediaManager();
+
+        /**
+         * @brief 创建生产者实例
+         */
+        std::unique_ptr<IMediaProducer> CreateProducerInstance(ProducerMode mode);
+
+        /**
+         * @brief 重新注册所有流消费者
+         */
+        void ReregisterConsumers();
+
+    private:
+        mutable std::mutex mutex_;
+
+        bool initialized_ = false;
+        ProducerMode current_mode_ = ProducerMode::SimpleIPC;
+
+        // 通用配置（framerate、bitrate_kbps，两种模式共享）
+        ProducerConfig config_;
+
+        // SimpleIPC 专有：分辨率预设（VisionG 模式下由 Python 管理，此字段不使用）
+        simple_ipc::Resolution sipc_resolution_ = simple_ipc::Resolution::R_1080P;
+
+        // 当前生产者实例
+        std::unique_ptr<IMediaProducer> producer_;
+
+        // 保存的流消费者列表（用于模式切换后重新注册）
+        std::vector<StreamConsumerRegistration> consumers_;
+
+        // 回调
+        ModeSwitchCallback mode_switch_callback_;
+
+        // 统计
+        uint64_t mode_switch_count_ = 0;
+
+        // 记录管理器语义上的运行状态，避免依赖单个 producer 短暂状态。
+        bool manager_running_ = false;
+    };
+
+} // namespace media

@@ -1,0 +1,82 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "(gdb) Luckfox Remote Launch (gdbserver :1234 /path/to/aipc)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/bin/aipc",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/home/hao/projects/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-gdb",
+            "miDebuggerServerAddress": "192.168.8.235:1234",
+            "launchCompleteCommand": "exec-run",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Do not stop on OpenSSL CPU probe SIGILL",
+                    "text": "handle SIGILL nostop noprint pass",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Force ARM architecture",
+                    "text": "set architecture arm",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Sysroot for Cross-Debugging",
+                    "text": "set sysroot /home/hao/projects/luckfox-pico/sysdrv/source/buildroot/buildroot-2023.02.6/output/host/arm-buildroot-linux-uclibcgnueabihf/sysroot",
+                    "ignoreFailures": false
+                }
+            ],
+            "logging": {
+                "engineLogging": true
+            }
+        },
+        {
+            "name": "(gdb) Luckfox Remote Attach (gdbserver --attach :1234 <pid>)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/bin/aipc",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/home/hao/projects/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf/bin/arm-rockchip830-linux-uclibcgnueabihf-gdb",
+            "miDebuggerServerAddress": "192.168.8.235:1234",
+            "launchCompleteCommand": "None",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Do not stop on OpenSSL CPU probe SIGILL",
+                    "text": "handle SIGILL nostop noprint pass",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Force ARM architecture",
+                    "text": "set architecture arm",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Sysroot for Cross-Debugging",
+                    "text": "set sysroot /home/hao/projects/luckfox-pico/sysdrv/source/buildroot/buildroot-2023.02.6/output/host/arm-buildroot-linux-uclibcgnueabihf/sysroot",
+                    "ignoreFailures": false
+                }
+            ]
+        }
+    ]
+}
