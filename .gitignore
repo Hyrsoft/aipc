@@ -3,6 +3,7 @@
 .zed/
 *.log
 .DS_Store
+.codex
 
 !.vscode/launch.json
 

@@ -3,7 +3,7 @@ set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
 # 2. 指定交叉编译器
-set(TOOLCHAIN_PATH "/home/hao/projects/luckfox-pico/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf")
+set(TOOLCHAIN_PATH "/home/hao/projects/Haoruan_Pi_RV1106G3_sdk/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf")
 set(CMAKE_C_COMPILER "${TOOLCHAIN_PATH}/bin/arm-rockchip830-linux-uclibcgnueabihf-gcc")
 set(CMAKE_CXX_COMPILER "${TOOLCHAIN_PATH}/bin/arm-rockchip830-linux-uclibcgnueabihf-g++")
 

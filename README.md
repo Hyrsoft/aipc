@@ -37,7 +37,11 @@ AIPC 是面向 Luckfox Pico / RV1106 的边缘智能摄像头应用，采用 C++
 ### 1. 编译
 
 ```bash
-cmake --build build/Debug
+# 调用预设的配置 (例如 Debug)
+cmake --preset Debug
+
+# 使用预设进行构建
+cmake --build --preset Debug
 ```
 
 ### 2. 一键部署到板端

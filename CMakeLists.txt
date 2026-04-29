@@ -76,15 +76,62 @@ set(PYBIND11_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/3rdparty/visiong/3rdparty/pybind11 
 # ========================================
 # OpenSSL 配置（用于交叉编译）
 # ========================================
-# Buildroot 编译输出中包含 OpenSSL
-set(BUILDROOT_SYSROOT "/home/hao/projects/luckfox-pico/sysdrv/source/buildroot/buildroot-2023.02.6/output/host/arm-buildroot-linux-uclibcgnueabihf/sysroot")
-set(OPENSSL_ROOT_DIR "${BUILDROOT_SYSROOT}/usr" CACHE PATH "OpenSSL root directory" FORCE)
-set(OPENSSL_INCLUDE_DIR "${BUILDROOT_SYSROOT}/usr/include" CACHE PATH "OpenSSL include directory" FORCE)
-set(OPENSSL_CRYPTO_LIBRARY "${BUILDROOT_SYSROOT}/usr/lib/libcrypto.so" CACHE FILEPATH "OpenSSL crypto library" FORCE)
-set(OPENSSL_SSL_LIBRARY "${BUILDROOT_SYSROOT}/usr/lib/libssl.so" CACHE FILEPATH "OpenSSL SSL library" FORCE)
-# 创建 OpenSSL 导入目标，避免 find_package 搜索失败
-set(OPENSSL_FOUND TRUE CACHE BOOL "OpenSSL found" FORCE)
-set(OPENSSL_LIBRARIES "${OPENSSL_SSL_LIBRARY};${OPENSSL_CRYPTO_LIBRARY}" CACHE STRING "OpenSSL libraries" FORCE)
+get_filename_component(AIPC_SDK_ROOT "${CMAKE_SOURCE_DIR}" DIRECTORY)
+set(AIPC_DEFAULT_BUILDROOT_SYSROOT
+    "${AIPC_SDK_ROOT}/sysdrv/source/buildroot/buildroot-2023.02.6/output/host/arm-buildroot-linux-uclibcgnueabihf/sysroot")
+set(BUILDROOT_SYSROOT "${AIPC_DEFAULT_BUILDROOT_SYSROOT}" CACHE PATH
+    "Buildroot target sysroot that provides OpenSSL for cross-compilation")
+
+set(AIPC_OPENSSL_ROOT_DIR "${BUILDROOT_SYSROOT}/usr")
+set(AIPC_OPENSSL_INCLUDE_DIR "${AIPC_OPENSSL_ROOT_DIR}/include")
+set(AIPC_OPENSSL_SSL_LIBRARY "")
+set(AIPC_OPENSSL_CRYPTO_LIBRARY "")
+
+if(EXISTS "${AIPC_OPENSSL_ROOT_DIR}/lib/libssl.so")
+    set(AIPC_OPENSSL_SSL_LIBRARY "${AIPC_OPENSSL_ROOT_DIR}/lib/libssl.so")
+elseif(EXISTS "${AIPC_OPENSSL_ROOT_DIR}/lib/libssl.a")
+    set(AIPC_OPENSSL_SSL_LIBRARY "${AIPC_OPENSSL_ROOT_DIR}/lib/libssl.a")
+endif()
+
+if(EXISTS "${AIPC_OPENSSL_ROOT_DIR}/lib/libcrypto.so")
+    set(AIPC_OPENSSL_CRYPTO_LIBRARY "${AIPC_OPENSSL_ROOT_DIR}/lib/libcrypto.so")
+elseif(EXISTS "${AIPC_OPENSSL_ROOT_DIR}/lib/libcrypto.a")
+    set(AIPC_OPENSSL_CRYPTO_LIBRARY "${AIPC_OPENSSL_ROOT_DIR}/lib/libcrypto.a")
+endif()
+
+if(EXISTS "${AIPC_OPENSSL_INCLUDE_DIR}/openssl/ssl.h"
+   AND AIPC_OPENSSL_SSL_LIBRARY
+   AND AIPC_OPENSSL_CRYPTO_LIBRARY)
+    set(OPENSSL_ROOT_DIR "${AIPC_OPENSSL_ROOT_DIR}" CACHE PATH "OpenSSL root directory" FORCE)
+    set(OPENSSL_INCLUDE_DIR "${AIPC_OPENSSL_INCLUDE_DIR}" CACHE PATH "OpenSSL include directory" FORCE)
+    set(OPENSSL_SSL_LIBRARY "${AIPC_OPENSSL_SSL_LIBRARY}" CACHE FILEPATH "OpenSSL SSL library" FORCE)
+    set(OPENSSL_CRYPTO_LIBRARY "${AIPC_OPENSSL_CRYPTO_LIBRARY}" CACHE FILEPATH "OpenSSL crypto library" FORCE)
+    set(OPENSSL_USE_STATIC_LIBS OFF CACHE BOOL "Prefer shared OpenSSL libraries" FORCE)
+
+    find_package(OpenSSL QUIET)
+
+    if(NOT TARGET OpenSSL::Crypto)
+        add_library(OpenSSL::Crypto UNKNOWN IMPORTED GLOBAL)
+        set_target_properties(OpenSSL::Crypto PROPERTIES
+            IMPORTED_LOCATION "${OPENSSL_CRYPTO_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}"
+        )
+    endif()
+
+    if(NOT TARGET OpenSSL::SSL)
+        add_library(OpenSSL::SSL UNKNOWN IMPORTED GLOBAL)
+        set_target_properties(OpenSSL::SSL PROPERTIES
+            IMPORTED_LOCATION "${OPENSSL_SSL_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}"
+            INTERFACE_LINK_LIBRARIES OpenSSL::Crypto
+        )
+    endif()
+else()
+    message(WARNING
+        "OpenSSL was not found under BUILDROOT_SYSROOT='${BUILDROOT_SYSROOT}'. "
+        "Expected headers in '${AIPC_OPENSSL_INCLUDE_DIR}' and libraries in "
+        "'${AIPC_OPENSSL_ROOT_DIR}/lib'.")
+endif()
 
 # ========================================
 # 添加第三方库
