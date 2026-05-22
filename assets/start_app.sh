@@ -51,6 +51,8 @@ while [ $# -gt 0 ]; do
             echo ""
             echo "环境变量:"
             echo "  SIGNALING_HOST  WebRTC 信令服务器地址 (默认: 127.0.0.1)"
+            echo "  AIPC_OEM_LIB_DIR  板端 OEM 库目录 (默认: /oem/usr/lib)"
+            echo "  AIPC_RKIPC_STOP_CMD  停止默认 rkipc 的命令；设为空可跳过"
             exit 0
             ;;
         *)
@@ -73,11 +75,13 @@ if [ -f "$PID_FILE" ]; then
     fi
 fi
 
+OEM_LIB_DIR="${AIPC_OEM_LIB_DIR:-/oem/usr/lib}"
+
 # 设置库路径
 # 包含 python/ 目录：visiong.py 的 _ensure_loader_library_path() 会检查 LD_LIBRARY_PATH
 # 是否包含 _MODULE_DIR（即 visiong.py 所在目录），缺失时会调用 os.execv 重启进程导致崩溃
-# 包含 /oem/usr/lib：visiong.py 同样要求该路径存在（librockit.so 等依赖）
-export LD_LIBRARY_PATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR/../python:$SCRIPT_DIR:/oem/usr/lib:$LD_LIBRARY_PATH"
+# 包含 OEM 库目录：visiong.py 同样要求该路径存在（librockit.so 等依赖）
+export LD_LIBRARY_PATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR/../python:$SCRIPT_DIR:$OEM_LIB_DIR:$LD_LIBRARY_PATH"
 
 # 切换到脚本目录
 cd "$SCRIPT_DIR"
@@ -96,9 +100,10 @@ if [ ! -x "./${APP_NAME}" ]; then
 fi
 
 # 停止默认的 rkipc（如果存在）
-if [ -x "/oem/usr/bin/RkLunch-stop.sh" ]; then
+RKIPC_STOP_CMD="${AIPC_RKIPC_STOP_CMD:-/oem/usr/bin/RkLunch-stop.sh}"
+if [ -n "$RKIPC_STOP_CMD" ] && [ -x "$RKIPC_STOP_CMD" ]; then
     echo "停止默认 rkipc 服务..."
-    /oem/usr/bin/RkLunch-stop.sh 2>/dev/null || true
+    "$RKIPC_STOP_CMD" 2>/dev/null || true
 fi
 
 # 启动应用

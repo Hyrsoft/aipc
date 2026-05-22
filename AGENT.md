@@ -46,7 +46,7 @@ aipc/
 │   ├── 关于动态库.md                   # 板端动态库部署说明
 │   └── visiong库移植/                  # VisionG 移植笔记
 ├── docs/agent_auto_debug_skill/         # Agent 调试 Skill 和少量 repo 快照
-├── build/Debug/                        # CMake 构建目录（交叉编译）
+├── build/Debug/                        # 示例 CMake 构建目录（交叉编译）
 ├── CMakeLists.txt
 └── CMakePresets.json
 ```
@@ -88,7 +88,7 @@ aipc/
 - 先读代码再改动，优先使用 `rg`、`sed`、`git diff` 获取上下文。
 - 不回滚用户已有改动；遇到不相关脏文件时只忽略，不清理。
 - 修改嵌入式运行路径、部署脚本、CMake 时，优先使用可配置变量，避免写死开发机路径、板端 IP 或用户名。
-- 变更后至少执行 `cmake --build build/Debug`，涉及前端时再执行 `npm run build` 或 `./assets/build_frontend.sh`。
+- 变更后至少执行 `cmake --build "${AIPC_BUILD_DIR:-build/Debug}"`，涉及前端时再执行 `npm run build` 或 `./assets/build_frontend.sh`。
 - 涉及板端行为时，优先使用 `.github/skills/aipc-agent-auto-debug/SKILL.md` 中的 ADB/网络调试流程。
 - 提交信息必须遵循 `docs/git_commit_convention.md`。
 
@@ -141,8 +141,8 @@ def cleanup(): # 可选，释放资源
 ### 构建
 
 ```bash
-# 构建目录：build/Debug（已有 CMakeCache.txt）
-cmake --build build/Debug
+# 构建目录可用 AIPC_BUILD_DIR 覆盖
+cmake --build "${AIPC_BUILD_DIR:-build/Debug}"
 ```
 
 ### 部署到板端
@@ -152,19 +152,24 @@ cmake --build build/Debug
 ./assets/install_rsync.sh
 ```
 
-部署目标：`root@192.168.8.235:/root/aipc`（密码：`luckfox`，已配置免密）
+部署目标由环境变量控制：
+
+```bash
+export AIPC_REMOTE_HOST="${AIPC_REMOTE_HOST:-root@192.168.8.235}"
+export AIPC_REMOTE_DIR="${AIPC_REMOTE_DIR:-/root/aipc}"
+```
 
 ### 板端操作
 
 ```bash
 # SSH 登录
-ssh root@192.168.8.235
+ssh "$AIPC_REMOTE_HOST"
 
 # 启动（前台）
-cd /root/aipc/bin && ../assets/start_app.sh
+cd "$AIPC_REMOTE_DIR/bin" && ./start_app.sh
 
 # 启动（后台）
-cd /root/aipc/bin && ../assets/start_app.sh --daemon
+cd "$AIPC_REMOTE_DIR/bin" && ./start_app.sh --daemon
 
 # 停止
 ./assets/stop_app.sh
@@ -177,7 +182,7 @@ tail -f /var/log/aipc.log
 
 ## HTTP API 速查
 
-基础地址：`http://192.168.8.235:8080`
+基础地址：`${AIPC_HTTP_BASE:-http://192.168.8.235:8080}`
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -222,8 +227,8 @@ tail -f /var/log/aipc.log
 
 ## Agent 调试指引
 
-详见 `docs/agent_auto_debug_skill/SKILL.md`。
+详见 `.github/skills/aipc-agent-auto-debug/SKILL.md`。
 
 快速自检清单（卡死/崩溃时）：
 
-1. `ssh root@192.168.8.235 'pgrep aipc &&
+1. `ssh "$AIPC_REMOTE_HOST" 'pgrep aipc &&

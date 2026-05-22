@@ -5,7 +5,7 @@
  * 支持的输出方式：
  * - RTSP: rtsp://<device_ip>:554/live/0
  * - WebRTC: http://<device_ip>:8080
- * - 文件录制: /root/record/
+ * - 文件录制: AIPC_RECORD_DIR 指定目录，默认 /root/record/
  *
  * HTTP API: 见 http.h
  *
@@ -122,10 +122,22 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    // 调用SDK提供的脚本，关闭默认启动的rkipc
-    LOG_DEBUG("Stopping default rkipc service...");
-    system("/oem/usr/bin/RkLunch-stop.sh");
-    LOG_INFO("rkipc service stopped");
+    // 调用 SDK 提供的脚本关闭默认启动的 rkipc。可通过环境变量覆盖，便于不同板端布局。
+    const char *rkipc_stop_cmd = std::getenv("AIPC_RKIPC_STOP_CMD");
+    if (!rkipc_stop_cmd) {
+        rkipc_stop_cmd = "/oem/usr/bin/RkLunch-stop.sh";
+    }
+    if (rkipc_stop_cmd[0] != '\0') {
+        LOG_DEBUG("Stopping default rkipc service: {}", rkipc_stop_cmd);
+        int stop_ret = system(rkipc_stop_cmd);
+        if (stop_ret != 0) {
+            LOG_WARN("rkipc stop command returned {}", stop_ret);
+        } else {
+            LOG_INFO("rkipc service stopped");
+        }
+    } else {
+        LOG_INFO("rkipc stop command disabled by AIPC_RKIPC_STOP_CMD");
+    }
 
     // ========================================================================
     // 配置流输出
@@ -157,7 +169,8 @@ int main(int argc, char *argv[]) {
 
     // 文件保存配置 - 默认启用
     stream_config.enable_file = true;
-    stream_config.mp4_config.outputDir = "/root/record";
+    const char *record_dir = std::getenv("AIPC_RECORD_DIR");
+    stream_config.mp4_config.outputDir = record_dir ? record_dir : "/root/record";
 
     // WebSocket 预览配置 - 默认启用
     stream_config.enable_ws_preview = true;

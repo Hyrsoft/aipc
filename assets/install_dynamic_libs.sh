@@ -6,10 +6,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 RK_LIB_DIR="${PROJECT_ROOT}/3rdparty/luckfox_pico_rkmpi_example/lib/uclibc"
-DATA_LIB_DIR="${PROJECT_ROOT}/build/Debug/libdatachannel"
+BUILD_DIR="${AIPC_BUILD_DIR:-build/Debug}"
+DATA_LIB_DIR="${AIPC_LIBDATACHANNEL_DIR:-${PROJECT_ROOT}/${BUILD_DIR}/libdatachannel}"
 
-REMOTE_HOST="${1:-root@192.168.8.235}"
-REMOTE_DIR="${2:-/usr/lib}"
+REMOTE_HOST="${1:-${AIPC_REMOTE_HOST:-root@192.168.8.235}}"
+REMOTE_DIR="${2:-${AIPC_REMOTE_LIB_DIR:-/usr/lib}}"
 REMOTE_BIN_PATH="${3:-}"
 
 copy_with_glob() {

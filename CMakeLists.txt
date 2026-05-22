@@ -11,6 +11,10 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# SDK 根目录默认是仓库父目录；toolchain 文件可覆盖编译器绝对路径。
+get_filename_component(AIPC_DEFAULT_SDK_ROOT "${CMAKE_SOURCE_DIR}" DIRECTORY)
+set(AIPC_SDK_ROOT "${AIPC_DEFAULT_SDK_ROOT}" CACHE PATH "AIPC SDK root directory")
+
 # 当编译选项为Debug时，启用调试符号
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
@@ -59,7 +63,8 @@ set(ASIO_PATH ${CMAKE_SOURCE_DIR}/3rdparty/asio CACHE PATH "Asio library path")
 set(VISIONG_PREBUILT_DIR ${CMAKE_BINARY_DIR}/visiong_cpp CACHE PATH "VisionG prebuilt package root")
 set(VISIONG_INCLUDE_DIR ${VISIONG_PREBUILT_DIR}/include CACHE PATH "VisionG include dir")
 set(VISIONG_LIB_DIR ${VISIONG_PREBUILT_DIR}/lib CACHE PATH "VisionG library dir")
-set(VISIONG_EXTRA_LIB_DIR ${CMAKE_SOURCE_DIR}/../media/out/lib CACHE PATH "Extra vendor libs for VisionG (ivs/rve)")
+set(AIPC_DEFAULT_VISIONG_EXTRA_LIB_DIR "${AIPC_SDK_ROOT}/media/out/lib")
+set(VISIONG_EXTRA_LIB_DIR ${AIPC_DEFAULT_VISIONG_EXTRA_LIB_DIR} CACHE PATH "Extra vendor libs for VisionG (ivs/rve)")
 
 # VisionG Python 模块路径（由用户手工部署，不自动下载）
 set(VISIONG_PYTHON_PREBUILT_DIR "" CACHE PATH "VisionG Python package root (manual deployment)")
@@ -76,7 +81,6 @@ set(PYBIND11_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/3rdparty/visiong/3rdparty/pybind11 
 # ========================================
 # OpenSSL 配置（用于交叉编译）
 # ========================================
-get_filename_component(AIPC_SDK_ROOT "${CMAKE_SOURCE_DIR}" DIRECTORY)
 set(AIPC_DEFAULT_BUILDROOT_SYSROOT
     "${AIPC_SDK_ROOT}/sysdrv/source/buildroot/buildroot-2023.02.6/output/host/arm-buildroot-linux-uclibcgnueabihf/sysroot")
 set(BUILDROOT_SYSROOT "${AIPC_DEFAULT_BUILDROOT_SYSROOT}" CACHE PATH

@@ -47,21 +47,21 @@ cmake --build --preset Debug
 ### 2. 一键部署到板端
 
 ```bash
-./assets/install_rsync.sh
+AIPC_REMOTE_HOST=root@<device_ip> AIPC_REMOTE_DIR=/root/aipc ./assets/install_rsync.sh
 ```
 
 ### 3. 板端启动
 
 ```bash
-ssh root@192.168.8.235
+ssh root@<device_ip>
 cd /root/aipc/bin
 ./start_app.sh --daemon
 ```
 
 ### 4. 访问控制台
 
-- Web UI: http://192.168.8.235:8080
-- 健康状态: http://192.168.8.235:8080/api/status
+- Web UI: `http://<device_ip>:8080`
+- 健康状态: `http://<device_ip>:8080/api/status`
 
 ## 常用接口
 
@@ -81,4 +81,3 @@ cd /root/aipc/bin
 ## License
 
 本项目遵循仓库内各组件对应的开源许可证。
-
