@@ -1,204 +1,184 @@
-# AIPC Agent 自动调试 Skill（模式切换回归版）
-
-## 元信息
-
-```yaml
+---
 name: aipc-agent-auto-debug
-version: 3.0.0
-description: >
-  AIPC 编译→部署→板端运行→模式切换回归测试（SimpleIPC <-> VisionG）自动化流程。
-  重点覆盖：首次切换、二次部署、异常脚本回退、连续压测、流恢复验证。
-target_device: root@192.168.8.235
-http_base: http://192.168.8.235:8080
-build_dir: build/Debug
-```
-
+description: Build, deploy, run, and debug this AIPC project on RV1106/Luckfox hardware using either ADB port forwarding or network SSH/HTTP. Use when validating board behavior, mode switching, stream recovery, Python VisionG deployment, or regressions after code changes.
 ---
 
-## 适用场景
+# AIPC 自动化调试 Skill
 
-- SimpleIPC 切到 VisionG 后，部署报错或前端显示异常。
-- VisionG 二次部署后出现编码失败、流中断。
-- VisionG 切回 SimpleIPC 后，RTSP/WebRTC/WS 没有帧。
-- 需要验证修复后模式切换是否稳定。
+## 目标
 
----
+在本仓库中自动完成 AIPC 的编译、部署、启动、健康检查、模式切换回归和日志采集。优先使用 ADB；如果设备没有 ADB 或需要完整部署，则使用网络 SSH/rsync。
 
-## 判定总则
+## 参数约定
 
-- 每一步都要保留证据：请求响应、进程状态、关键日志。
-- 先验证服务存活，再验证业务正确性。
-- 出错后优先执行“回切到 none + 状态复查”，避免长时间卡死。
-
----
-
-## Phase 0：编译
+默认值可由环境变量覆盖：
 
 ```bash
-cmake --build build/Debug 2>&1 | tail -20
+AIPC_BUILD_DIR=${AIPC_BUILD_DIR:-build/Debug}
+AIPC_REMOTE_HOST=${AIPC_REMOTE_HOST:-root@192.168.8.235}
+AIPC_REMOTE_DIR=${AIPC_REMOTE_DIR:-/root/aipc}
+AIPC_HTTP_BASE=${AIPC_HTTP_BASE:-http://192.168.8.235:8080}
+AIPC_ADB_FORWARD_PORT=${AIPC_ADB_FORWARD_PORT:-18080}
 ```
 
-通过标准：出现 `Linking CXX executable bin/aipc` 且无 `error:`。
+不要把新的固定 IP、用户名、绝对 SDK 路径写入代码。需要变更目标设备时，通过这些环境变量或命令参数传入。
 
----
+## 通道选择
 
-## Phase 1：部署
+1. 先执行 `adb devices`。如果能看到设备，优先用 ADB：
+   - `adb shell` 检查进程和日志。
+   - `adb push` 上传本地构建产物或安装目录。
+   - `adb forward tcp:${AIPC_ADB_FORWARD_PORT} tcp:8080` 后用 `http://127.0.0.1:${AIPC_ADB_FORWARD_PORT}` 调 API。
+2. 如果 ADB 不可用，使用网络：
+   - `ssh ${AIPC_REMOTE_HOST} ...`
+   - `rsync -az --delete ... ${AIPC_REMOTE_HOST}:${AIPC_REMOTE_DIR}/`
+   - `curl ${AIPC_HTTP_BASE}/api/status`
+
+## 标准流程
+
+### 1. 编译
 
 ```bash
-./assets/install_rsync.sh
+cmake --build "${AIPC_BUILD_DIR}"
 ```
 
-通过标准：最后输出 `完成！文件已同步到远程主机`。
+通过标准：命令退出码为 0，产物 `${AIPC_BUILD_DIR}/bin/aipc` 存在。
 
----
+### 2. 安装打包
 
-## Phase 2：重启服务
+前端或安装内容可能变化时：
 
 ```bash
-ssh root@192.168.8.235 '/root/aipc/bin/stop_app.sh 2>/dev/null || pkill -x aipc || true'
-ssh root@192.168.8.235 'sleep 1 && pgrep -x aipc && echo "WARN: still running" || echo "OK: stopped"'
-ssh root@192.168.8.235 'cd /root/aipc/bin && nohup env LD_LIBRARY_PATH=/root/aipc/lib:$LD_LIBRARY_PATH ./aipc > /var/log/aipc.log 2>&1 &'
-sleep 2
-ssh root@192.168.8.235 'pgrep -x aipc && echo "PROC: ok" || echo "PROC: failed"'
+./assets/build_frontend.sh
+cmake --install "${AIPC_BUILD_DIR}"
 ```
 
----
+安装目录默认为 `${AIPC_BUILD_DIR}/install`。
 
-## Phase 3：基线健康检查
+### 3. 部署
+
+ADB 路径：
 
 ```bash
-BASE='http://192.168.8.235:8080'
+adb shell "mkdir -p ${AIPC_REMOTE_DIR}"
+adb push "${AIPC_BUILD_DIR}/install/." "${AIPC_REMOTE_DIR}/"
+```
 
-python3 - <<'PY'
-import json, urllib.request
-BASE='http://192.168.8.235:8080'
-for p in ['/api/status','/api/python/status']:
-    with urllib.request.urlopen(BASE+p, timeout=5) as r:
-        print(p, json.dumps(json.loads(r.read().decode()), ensure_ascii=False))
-PY
+网络路径：
+
+```bash
+rsync -az --delete "${AIPC_BUILD_DIR}/install/" "${AIPC_REMOTE_HOST}:${AIPC_REMOTE_DIR}/"
+```
+
+如果使用仓库脚本，优先设置环境变量后执行：
+
+```bash
+AIPC_REMOTE_HOST="${AIPC_REMOTE_HOST}" AIPC_REMOTE_DIR="${AIPC_REMOTE_DIR}" ./assets/install_rsync.sh
+```
+
+### 4. 启动或重启
+
+ADB 路径：
+
+```bash
+adb shell "${AIPC_REMOTE_DIR}/bin/stop_app.sh 2>/dev/null || pkill -x aipc || true"
+adb shell "cd ${AIPC_REMOTE_DIR}/bin && nohup env LD_LIBRARY_PATH=${AIPC_REMOTE_DIR}/lib:\$LD_LIBRARY_PATH ./aipc > /var/log/aipc.log 2>&1 &"
+adb shell "pgrep -x aipc"
+```
+
+网络路径：
+
+```bash
+ssh "${AIPC_REMOTE_HOST}" "${AIPC_REMOTE_DIR}/bin/stop_app.sh 2>/dev/null || pkill -x aipc || true"
+ssh "${AIPC_REMOTE_HOST}" "cd ${AIPC_REMOTE_DIR}/bin && nohup env LD_LIBRARY_PATH=${AIPC_REMOTE_DIR}/lib:\$LD_LIBRARY_PATH ./aipc > /var/log/aipc.log 2>&1 &"
+ssh "${AIPC_REMOTE_HOST}" "pgrep -x aipc"
+```
+
+### 5. HTTP 健康检查
+
+ADB 路径先转发端口：
+
+```bash
+adb forward --remove "tcp:${AIPC_ADB_FORWARD_PORT}" 2>/dev/null || true
+adb forward "tcp:${AIPC_ADB_FORWARD_PORT}" tcp:8080
+AIPC_HTTP_BASE="http://127.0.0.1:${AIPC_ADB_FORWARD_PORT}"
+```
+
+检查：
+
+```bash
+curl -fsS "${AIPC_HTTP_BASE}/api/status"
+curl -fsS "${AIPC_HTTP_BASE}/api/python/status"
+curl -fsS "${AIPC_HTTP_BASE}/api/rtsp/status"
 ```
 
 通过标准：
-- `/api/status.success=true`
-- 当前模式为 `SimpleIPC`
-- `/api/python/status.success=true`
 
----
+- `/api/status` 返回 JSON 且 `success=true`。
+- producer 存在并处于 running。
+- 进程未退出。
 
-## Phase 4：模式切换回归矩阵
+### 6. 模式切换回归
 
-### Case A：首次切换（SimpleIPC -> VisionG -> none）
-
-1. POST `/api/ai/switch` with `{"model":"visiong"}`
-2. GET `/api/python/status`（active 应为 true）
-3. POST `/api/ai/switch` with `{"model":"none"}`
-4. GET `/api/status`（mode 应为 SimpleIPC，producer.running 应恢复 true）
-
-### Case B：有效脚本二次部署
-
-1. 切到 VisionG
-2. 保存并部署带 `run()` 的最小脚本：
-
-```python
-def run():
-    import aipc
-    while aipc.is_running():
-        pass
-```
-
-3. 观察 `/api/python/deploy` 返回 success=true
-4. 再切回 none，确认 HTTP 不中断且进程存活
-
-### Case C：无效脚本容错
-
-1. 切到 VisionG
-2. 部署无 `run()` 脚本（例如只有 `process()`）
-3. 预期 `/api/python/deploy` 返回 `Code error`
-4. 紧接切回 none，确认仍能回到 SimpleIPC 且服务不崩溃
-
-### Case D：连续压测
+执行 SimpleIPC -> VisionG -> SimpleIPC：
 
 ```bash
-python3 - <<'PY'
-import json, urllib.request, time
-BASE='http://192.168.8.235:8080'
-N=20
-fail=0
+curl -fsS -X POST "${AIPC_HTTP_BASE}/api/ai/switch" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"visiong"}'
 
-def post(path, body):
-    req=urllib.request.Request(BASE+path, data=json.dumps(body).encode(), headers={'Content-Type':'application/json'}, method='POST')
-    with urllib.request.urlopen(req, timeout=8) as r:
-        return json.loads(r.read().decode())
+curl -fsS "${AIPC_HTTP_BASE}/api/python/status"
 
-def get(path):
-    with urllib.request.urlopen(BASE+path, timeout=5) as r:
-        return json.loads(r.read().decode())
+curl -fsS -X POST "${AIPC_HTTP_BASE}/api/ai/switch" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"none"}'
 
-for i in range(1, N+1):
-    try:
-        post('/api/ai/switch', {'model':'visiong'})
-        time.sleep(1)
-        get('/api/status')
-        post('/api/ai/switch', {'model':'none'})
-        time.sleep(1)
-        get('/api/status')
-        print(f'[{i}/{N}] ok')
-    except Exception as e:
-        print(f'[{i}/{N}] fail: {e!r}')
-        fail += 1
-        break
-
-print('FAIL=', fail)
-PY
-```
-
-通过标准：`FAIL=0`。
-
----
-
-## Phase 5：流恢复检查（关键）
-
-切回 SimpleIPC 后，执行：
-
-```bash
-ssh root@192.168.8.235 'grep -E "Mode switch:|Mode switch completed|SimpleIPC producer started|VisionG] started|encode failed|Code error" /var/log/aipc.log | tail -120'
+curl -fsS "${AIPC_HTTP_BASE}/api/status"
 ```
 
 通过标准：
-- 有 `Mode switch completed`
-- 回切后能看到 `SimpleIPC producer started`
-- 无持续刷屏 `Failed to send frame to VENC`
 
----
+- 切到 VisionG 后 `/api/python/status.data.active=true`。
+- 切回 none 后 producer mode 为 SimpleIPC。
+- HTTP 服务不中断，进程仍存活。
 
-## 常见故障与快速定位
+### 7. 日志采集
 
-### 1) 前端提示 `disconnectWS is not defined`
+ADB：
 
-前端重连函数名调用错误，属于 UI 异常，不是后端 deploy 接口本身崩溃。
+```bash
+adb shell "tail -n 160 /var/log/aipc.log"
+adb shell "grep -E 'Mode switch|SimpleIPC producer started|VisionG|Code error|encode failed|VENC' /var/log/aipc.log | tail -120"
+```
 
-### 2) `Code error: Python code must define callable: run()`
+网络：
 
-部署脚本不符合当前运行时契约，需提供 `run()`。
+```bash
+ssh "${AIPC_REMOTE_HOST}" "tail -n 160 /var/log/aipc.log"
+ssh "${AIPC_REMOTE_HOST}" "grep -E 'Mode switch|SimpleIPC producer started|VisionG|Code error|encode failed|VENC' /var/log/aipc.log | tail -120"
+```
 
-### 3) 回切 none 后无流
+## 故障定位优先级
 
-重点检查：
-- 回切时是否真正启动了 SimpleIPC（`SimpleIPC producer started`）
-- 模式切换之前 VisionG 是否处于异常停止态
+1. 进程是否存在：`pgrep -x aipc`。
+2. HTTP 是否可达：`/api/status`。
+3. 当前 producer 模式和 running 状态。
+4. 最近日志中的 `Mode switch`、`Code error`、`encode failed`。
+5. 若只有 ADB 可用，确认端口转发是否指向 8080。
+6. 若只有网络可用，确认设备 IP、SSH、rsync 和防火墙。
 
----
+## 输出格式
 
-## 输出模板
-
-每轮调试请输出：
+每次调试结束输出：
 
 ```text
-- 版本/提交：
-- 测试矩阵：Case A/B/C/D 结果
-- 失败步骤：
-- 关键日志：
-- 根因判断：
-- 是否满足回归标准：
-- 下一步建议：
+- transport: adb|network
+- build: pass|fail
+- deploy: pass|fail
+- process: running|stopped
+- http: pass|fail
+- mode switch: pass|fail
+- key logs:
+- root cause:
+- next action:
 ```

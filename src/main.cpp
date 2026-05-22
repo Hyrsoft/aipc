@@ -207,7 +207,7 @@ int main(int argc, char *argv[]) {
         } else if (arg == "--help" || arg == "-h") {
             printf("Usage: %s [options]\n", argv[0]);
             printf("Options:\n");
-            printf("  --mode <mode>     Startup mode: simple_ipc|visiong (default: visiong)\n");
+            printf("  --mode <mode>     Startup mode: simple_ipc|visiong (default: simple_ipc)\n");
             printf("  --record, -r      Enable file recording\n");
             printf("  --rtsp            Auto-start RTSP server on startup\n");
             printf("  --webrtc          Auto-start WebRTC server on startup\n");

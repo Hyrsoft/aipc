@@ -20,14 +20,41 @@
 
 在 AIPC 的 VisionG 模式中，Python 工程与独立示例脚本职责不同：
 
-- Python 负责：采集、推理、绘制，并在 `process()` 中返回 `visiong.ImageBuffer`。
-- AIPC 负责：拿到返回帧后执行编码与流媒体分发（RTSP/WebRTC/WS/录制）。
+- Python 负责：采集、推理、绘制，并通过 `aipc.submit_frame(frame)` 提交处理后的 `visiong.ImageBuffer`。
+- AIPC 负责：接收提交帧后执行 H.264 编码与流媒体分发（RTSP/WebRTC/WebSocket Preview/录制）。
 
 因此，不要直接照搬包含 `DisplayUDP/DisplayHTTP/DisplayRTSP` 的独立脚本到 AIPC 工程。AIPC 工程建议采用以下接口：
 
 - `init()`：初始化 Camera/NPU 等资源。
-- `process()`：每帧处理并返回 `ImageBuffer` 或 `None`。
-- `cleanup()`：释放资源。
+- `run()`：必须存在，驱动帧循环，通常使用 `while aipc.is_running():` 判断退出。
+- `cleanup()`：可选，释放资源。
+
+最小 AIPC 工程骨架：
+
+```python
+import visiong
+import aipc
+
+_cam = None
+
+def init():
+    global _cam
+    _cam = visiong.Camera(640, 360, format='rgb')
+    _cam.skip(8)
+
+def run():
+    while aipc.is_running():
+        frame = _cam.snapshot()
+        if not frame.is_valid():
+            continue
+        aipc.submit_frame(frame)
+
+def cleanup():
+    global _cam
+    if _cam:
+        _cam.release()
+        _cam = None
+```
 
 预设工程可直接使用：`python_projects/yolov5_detection.py`。
 

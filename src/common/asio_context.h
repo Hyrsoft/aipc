@@ -141,7 +141,7 @@ public:
      * 在 Stop() 之后调用，用于执行/销毁所有剩余的异步任务。
      * 这对于释放异步回调中持有的 shared_ptr 资源（如 VENC Buffer）至关重要。
      * 
-     * 典型用法：在 StreamDispatcher 停止后、rkvideo_deinit 前调用
+     * 典型用法：在 StreamDispatcher 停止后、RKMPI 资源释放前调用
      */
     void Drain() {
         io_context_.restart();

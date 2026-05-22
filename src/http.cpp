@@ -756,12 +756,12 @@ void HttpApi::SetupRoutes() {
 
             auto &mgr = media::MediaManager::Instance();
 
-            // Phase B: VisionG 模式下摄像头尺寸由 C++ ProducerConfig 管理，
-            // 不支持通过此接口动态切换（需重新 Init 才能生效）
+            // VisionG 模式下摄像头和分辨率由 Python 工程中的 visiong.Camera(...) 管理，
+            // 不支持通过此接口动态切换。
             if (mgr.GetCurrentMode() != media::ProducerMode::SimpleIPC) {
                 res.set_content(json_response(false,
-                                              "In VisionG mode camera resolution is set via ProducerConfig "
-                                              "(ai_width/ai_height); switch back to SimpleIPC to use this endpoint"),
+                                              "In VisionG mode camera resolution is managed by the Python project "
+                                              "(visiong.Camera); switch back to SimpleIPC to use this endpoint"),
                                 "application/json");
                 return;
             }

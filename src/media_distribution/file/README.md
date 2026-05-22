@@ -1,153 +1,69 @@
-# 文件保存模块 (File Saver)
+# File 模块
 
-文件保存模块实现视频离线录制（MP4）和拍照（JPEG）功能，作为编码流分发器的消费者之一。
+`media_distribution/file` 负责把 Producer 输出的 H.264/H.265 编码流封装为 MP4 文件。当前文件模块只实现视频录制，不包含旧文档里提到的 `FileThread`、JPEG 拍照或 `rkvideo_register_stream_consumer` 接口。
 
-## 设计原则
+## 当前组件
 
-- **RAII 设计**：`Mp4Recorder` 和 `JpegCapturer` 使用构造函数初始化，析构函数清理，无需额外的 init/deinit
-- **独立线程**：`FileThread` 作为独立的控制线程，便于后续通过 WebSocket/HTTP API 控制
-- **解耦设计**：文件保存逻辑与流分发逻辑分离，便于维护和扩展
-
-## 功能特性
-
-### MP4 录制
-- 使用 FFmpeg 封装 H.264/H.265 编码流为 MP4 文件
-- 支持自动时间戳命名或自定义文件名
-- 支持最大录制时长限制
-- 支持最大文件大小限制
-- 零拷贝接收 VENC 编码流
-
-### JPEG 拍照
-- 使用 RKMPI JPEG 编码器实现快照
-- 使用 TDE 进行硬件加速缩放
-- 支持自定义 JPEG 质量（1-100）
-- 支持图片旋转（0°, 90°, 180°, 270°）
-
-## 架构设计
-
-```
-┌─────────────────────────────────────────────────────┐
-│                 StreamDispatcher                     │
-│  (从 VENC 获取 H.264 编码流，分发给多个消费者)         │
-└────────────────────────┬────────────────────────────┘
-                         │
-         ┌───────────────┼───────────────┐
-         ▼               ▼               ▼
-    ┌──────────┐   ┌───────────┐   ┌──────────┐
-    │RtspThread│   │ FileThread│   │(WebRTC)  │
-    │ RTSP推流 │   │ 文件保存  │   │  待实现  │
-    └──────────┘   └─────┬─────┘   └──────────┘
-                         │
-              ┌──────────┴──────────┐
-              ▼                     ▼
-        ┌───────────┐        ┌────────────┐
-        │Mp4Recorder│        │JpegCapturer│
-        │ (RAII)    │        │  (RAII)    │
-        └───────────┘        └────────────┘
+```text
+file/
+├── file_saver.h/cpp    # Mp4Recorder，使用 FFmpeg 写 MP4
+├── file_service.h/cpp  # FileService，提供录制控制和流消费者入口
+└── CMakeLists.txt
 ```
 
-## 使用方法
+## 数据流
 
-### 基本使用
+```text
+EncodedStreamPtr
+      |
+      v
+FileService::StreamConsumer
+      |
+      v
+FileService::OnEncodedStream
+      |
+      v
+Mp4Recorder::WriteFrame
+      |
+      v
+MP4 file
+```
+
+`FileService` 由 `StreamManager` 创建，作为 `MediaManager` 的 `Queued` 类型消费者注册。这样文件写入不会阻塞主 IO 线程或网络发送路径。
+
+## 录制控制
+
+HTTP API：
+
+- `GET /api/record/status`：查看录制状态、输出目录和统计信息。
+- `POST /api/record/start`：开始录制。
+- `POST /api/record/stop`：停止录制。
+
+C++ 入口：
 
 ```cpp
-#include "file/thread_file.h"
+FileServiceConfig config;
+config.mp4Config.outputDir = "/root/record";
 
-// 配置
-FileThreadConfig config;
-config.mp4Config.outputDir = "/sdcard/videos";
-config.mp4Config.filenamePrefix = "record";
-config.jpegConfig.outputDir = "/sdcard/photos";
-config.jpegConfig.viDevId = 0;
-config.jpegConfig.viChnId = 0;
+FileService service(config);
+service.Start();
+service.StartRecording();
 
-// 创建并启动文件线程
-CreateFileThread(config);
+// Producer 输出帧时调用：
+FileService::StreamConsumer(stream, &service);
 
-// 注册到流分发器
-rkvideo_register_stream_consumer(
-    "file",
-    &FileThread::StreamConsumer,
-    GetFileThread(),
-    5
-);
-
-GetFileThread()->Start();
-
-// 录制控制
-GetFileThread()->StartRecording();      // 开始录制
-GetFileThread()->StopRecording();       // 停止录制
-
-// 拍照
-GetFileThread()->TakeSnapshot();        // 触发拍照
-
-// 清理
-DestroyFileThread();
+service.StopRecording();
+service.Stop();
 ```
 
-### 直接使用类
+## 构建依赖
 
-```cpp
-#include "file/file_saver.h"
+该模块从 `BUILDROOT_SYSROOT` 查找 FFmpeg 头文件和库：
 
-// MP4 录制（RAII，构造即可用）
-Mp4RecordConfig mp4_config;
-mp4_config.outputDir = "/tmp";
-Mp4Recorder recorder(mp4_config);
+- `libavformat`
+- `libavcodec`
+- `libswresample`
+- `libavutil`
+- `libswscale`
 
-recorder.StartRecording("my_video");
-// ... 调用 WriteFrame() 写入帧 ...
-recorder.StopRecording();
-
-// JPEG 拍照（RAII）
-JpegCaptureConfig jpeg_config;
-jpeg_config.viDevId = 0;
-jpeg_config.viChnId = 0;
-JpegCapturer capturer(jpeg_config);
-
-// 在独立线程中运行处理循环
-std::atomic<bool> running{true};
-std::thread t([&]() { capturer.ProcessLoop(running); });
-
-capturer.TakeSnapshot();  // 触发拍照
-
-running = false;
-t.join();
-```
-
-## 文件结构
-
-```
-src/file/
-├── CMakeLists.txt    # CMake 配置
-├── file_saver.h      # MP4Recorder / JpegCapturer 类定义
-├── file_saver.cpp    # 实现
-├── thread_file.h     # FileThread 线程类定义
-├── thread_file.cpp   # 线程实现
-└── README.md         # 本文档
-```
-
-## 控制接口（便于 WebSocket/HTTP 集成）
-
-`FileThread` 提供以下控制接口：
-
-| 方法 | 说明 |
-|------|------|
-| `StartRecording(filename)` | 开始录制 |
-| `StopRecording()` | 停止录制 |
-| `IsRecording()` | 检查录制状态 |
-| `GetRecordStats()` | 获取录制统计 |
-| `TakeSnapshot(filename)` | 触发拍照 |
-| `GetLastPhotoPath()` | 获取最后照片路径 |
-| `GetPhotoCount()` | 获取拍照计数 |
-
-## 注意事项
-
-1. **VI 通道配置**: JPEG 拍照需要 VI 通道 `u32Depth >= 1`
-2. **VENC 通道**: JPEG 使用独立通道（默认 1），避免与 H.264 冲突
-3. **线程安全**: 所有控制接口都是线程安全的
-
-## 参考
-
-- [main_ffmpeg.c](../../rockit-test/src/main_ffmpeg.c) - FFmpeg MP4 录制示例
-- [main_jpeg.c](../../rockit-test/src/main_jpeg.c) - JPEG 拍照示例
+如果 sysroot 中缺少这些依赖，CMake 会在配置阶段直接失败。

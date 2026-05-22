@@ -1,144 +1,110 @@
-# Media Producer 媒体生产者模块
+# Media Producer 模块
 
-## 架构设计
+`media_producer` 负责视频生产侧：创建采集/处理模式、管理模式生命周期，并把编码后的 H.264 流交给分发模块。
 
-### 核心设计模式：策略模式 (Strategy Pattern)
+当前实现只有两种 Producer：
 
-外部接口统一，内部硬件资源分配逻辑完全独立且差异巨大。
+- `SimpleIPCProducer`：纯监控模式，使用 RKMPI 建立 `VI -> VPSS -> VENC` 硬件绑定。
+- `VisionGProducer`：Python 驱动 AI 模式，Python 负责摄像头、推理、绘制和帧循环，C++ 负责嵌入式 Python 生命周期、VENC 编码和流媒体分发。
 
-**实现方式**：继承 (Inheritance)
-- 定义纯虚基类 `IMediaProducer` 作为接口
-- 三种模式分别作为具体子类：
-  - `SimpleIPCProducer` - 纯监控模式
-  - `YoloProducer` - YOLOv5 目标检测模式
-  - `RetinaFaceProducer` - RetinaFace 人脸检测模式
-
-### 分发机制：运行时动态分发 (Dynamic Dispatch)
-
-使用 C++ 多态 (Polymorphism) 特性：
-- 编译时不确定运行的是哪种模式
-- 运行时根据配置动态实例化具体子类
-- 通过虚函数表 (vtable) 动态跳转到对应实现
-
-### MediaManager：生命周期管理者
-
-`MediaManager` 充当系统的上下文 (Context) 和控制器 (Controller)，负责"冷切换"：
-
-1. **持有句柄**：`unique_ptr<IMediaProducer>` 基类指针
-2. **接收指令**：Web 端"切换到 YOLO 模式"请求
-3. **销毁旧实例**：调用 `stop()` → 重置指针 → 旧析构函数释放硬件
-4. **创建新实例**：`new` 对应子类，申请全新硬件资源
-5. **重新连线**：将流消费者回调注册到新实例
+旧的 `yolov5/`、`retinaface/`、`rknn/`、`rkvideo/` 子目录已不属于当前架构；模型逻辑现在放在 Python 工程中。
 
 ## 目录结构
 
-```
+```text
 media_producer/
-├── i_media_producer.h      # 接口基类定义
-├── media_manager.h/cpp     # 生命周期管理器
-├── simple_ipc/             # 纯监控模式
-│   ├── simple_ipc_producer.h/cpp
-│   └── mpi_config.h        # MPI 配置工具函数
-├── yolov5/                 # YOLOv5 目标检测模式
-│   └── yolo_producer.h/cpp
-├── retainface/             # RetinaFace 人脸检测模式
-│   └── retinaface_producer.h/cpp
-├── rknn/                   # AI 推理引擎（共用）
-│   ├── yolov5_model.h/cpp
-│   ├── retinaface_model.h/cpp
-│   └── image_utils.h/cpp
-└── rkvideo/                # MPI 封装（遗留，待重构）
+├── i_media_producer.h          # Producer 公共接口和模式枚举
+├── media_manager.h/cpp         # 生命周期管理、冷切换、消费者重注册
+├── simple_ipc/
+│   ├── simple_ipc_config.h     # SimpleIPC 分辨率/帧率预设
+│   ├── simple_ipc_producer.h
+│   ├── simple_ipc_producer.cpp
+│   └── mpi_config.h            # SimpleIPC 的 RKMPI 配置辅助函数
+└── visiong/
+    ├── visiong_producer.h
+    └── visiong_producer.cpp
 ```
 
-## 统一接口
+## 数据流
 
-```cpp
-class IMediaProducer {
-public:
-    virtual int Init() = 0;              // 初始化硬件资源
-    virtual int Deinit() = 0;            // 释放硬件资源
-    virtual bool Start() = 0;            // 启动视频流
-    virtual void Stop() = 0;             // 停止视频流
-    
-    virtual void RegisterStreamConsumer(
-        const std::string& name,
-        StreamCallback callback,
-        StreamConsumerType type = StreamConsumerType::AsyncIO,
-        int queue_size = 3) = 0;
-    
-    virtual bool IsInitialized() const = 0;
-    virtual bool IsRunning() const = 0;
-    virtual const char* GetTypeName() const = 0;
-};
+### SimpleIPC
+
+```text
+VI -> VPSS -> VENC -> EncodedStreamPtr -> RTSP / WebSocket Preview / File / WebRTC
 ```
 
-## 使用示例
+特点：
+
+- 使用硬件绑定，CPU 不参与帧处理。
+- 分辨率通过 `SimpleIPCConfig` 和 `/api/pipeline/resolution` 切换。
+- 切换分辨率需要停止并重新初始化 SimpleIPC 管线。
+
+### VisionG
+
+```text
+Python project
+  visiong.Camera -> model inference / drawing -> aipc.submit_frame(frame)
+                                                      |
+                                                      v
+                                             C++ VENC encode
+                                                      |
+                                                      v
+                               RTSP / WebSocket Preview / File / WebRTC
+```
+
+Python 工程契约：
+
+- `init()`：可选，用于创建 `visiong.Camera`、加载模型等。
+- `run()`：必须存在，通常循环检查 `aipc.is_running()`。
+- `cleanup()`：可选，用于释放摄像头、模型等资源。
+- `aipc.submit_frame(frame)`：把处理后的 `visiong.ImageBuffer` 交给 C++ 编码。
+
+不要在 AIPC Python 工程里使用 VisionG 的 `DisplayUDP`、`DisplayHTTP`、`DisplayRTSP` 作为主要输出；AIPC 的输出由 C++ 分发模块统一处理。
+
+## MediaManager
+
+`MediaManager` 是 Producer 的统一生命周期控制器。
+
+主要职责：
+
+- 持有当前 `IMediaProducer` 实例。
+- 根据模式创建 `SimpleIPCProducer` 或 `VisionGProducer`。
+- 执行冷切换：停止旧 Producer、释放资源、创建新 Producer、重新注册消费者、按需启动。
+- 保存消费者注册信息，切换模式后自动恢复 RTSP、WebSocket Preview、File、WebRTC 的连接。
+
+典型调用：
 
 ```cpp
-#include "media_producer/media_manager.h"
+auto& mgr = media::MediaManager::Instance();
 
-using namespace media;
+media::ProducerConfig config;
+config.framerate = 30;
+config.bitrate_kbps = 10 * 1024;
 
-// 获取管理器单例
-auto& mgr = MediaManager::Instance();
-
-// 初始化（纯 IPC 模式）
-ProducerConfig config;
-config.resolution = Resolution::R_1080P;
-mgr.Init(ProducerMode::SimpleIPC, config);
-
-// 注册流消费者
+mgr.Init(media::ProducerMode::SimpleIPC, config);
 mgr.RegisterStreamConsumer("rtsp", rtsp_callback);
-mgr.RegisterStreamConsumer("webrtc", webrtc_callback);
-
-// 启动
+mgr.RegisterStreamConsumer("ws_preview", ws_callback);
 mgr.Start();
 
-// 切换到 VisionG AI 模式（当前实现：YOLOv5）
-mgr.SwitchMode(ProducerMode::VisionG);
+mgr.SwitchMode(media::ProducerMode::VisionG);
+mgr.SwitchMode(media::ProducerMode::SimpleIPC);
 
-// 切回纯 IPC 模式
-mgr.SwitchMode(ProducerMode::SimpleIPC);
-
-// 停止
 mgr.Stop();
 mgr.Deinit();
 ```
 
-## 两种模式的硬件架构
+## HTTP 相关接口
 
-### SimpleIPC（纯监控）
+- `GET /api/producer/status`：查看当前 Producer 模式。
+- `POST /api/producer/switch`：切换 `simple_ipc` / `visiong`。
+- `GET /api/ai/status`：前端兼容接口，VisionG 模式视为 AI 已启用。
+- `POST /api/ai/switch`：前端兼容接口，`visiong` 切到 VisionG，其他值切回 SimpleIPC。
+- `GET /api/pipeline/status`：前端兼容接口，SimpleIPC 显示为 `parallel`，VisionG 显示为 `serial`。
+- `POST /api/pipeline/resolution`：只在 SimpleIPC 模式下切换分辨率。
+- `POST /api/python/deploy`：在 VisionG 模式下部署 Python 工程。
 
-```
-VI -> VPSS -> VENC (硬件绑定，零拷贝)
-```
-- 完全硬件绑定
-- CPU 不参与数据流
-- 最高性能
+## 注意事项
 
-### VisionG（AI 推理，当前实现：YOLOv5）
-
-```
-VI -> VPSS --(手动获取)--> NPU 推理 --(手动发送)--> VENC
-         |                    |
-         v                    v
-      NV12 帧             RGB + OSD
-```
-- VPSS-VENC 解绑
-- 软件控制帧流动
-- 支持 OSD 叠加检测结果
-
-## 黑盒交付原则
-
-每个子类独立维护自己的硬件配置代码：
-- VI/VPSS/VENC 配置
-- 数据流转方式
-- 图像格式转换
-- 推理结果标注
-
-外界只需调用统一接口，无需了解内部实现。
-
-## 参考
-
-- [毕设日志（四）NPU 推理与硬件资源分配](https://hyrsoft.github.io/posts/linux/毕业设计智能网络摄像头/npu推理与硬件资源分配/)
-
+- VisionG 的摄像头分辨率由 Python 工程里的 `visiong.Camera(...)` 决定，C++ 不提供 VisionG 分辨率切换接口。
+- 模式切换是冷切换，会短暂停流。
+- Python 运行时按进程生命周期初始化，避免每次切换都销毁解释器。

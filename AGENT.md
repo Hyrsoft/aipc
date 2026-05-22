@@ -1,4 +1,6 @@
-# AIPC 项目 — Claude 上下文文档
+# AIPC 项目 — Agent 开发标准
+
+本文件是面向 AI coding agent 的项目级工作规范。Agent 在本仓库中进行分析、实现、调试、提交时，应优先遵循本文档；若与用户本轮明确要求冲突，以用户最新要求为准。
 
 ## 项目概述
 
@@ -40,9 +42,10 @@ aipc/
 │   └── python_projects/               # 内置 Python 工程示例
 ├── docs/
 │   ├── coding_style.md                 # 代码规范（Google C++ Style）
-│   ├── 双模切换架构设计.md
+│   ├── VisionG-学习者-Wiki.md          # VisionG API 学习资料，含 AIPC 集成约束
+│   ├── 关于动态库.md                   # 板端动态库部署说明
 │   └── visiong库移植/                  # VisionG 移植笔记
-├── .github/skills/aipc-agent-auto-debug/  # Agent 调试 Skill
+├── docs/agent_auto_debug_skill/         # Agent 调试 Skill 和少量 repo 快照
 ├── build/Debug/                        # CMake 构建目录（交叉编译）
 ├── CMakeLists.txt
 └── CMakePresets.json
@@ -80,6 +83,15 @@ aipc/
 - **锁**：`std::lock_guard` / `std::unique_lock`，明确标注线程安全性
 - **错误处理**：返回值 + 日志，关键路径记录 `LOG_ERROR`
 
+## Agent 工作准则
+
+- 先读代码再改动，优先使用 `rg`、`sed`、`git diff` 获取上下文。
+- 不回滚用户已有改动；遇到不相关脏文件时只忽略，不清理。
+- 修改嵌入式运行路径、部署脚本、CMake 时，优先使用可配置变量，避免写死开发机路径、板端 IP 或用户名。
+- 变更后至少执行 `cmake --build build/Debug`，涉及前端时再执行 `npm run build` 或 `./assets/build_frontend.sh`。
+- 涉及板端行为时，优先使用 `.github/skills/aipc-agent-auto-debug/SKILL.md` 中的 ADB/网络调试流程。
+- 提交信息必须遵循 `docs/git_commit_convention.md`。
+
 ---
 
 ## 架构关键约束
@@ -100,7 +112,7 @@ aipc/
 
 ### Python 解释器初始化
 
-`WarmupVisionGPythonRuntime()` 在 `main()` 早期调用，通过 `std::call_once` 保证只初始化一次。`initialize_interpreter` 完成后**必须立即 `py::gil_scoped_release`**，否则 main 线程永久持有 GIL，后续所有工作线程的 `gil_scoped_acquire` 死等。
+`WarmupVisionGPythonRuntime()` 在 `main()` 早期调用，通过 `std::call_once` 保证只初始化一次。`initialize_interpreter` 完成后必须调用 `PyEval_SaveThread()` 交还 GIL，否则 main 线程会永久持有 GIL，后续所有工作线程的 `gil_scoped_acquire` 会死等。
 
 ### Python 脚本契约
 
@@ -196,7 +208,7 @@ tail -f /var/log/aipc.log
 
 **根因**：`LoadCode` 和 `Shutdown` 加锁顺序为 `mutex_ → GIL`，与 `CallRun` 的 `GIL → mutex_` 反向。
 
-**修复**：统一为 `GIL → mutex_`（见 `visiong_producer.cpp` L308、L427）。
+**修复**：统一为 `GIL → mutex_`。
 
 ### [已修复] main 线程永久持有 GIL
 
@@ -204,13 +216,13 @@ tail -f /var/log/aipc.log
 
 **根因**：`py::initialize_interpreter` 执行后调用线程自动持有 GIL，`WarmupVisionGPythonRuntime` 返回后 main 线程进入事件循环，GIL 永不释放。
 
-**修复**：在 `EnsureEmbeddedPythonReady` 的 `call_once` lambda 末尾添加 `py::gil_scoped_release`（见 `visiong_producer.cpp` L232）。
+**修复**：在 `EnsureEmbeddedPythonReady` 的 `call_once` lambda 末尾调用 `PyEval_SaveThread()`，让解释器进入多线程待机状态。
 
 ---
 
 ## Agent 调试指引
 
-详见 `.github/skills/aipc-agent-auto-debug/` 和 `docs/agent_auto_debug_skill/SKILL.md`。
+详见 `docs/agent_auto_debug_skill/SKILL.md`。
 
 快速自检清单（卡死/崩溃时）：
 
