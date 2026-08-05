@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api, connectEvents, reduceServerEvent, type LiveState } from './api'
 import type { PersistentState, WorkerConfig } from './types'
+import { PreviewController, initialPreviewSnapshot } from './preview'
 
 const live = reactive<LiveState>({ status: null, events: [], logs: [] })
 const configs = ref<PersistentState | null>(null)
@@ -12,6 +13,10 @@ const notice = ref('')
 const error = ref('')
 const trackingGeneration = ref<string | null>(null)
 let disconnect: (() => void) | undefined
+const previewVideo = ref<HTMLVideoElement | null>(null)
+const preview = reactive(initialPreviewSnapshot())
+const previewManuallyStopped = ref(false)
+let previewController: PreviewController | undefined
 
 const status = computed(() => live.status)
 const metrics = computed(() => status.value?.metrics || {})
@@ -72,12 +77,28 @@ async function applyConfig() {
 function resetForm() { if (configs.value?.desired) form.value = structuredClone(configs.value.desired) }
 function fmt(value: unknown, digits = 1) { return typeof value === 'number' ? value.toFixed(digits) : '—' }
 function short(value: string | null | undefined) { return value ? value.slice(0, 8) : '—' }
+function bytes(value: number) { return value > 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MiB` : `${(value / 1024).toFixed(1)} KiB` }
+function connectPreview() {
+  previewManuallyStopped.value = false
+  if (previewVideo.value) previewController?.connect(previewVideo.value)
+}
+function disconnectPreview() {
+  previewManuallyStopped.value = true
+  previewController?.disconnect()
+}
 
 onMounted(() => {
+  previewController = new PreviewController((snapshot) => Object.assign(preview, snapshot))
   load()
   disconnect = connectEvents((event) => assignLive(reduceServerEvent({ ...live }, event)), (up) => connected.value = up)
 })
-onBeforeUnmount(() => disconnect?.())
+watch(() => [status.value?.state, status.value?.video_ready, status.value?.generation], async () => {
+  if (status.value?.state === 'running' && status.value.video_ready && !previewManuallyStopped.value) {
+    await nextTick()
+    connectPreview()
+  }
+})
+onBeforeUnmount(() => { disconnect?.(); previewController?.destroy() })
 </script>
 
 <template>
@@ -104,6 +125,15 @@ onBeforeUnmount(() => disconnect?.())
         <button class="secondary" :disabled="busy" @click="control('stop')">Stop</button>
         <button class="accent" :disabled="busy" @click="control('restart')">Restart</button>
       </div>
+    </section>
+
+    <section class="panel preview-panel">
+      <div class="section-head preview-head"><div><span class="label">LIVE PREVIEW / H264</span><h2>实时画面</h2><p>主码流 · WebSocket · jMuxer/MSE</p></div><div class="preview-actions"><span :class="['preview-state', preview.state]">{{ preview.state }}</span><button v-if="preview.state === 'disconnected' || preview.state === 'error'" class="accent" @click="connectPreview">连接</button><button v-else class="secondary" @click="disconnectPreview">断开</button></div></div>
+      <div class="preview-stage">
+        <video ref="previewVideo" autoplay muted playsinline></video>
+        <div v-if="preview.state !== 'live'" class="preview-overlay"><strong>{{ preview.state === 'unsupported' ? '浏览器不支持 H264 MSE' : preview.state === 'error' ? '预览连接异常' : '等待 H264 关键帧' }}</strong><span>{{ preview.error || 'worker 就绪后会自动开始预览' }}</span></div>
+      </div>
+      <div class="preview-stats"><span>GEN <b>{{ short(preview.stream?.generation) }}</b></span><span>RES <b>{{ preview.stream ? `${preview.stream.width}×${preview.stream.height}` : '—' }}</b></span><span>RX FPS <b>{{ fmt(preview.receivedFps) }}</b></span><span>BITRATE <b>{{ fmt(preview.bitrateKbps) }} Kbps</b></span><span>RECEIVED <b>{{ bytes(preview.bytesReceived) }}</b></span><span>DROPS / RETRIES <b>{{ preview.droppedFrames }} / {{ preview.reconnects }}</b></span></div>
     </section>
 
     <section class="metrics-grid">
