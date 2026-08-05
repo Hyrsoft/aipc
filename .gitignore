@@ -11,6 +11,7 @@
 
 cmake-build-*/
 build/
+target/
 
 bin/
 
@@ -23,3 +24,5 @@ visiong_test/
 # 前端构建产物 (Node.js)
 www/node_modules/
 www/dist/
+webui/node_modules/
+webui/dist/
