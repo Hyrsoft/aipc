@@ -1,0 +1,52 @@
+{
+  "runtime": {
+    "generation": "standalone-1",
+    "duration_sec": 0,
+    "metrics_interval_ms": 5000,
+    "warning_timeout_count": 3,
+    "stalled_timeout_count": 10,
+    "fatal_timeout_count": 30
+  },
+  "isp": {
+    "iq_dir": "/etc/iqfiles",
+    "camera_id": 0
+  },
+  "vi": {
+    "device_id": 0,
+    "pipe_id": 0,
+    "channel_id": 0,
+    "buffer_count": 2
+  },
+  "vpss": {
+    "group_id": 0,
+    "channel_id": 0
+  },
+  "video": {
+    "enabled": true,
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "bitrate_kbps": 4096,
+    "gop": 30,
+    "venc_channel_id": 0,
+    "stream_buffer_count": 3,
+    "output_path": "/tmp/media_worker_video.h264"
+  },
+  "audio": {
+    "enabled": true,
+    "card_name": "hw:0,0",
+    "device_id": 0,
+    "channel_id": 0,
+    "aenc_channel_id": 0,
+    "device_sample_rate": 8000,
+    "sample_rate": 8000,
+    "device_channels": 2,
+    "channels": 1,
+    "bit_width": 16,
+    "frame_samples": 1024,
+    "bitrate": 64000,
+    "buffer_count": 4,
+    "output_path": "/tmp/media_worker_audio.g711a"
+  }
+}
+
