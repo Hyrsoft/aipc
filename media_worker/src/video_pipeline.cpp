@@ -44,6 +44,13 @@ bool VideoPipeline::Init(std::string* error) {
     if (!InitVi(error) || !InitVpss(error) || !InitVenc(error) || !Bind(error)) {
         return false;
     }
+    if (config_.video.ipc_fd >= 0) {
+        ipc_publisher_ = std::make_unique<VideoIpcPublisher>(
+            config_.video.ipc_fd, 8, [this](const std::string& message) {
+                events_->Emit("Warning", {{"media", "video"}, {"reason", "ipc_disabled"},
+                                           {"message", message}});
+            });
+    }
     return true;
 }
 
@@ -217,6 +224,9 @@ bool VideoPipeline::Start(std::string* error) {
         *error = "video fetch loop already running";
         return false;
     }
+    if (ipc_publisher_ && !ipc_publisher_->Start()) {
+        events_->Emit("Warning", {{"media", "video"}, {"reason", "ipc_start_failed"}});
+    }
     try {
         fetch_thread_ = std::thread(&VideoPipeline::FetchLoop, this);
     } catch (const std::exception& exception) {
@@ -248,6 +258,7 @@ void VideoPipeline::FetchLoop() {
             stream.u32PackCount == 0 ? 1 : stream.u32PackCount, kMaxPacks);
         bool keyframe = false;
         bool write_failed = false;
+        std::vector<std::uint8_t> access_unit;
         for (std::size_t i = 0; i < pack_count; ++i) {
             VENC_PACK_S& pack = packs[i];
             void* base = RK_MPI_MB_Handle2VirAddr(pack.pMbBlk);
@@ -256,6 +267,7 @@ void VideoPipeline::FetchLoop() {
             // existing AIPC path write u32Len bytes directly; applying u32Offset corrupts
             // circular-buffer packets on this SDK release.
             const auto* data = static_cast<const unsigned char*>(base);
+            access_unit.insert(access_unit.end(), data, data + pack.u32Len);
             if (std::fwrite(data, 1, pack.u32Len, output_) != pack.u32Len) {
                 write_failed = true;
                 break;
@@ -278,6 +290,16 @@ void VideoPipeline::FetchLoop() {
             stats_.errors.fetch_add(1);
             ReportFatal("video output write failed: " + std::string(std::strerror(errno)));
             break;
+        }
+        if (ipc_publisher_ && !access_unit.empty()) {
+            EncodedVideoFrame frame;
+            frame.data = std::move(access_unit);
+            frame.pts = packs[0].u64PTS;
+            frame.sequence = ++ipc_sequence_;
+            frame.keyframe = keyframe;
+            if (ipc_publisher_->Enqueue(std::move(frame))) {
+                RK_MPI_VENC_RequestIDR(config_.video.venc_channel_id, RK_TRUE);
+            }
         }
         if (stats_.packets.load() % 30 == 0) std::fflush(output_);
         if (keyframe && !ready_reported_.exchange(true)) {
@@ -310,7 +332,17 @@ void VideoPipeline::ReportFatal(const std::string& message) {
 void VideoPipeline::Stop() {
     running_.store(false);
     if (fetch_thread_.joinable()) fetch_thread_.join();
+    if (ipc_publisher_) ipc_publisher_->Stop();
     if (output_ != nullptr) std::fflush(output_);
+}
+
+nlohmann::json VideoPipeline::Stats() const {
+    auto stats = stats_.Snapshot();
+    stats["ipc_frames"] = ipc_publisher_ ? ipc_publisher_->Frames() : 0;
+    stats["ipc_bytes"] = ipc_publisher_ ? ipc_publisher_->Bytes() : 0;
+    stats["ipc_drops"] = ipc_publisher_ ? ipc_publisher_->Drops() : 0;
+    stats["ipc_errors"] = ipc_publisher_ ? ipc_publisher_->Errors() : 0;
+    return stats;
 }
 
 void VideoPipeline::Deinit() {

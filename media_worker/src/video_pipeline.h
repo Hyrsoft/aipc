@@ -5,10 +5,12 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <memory>
 
 #include "config.h"
 #include "event_emitter.h"
 #include "pipeline_stats.h"
+#include "video_ipc_publisher.h"
 
 #include "rk_common.h"
 
@@ -28,7 +30,7 @@ public:
     bool Start(std::string* error);
     void Stop();
     void Deinit();
-    nlohmann::json Stats() const { return stats_.Snapshot(); }
+    nlohmann::json Stats() const;
 
 private:
     bool InitVi(std::string* error);
@@ -47,6 +49,8 @@ private:
     std::atomic<bool> fatal_reported_{false};
     std::atomic<bool> ready_reported_{false};
     std::thread fetch_thread_;
+    std::unique_ptr<VideoIpcPublisher> ipc_publisher_;
+    std::uint64_t ipc_sequence_ = 0;
     std::FILE* output_ = nullptr;
 
     bool vi_device_enabled_ = false;
@@ -66,4 +70,3 @@ private:
 };
 
 }  // namespace media_worker
-

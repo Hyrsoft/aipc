@@ -52,6 +52,7 @@ int main(int argc, char* argv[]) {
 
     std::signal(SIGINT, SignalHandler);
     std::signal(SIGTERM, SignalHandler);
+    std::signal(SIGPIPE, SIG_IGN);
 
     media_worker::MediaWorker worker(std::move(config));
     return worker.Run([] { return g_stop_requested != 0; });

@@ -43,6 +43,7 @@ struct VideoConfig {
     int venc_channel_id = 0;
     int stream_buffer_count = 3;
     std::string output_path = "/tmp/media_worker_video.h264";
+    int ipc_fd = -1;
 };
 
 struct AudioConfig {
@@ -83,6 +84,7 @@ struct CliOptions {
     std::optional<std::string> video_output;
     std::optional<std::string> audio_output;
     std::optional<std::string> iq_dir;
+    std::optional<int> video_ipc_fd;
     bool no_audio = false;
     bool validate_only = false;
     bool help = false;

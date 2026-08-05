@@ -122,6 +122,11 @@ bool ParseCli(int argc, char* argv[], CliOptions* options, std::string* error) {
                 return false;
             }
             options->iq_dir = value;
+        } else if (arg == "--video-ipc-fd") {
+            if (!RequireInt(argc, argv, &i, "--video-ipc-fd", &options->video_ipc_fd,
+                            error)) {
+                return false;
+            }
         } else if (arg == "--no-audio") {
             options->no_audio = true;
         } else if (arg == "--validate-only") {
@@ -225,6 +230,7 @@ void ApplyCliOverrides(const CliOptions& options, WorkerConfig* config) {
     if (options.video_output) config->video.output_path = *options.video_output;
     if (options.audio_output) config->audio.output_path = *options.audio_output;
     if (options.iq_dir) config->isp.iq_dir = *options.iq_dir;
+    if (options.video_ipc_fd) config->video.ipc_fd = *options.video_ipc_fd;
     if (options.no_audio) config->audio.enabled = false;
 }
 
@@ -261,6 +267,10 @@ std::vector<std::string> ValidateConfig(const WorkerConfig& config) {
     require_range("vi.buffer_count", config.vi.buffer_count, 1, 16);
     require_range("video.stream_buffer_count", config.video.stream_buffer_count, 1, 16);
     if (config.video.output_path.empty()) errors.push_back("video.output_path is required");
+    if (config.video.ipc_fd != -1 &&
+        (config.video.ipc_fd < 3 || config.video.ipc_fd > 1024)) {
+        errors.push_back("video IPC fd must be -1 or in [3, 1024]");
+    }
 
     const int channel_values[] = {config.isp.camera_id, config.vi.device_id,
                                   config.vi.pipe_id, config.vi.channel_id,
@@ -313,6 +323,7 @@ std::string Usage(const char* program_name) {
            << "  --video-output <path>    Override H264 output path\n"
            << "  --audio-output <path>    Override G711A output path\n"
            << "  --iq-dir <path>          Override ISP IQ directory\n"
+           << "  --video-ipc-fd <fd>      Publish framed H264 to inherited descriptor\n"
            << "  --no-audio               Disable AI/AENC pipeline\n"
            << "  --validate-only          Validate config without accessing hardware\n"
            << "  --help                   Show this help\n";

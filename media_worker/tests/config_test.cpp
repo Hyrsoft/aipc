@@ -78,6 +78,20 @@ void TestValidateOnlyCli() {
     Expect(options.validate_only, "validate-only flag set");
 }
 
+void TestVideoIpcFdCli() {
+    const char* raw[] = {"media_worker", "--video-ipc-fd", "3"};
+    auto argv = const_cast<char**>(raw);
+    media_worker::CliOptions options;
+    std::string error;
+    Expect(media_worker::ParseCli(3, argv, &options, &error), "video IPC fd parses");
+    media_worker::WorkerConfig config;
+    media_worker::ApplyCliOverrides(options, &config);
+    Expect(config.video.ipc_fd == 3, "video IPC fd applied");
+    Expect(media_worker::ValidateConfig(config).empty(), "video IPC fd validates");
+    config.video.ipc_fd = 2;
+    Expect(!media_worker::ValidateConfig(config).empty(), "reserved IPC fd rejected");
+}
+
 void TestInvalidJson() {
     const std::string path = "/tmp/media_worker_invalid_config_test.json";
     {
@@ -98,6 +112,7 @@ int main() {
     TestJsonAndValidation();
     TestInvalidCli();
     TestValidateOnlyCli();
+    TestVideoIpcFdCli();
     TestInvalidJson();
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";
