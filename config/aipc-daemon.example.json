@@ -1,0 +1,13 @@
+{
+  "bind": "0.0.0.0:8080",
+  "worker_path": "media_worker",
+  "web_dir": "../www",
+  "data_dir": "../data",
+  "runtime_dir": "/tmp/aipc-rust",
+  "seed_config": "../config/media_worker.json",
+  "autostart": true,
+  "startup_timeout_ms": 15000,
+  "stop_timeout_ms": 5000,
+  "max_restarts": 5,
+  "restart_window_sec": 300
+}
