@@ -44,6 +44,11 @@ int main(int argc, char* argv[]) {
         events.Emit("FatalError", {{"stage", "config_validation"}, {"errors", errors}});
         return static_cast<int>(media_worker::ExitCode::kConfigError);
     }
+    if (options.validate_only) {
+        media_worker::EventEmitter events(config.runtime.generation);
+        events.Emit("Stopped", {{"reason", "validation_only"}, {"exit_code", 0}});
+        return 0;
+    }
 
     std::signal(SIGINT, SignalHandler);
     std::signal(SIGTERM, SignalHandler);
@@ -51,4 +56,3 @@ int main(int argc, char* argv[]) {
     media_worker::MediaWorker worker(std::move(config));
     return worker.Run([] { return g_stop_requested != 0; });
 }
-

@@ -84,6 +84,7 @@ struct CliOptions {
     std::optional<std::string> audio_output;
     std::optional<std::string> iq_dir;
     bool no_audio = false;
+    bool validate_only = false;
     bool help = false;
 };
 
@@ -94,4 +95,3 @@ std::vector<std::string> ValidateConfig(const WorkerConfig& config);
 std::string Usage(const char* program_name);
 
 }  // namespace media_worker
-

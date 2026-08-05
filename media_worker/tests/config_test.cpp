@@ -69,6 +69,15 @@ void TestInvalidCli() {
     Expect(!media_worker::ParseCli(3, argv, &options, &error), "invalid integer rejected");
 }
 
+void TestValidateOnlyCli() {
+    const char* raw[] = {"media_worker", "--validate-only"};
+    auto argv = const_cast<char**>(raw);
+    media_worker::CliOptions options;
+    std::string error;
+    Expect(media_worker::ParseCli(2, argv, &options, &error), "validate-only parses");
+    Expect(options.validate_only, "validate-only flag set");
+}
+
 void TestInvalidJson() {
     const std::string path = "/tmp/media_worker_invalid_config_test.json";
     {
@@ -88,6 +97,7 @@ int main() {
     TestCliOverrides();
     TestJsonAndValidation();
     TestInvalidCli();
+    TestValidateOnlyCli();
     TestInvalidJson();
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";

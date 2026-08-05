@@ -124,6 +124,8 @@ bool ParseCli(int argc, char* argv[], CliOptions* options, std::string* error) {
             options->iq_dir = value;
         } else if (arg == "--no-audio") {
             options->no_audio = true;
+        } else if (arg == "--validate-only") {
+            options->validate_only = true;
         } else {
             *error = "unknown option: " + arg;
             return false;
@@ -312,9 +314,9 @@ std::string Usage(const char* program_name) {
            << "  --audio-output <path>    Override G711A output path\n"
            << "  --iq-dir <path>          Override ISP IQ directory\n"
            << "  --no-audio               Disable AI/AENC pipeline\n"
+           << "  --validate-only          Validate config without accessing hardware\n"
            << "  --help                   Show this help\n";
     return output.str();
 }
 
 }  // namespace media_worker
-
