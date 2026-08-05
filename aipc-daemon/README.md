@@ -24,3 +24,8 @@ scripts/validate-rv1106-adb.sh
 
 The packaged daemon listens on `0.0.0.0:8080` without authentication and must
 only be exposed on a trusted LAN.
+
+Live H264 preview is available at `/api/v1/preview/ws`. The daemon receives
+framed Annex-B access units from the worker over an inherited Unix socketpair;
+the browser uses the locally bundled jMuxer/MSE player. Preview failure never
+stops the media pipeline or file output.

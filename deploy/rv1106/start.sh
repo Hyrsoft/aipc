@@ -9,6 +9,8 @@ CONFIG_PATH=${AIPC_DAEMON_CONFIG:-"${APP_DIR}/config/aipc-daemon.json"}
 mkdir -p "${APP_DIR}/data"
 export LD_LIBRARY_PATH="${APP_DIR}/lib:/oem/usr/lib:/oem/lib:${LD_LIBRARY_PATH:-}"
 
+rm -f /tmp/media_worker_video.h264 /tmp/media_worker_audio.g711a
+
 pkill -TERM media_worker >/dev/null 2>&1 || true
 pkill -TERM aipc >/dev/null 2>&1 || true
 if [ -x /oem/usr/bin/RkLunch-stop.sh ]; then

@@ -451,6 +451,57 @@ mod tests {
         assert_eq!(hub.status().malformed_frames, 1);
     }
 
+    #[tokio::test]
+    async fn rejects_invalid_magic() {
+        let hub = test_hub(4096);
+        let info = info();
+        hub.begin_generation(info.clone());
+        let (mut writer, reader) = duplex(64);
+        let task = tokio::spawn(read_video_ipc(reader, hub.clone(), info));
+        let mut data = message(&[1, 2, 3], false);
+        data[0] = b'X';
+        writer.write_all(&data).await.unwrap();
+        drop(writer);
+        task.await.unwrap();
+        assert_eq!(hub.status().malformed_frames, 1);
+        assert!(
+            hub.status()
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("header")
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_subscriber_lags_without_blocking_ingest() {
+        let (events, _) = broadcast::channel(8);
+        let hub = PreviewHub::new(
+            PreviewConfig {
+                broadcast_capacity: 1,
+                ..PreviewConfig::default()
+            },
+            events,
+        );
+        let info = info();
+        hub.begin_generation(info.clone());
+        let mut receiver = hub.sender.subscribe();
+        for sequence in 1..=3 {
+            hub.ingest(PreviewFrame {
+                info: info.clone(),
+                pts: sequence,
+                sequence,
+                keyframe: false,
+                data: Bytes::from_static(&[0, 0, 0, 1, 0x61]),
+            });
+        }
+        assert!(matches!(
+            receiver.recv().await,
+            Err(broadcast::error::RecvError::Lagged(_))
+        ));
+        assert_eq!(hub.status().frames_received, 3);
+    }
+
     #[test]
     fn enforces_client_limit() {
         let (events, _) = broadcast::channel(8);

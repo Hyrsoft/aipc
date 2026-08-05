@@ -33,6 +33,33 @@ wait_running() {
     return 1
 }
 
+wait_preview() {
+    for _ in $(seq 1 20); do
+        if curl -fsS "${BASE_URL}/api/v1/preview/status" >"${WORK_DIR}/preview-status.json" &&
+           [ "$(jq -r '.available' "${WORK_DIR}/preview-status.json")" = "true" ]; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "preview did not become available" >&2
+    cat "${WORK_DIR}/preview-status.json" >&2 || true
+    return 1
+}
+
+capture_preview() {
+    local duration=${1:-5}
+    wait_preview
+    node "${SCRIPT_DIR}/capture-preview.mjs" \
+        "ws://127.0.0.1:${LOCAL_PORT}/api/v1/preview/ws" \
+        "${WORK_DIR}/preview.h264" "${duration}" >"${WORK_DIR}/preview-capture.json"
+    jq -e '.frames > 0 and .bytes > 0 and .first_frame_ms <= 2000' \
+        "${WORK_DIR}/preview-capture.json" >/dev/null
+    ffprobe -v error -f h264 -show_entries stream=codec_name,width,height \
+        -of json "${WORK_DIR}/preview.h264" >"${WORK_DIR}/preview-probe.json"
+    jq -e '.streams[0].codec_name == "h264" and .streams[0].width == 1280 and .streams[0].height == 720' \
+        "${WORK_DIR}/preview-probe.json" >/dev/null
+}
+
 wait_running
 curl -fsS "${BASE_URL}/healthz" | jq -e '.ok == true' >/dev/null
 curl -fsS "${BASE_URL}/api/v1/config" >"${WORK_DIR}/state.json"
@@ -41,6 +68,7 @@ jq '.desired | .video.width=1280 | .video.height=720 | .video.fps=25 | .video.bi
 generation=$(curl -fsS -X PUT -H 'content-type: application/json' --data-binary "@${WORK_DIR}/720p.json" \
     "${BASE_URL}/api/v1/config" | jq -r '.generation')
 wait_running "${generation}"
+capture_preview 5
 
 jq '.video.width=1' "${WORK_DIR}/720p.json" >"${WORK_DIR}/invalid.json"
 http_code=$(curl -sS -o "${WORK_DIR}/invalid-response.json" -w '%{http_code}' -X PUT \
@@ -59,6 +87,7 @@ for _ in $(seq 1 45); do
     fi
     sleep 1
 done
+capture_preview 2
 
 curl -fsS "${BASE_URL}/api/v1/config" | jq '.active | .isp.iq_dir="/missing/aipc-iqfiles"' >"${WORK_DIR}/rollback.json"
 failed_generation=$(curl -fsS -X PUT -H 'content-type: application/json' --data-binary "@${WORK_DIR}/rollback.json" \
@@ -84,6 +113,7 @@ for _ in 1 2 3; do
 done
 
 curl -fsS "${BASE_URL}/" | grep -q 'AIPC Media Console'
+curl -fsS "${BASE_URL}/api/v1/preview/status" | jq -e '.enabled == true and .clients == 0' >/dev/null
 adb shell "'${REMOTE_DIR}/scripts/stop.sh'"
 if adb shell "pgrep -x media_worker" | grep -q '[0-9]'; then
     echo "media_worker remained after daemon shutdown" >&2
