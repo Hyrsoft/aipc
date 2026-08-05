@@ -9,5 +9,11 @@
   "startup_timeout_ms": 15000,
   "stop_timeout_ms": 5000,
   "max_restarts": 5,
-  "restart_window_sec": 300
+  "restart_window_sec": 300,
+  "preview": {
+    "enabled": true,
+    "max_clients": 5,
+    "max_frame_bytes": 4194304,
+    "broadcast_capacity": 32
+  }
 }

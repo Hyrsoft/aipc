@@ -1,8 +1,9 @@
 use crate::config::WorkerConfig;
+use crate::preview::PreviewHub;
 use crate::supervisor::{ActionAccepted, SupervisorError, SupervisorHandle};
 use axum::Json;
 use axum::Router;
-use axum::extract::{Query, State};
+use axum::extract::{Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -18,6 +19,7 @@ use tower_http::services::{ServeDir, ServeFile};
 #[derive(Clone)]
 struct AppState {
     supervisor: SupervisorHandle,
+    preview: PreviewHub,
 }
 
 pub fn router(supervisor: SupervisorHandle, web_dir: &Path) -> Router {
@@ -32,8 +34,34 @@ pub fn router(supervisor: SupervisorHandle, web_dir: &Path) -> Router {
         .route("/api/v1/worker/restart", post(restart))
         .route("/api/v1/events", get(events))
         .route("/api/v1/logs", get(logs))
+        .route("/api/v1/preview/status", get(preview_status))
+        .route("/api/v1/preview/ws", get(preview_ws))
         .fallback_service(static_service)
-        .with_state(AppState { supervisor })
+        .with_state(AppState {
+            preview: supervisor.preview.clone(),
+            supervisor,
+        })
+}
+
+async fn preview_status(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.preview.status())
+}
+
+async fn preview_ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+    if !state.preview.enabled() {
+        return (StatusCode::SERVICE_UNAVAILABLE, "preview disabled").into_response();
+    }
+    let Some(guard) = state.preview.acquire_client() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            "preview client limit reached",
+        )
+            .into_response();
+    };
+    let preview = state.preview.clone();
+    upgrade
+        .on_upgrade(move |socket| async move { preview.serve_socket(socket, guard).await })
+        .into_response()
 }
 
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {

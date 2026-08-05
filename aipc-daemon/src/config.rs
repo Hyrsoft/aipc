@@ -272,6 +272,27 @@ pub struct DaemonConfig {
     pub stop_timeout_ms: u64,
     pub max_restarts: usize,
     pub restart_window_sec: u64,
+    pub preview: PreviewConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PreviewConfig {
+    pub enabled: bool,
+    pub max_clients: usize,
+    pub max_frame_bytes: usize,
+    pub broadcast_capacity: usize,
+}
+
+impl Default for PreviewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_clients: 5,
+            max_frame_bytes: 4 * 1024 * 1024,
+            broadcast_capacity: 32,
+        }
+    }
 }
 
 impl Default for DaemonConfig {
@@ -288,6 +309,7 @@ impl Default for DaemonConfig {
             stop_timeout_ms: 5_000,
             max_restarts: 5,
             restart_window_sec: 300,
+            preview: PreviewConfig::default(),
         }
     }
 }

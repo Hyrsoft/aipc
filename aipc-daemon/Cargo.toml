@@ -6,7 +6,8 @@ build = "build.rs"
 
 [dependencies]
 anyhow = "1"
-axum = "0.8"
+axum = { version = "=0.8.8", features = ["ws"] }
+bytes = "1"
 clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
 libc = "0.2"
@@ -28,4 +29,3 @@ cmake = "0.1"
 http-body-util = "0.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
-

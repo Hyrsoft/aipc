@@ -1,6 +1,7 @@
 mod api;
 mod config;
 mod model;
+mod preview;
 mod store;
 mod supervisor;
 

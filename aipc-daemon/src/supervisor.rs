@@ -1,11 +1,14 @@
 use crate::config::{DaemonConfig, WorkerConfig};
 use crate::model::{DaemonStatus, LogEntry, PersistentState, ProcessState, ServerEvent, now_ms};
+use crate::preview::{PreviewHub, StreamInfo, read_video_ipc};
 use crate::store::StateStore;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::Stdio;
@@ -48,6 +51,7 @@ pub struct SupervisorHandle {
     pub events: broadcast::Sender<ServerEvent>,
     pub persistent: Arc<RwLock<PersistentState>>,
     pub logs: Arc<Mutex<VecDeque<LogEntry>>>,
+    pub preview: PreviewHub,
 }
 
 impl SupervisorHandle {
@@ -117,12 +121,14 @@ pub async fn spawn_supervisor(
     let (events, _) = broadcast::channel(256);
     let persistent = Arc::new(RwLock::new(initial));
     let logs = Arc::new(Mutex::new(VecDeque::with_capacity(LOG_CAPACITY)));
+    let preview = PreviewHub::new(settings.preview.clone(), events.clone());
     let handle = SupervisorHandle {
         commands: command_tx,
         status: status_rx,
         events: events.clone(),
         persistent: persistent.clone(),
         logs: logs.clone(),
+        preview: preview.clone(),
     };
     let mut actor = SupervisorActor {
         store: StateStore::new(&settings.data_dir),
@@ -134,6 +140,7 @@ pub async fn spawn_supervisor(
         events,
         persistent,
         logs,
+        preview,
         running: None,
         after_stop: None,
         restart_times: VecDeque::new(),
@@ -213,6 +220,7 @@ struct SupervisorActor {
     events: broadcast::Sender<ServerEvent>,
     persistent: Arc<RwLock<PersistentState>>,
     logs: Arc<Mutex<VecDeque<LogEntry>>>,
+    preview: PreviewHub,
     running: Option<RunningProcess>,
     after_stop: Option<PendingStart>,
     restart_times: VecDeque<Instant>,
@@ -451,6 +459,16 @@ impl SupervisorActor {
             .map_err(|error| error.to_string())?;
 
         let mut command = Command::new(&self.settings.worker_path);
+        let ipc_pair = if self.preview.enabled() {
+            let (parent, child) = StdUnixStream::pair().map_err(|error| error.to_string())?;
+            parent
+                .set_nonblocking(true)
+                .map_err(|error| error.to_string())?;
+            Some((parent, child))
+        } else {
+            None
+        };
+        let ipc_child_fd = ipc_pair.as_ref().map(|(_, child)| child.as_raw_fd());
         command
             .arg("--config")
             .arg(&config_path)
@@ -460,15 +478,44 @@ impl SupervisorActor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(false);
+        if ipc_child_fd.is_some() {
+            command.arg("--video-ipc-fd").arg("3");
+        }
         unsafe {
-            command.pre_exec(|| {
+            command.pre_exec(move || {
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
                     return Err(std::io::Error::last_os_error());
+                }
+                if let Some(source_fd) = ipc_child_fd {
+                    if source_fd == 3 {
+                        let flags = libc::fcntl(3, libc::F_GETFD);
+                        if flags < 0 || libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    } else if libc::dup2(source_fd, 3) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
                 }
                 Ok(())
             });
         }
         let mut child = command.spawn().map_err(|error| error.to_string())?;
+        if let Some((parent, child_side)) = ipc_pair {
+            drop(child_side);
+            let info = StreamInfo {
+                generation: pending.generation.clone(),
+                codec: "h264",
+                format: "annexb",
+                width: pending.config.video.width,
+                height: pending.config.video.height,
+                fps: pending.config.video.fps,
+            };
+            self.preview.begin_generation(info.clone());
+            let stream =
+                tokio::net::UnixStream::from_std(parent).map_err(|error| error.to_string())?;
+            tokio::spawn(read_video_ipc(stream, self.preview.clone(), info));
+        }
         let pid = child
             .id()
             .ok_or_else(|| "spawned worker has no PID".to_string())?;
@@ -627,6 +674,7 @@ impl SupervisorActor {
             return;
         }
         let running = self.running.take().unwrap();
+        self.preview.stop_generation(&generation);
         self.emit(
             "supervisor",
             json!({"action": "exited", "code": code, "signal": signal}),
@@ -1013,6 +1061,7 @@ printf '%s\n' 'fake worker started' >&2
 printf '%s\n' '{"event":"StreamReady","media":"video"}'
 printf '%s\n' '{"event":"StreamReady","media":"audio"}'
 printf '%s\n' '{"event":"Metrics","video":{"packets":3},"audio":{"packets":2}}'
+printf '\101\111\120\126\000\001\000\001\000\000\000\030\000\000\000\000\000\000\000\052\000\000\000\000\000\000\000\001\000\000\000\001\147\144\000\050\000\000\000\001\150\001\002\003\000\000\000\001\145\011\010\007' >&3 || true
 trap 'exit 0' TERM INT
 while :; do sleep 1; done
 "#,
@@ -1035,6 +1084,8 @@ while :; do sleep 1; done
         wait_for_state(&handle, ProcessState::Running).await;
         assert!(handle.status.borrow().video_ready);
         assert!(handle.status.borrow().audio_ready);
+        wait_for_preview(&handle).await;
+        assert!(handle.preview.status().available);
         assert_eq!(
             handle.status.borrow().metrics.as_ref().unwrap()["video"]["packets"],
             3
@@ -1055,6 +1106,11 @@ while :; do sleep 1; done
         let accepted = handle.apply(updated.clone()).await.unwrap();
         let applied_generation = accepted.generation.unwrap();
         wait_for_generation(&handle, &applied_generation).await;
+        wait_for_preview(&handle).await;
+        assert_eq!(
+            handle.preview.status().generation.as_deref(),
+            Some(applied_generation.as_str())
+        );
         assert_eq!(
             handle
                 .persistent
@@ -1072,6 +1128,7 @@ while :; do sleep 1; done
         failing.video.output_path = "/tmp/fail-start.h264".into();
         let failed_generation = handle.apply(failing).await.unwrap().generation.unwrap();
         wait_for_rollback(&handle, &failed_generation).await;
+        wait_for_preview(&handle).await;
         let persistent = handle.persistent.read().await;
         assert!(persistent.last_error.is_some());
         assert_eq!(persistent.active.as_ref().unwrap().video.width, 1280);
@@ -1123,6 +1180,16 @@ while :; do sleep 1; done
                     return;
                 }
                 status.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn wait_for_preview(handle: &SupervisorHandle) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !handle.preview.status().available {
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
