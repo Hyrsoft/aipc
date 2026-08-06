@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -269,6 +270,7 @@ pub struct DaemonConfig {
     pub preview: PreviewConfig,
     pub recording: RecordingConfig,
     pub rtsp: RtspConfig,
+    pub webrtc: WebRtcConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,6 +333,66 @@ pub struct RtspConfig {
     pub mtu: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebRtcConfig {
+    pub enabled: bool,
+    pub bind: String,
+    pub advertised_ip: Option<IpAddr>,
+    pub max_clients: usize,
+    pub mtu: usize,
+    pub connect_timeout_ms: u64,
+    pub idle_timeout_ms: u64,
+}
+
+impl Default for WebRtcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bind: "0.0.0.0:10000".into(),
+            advertised_ip: None,
+            max_clients: 4,
+            mtu: 1200,
+            connect_timeout_ms: 10_000,
+            idle_timeout_ms: 30_000,
+        }
+    }
+}
+
+impl WebRtcConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let bind: SocketAddr = self
+            .bind
+            .parse()
+            .map_err(|_| anyhow::anyhow!("webrtc.bind must be a socket address"))?;
+        if bind.port() == 0 {
+            anyhow::bail!("webrtc.bind port must be non-zero");
+        }
+        if !bind.is_ipv4() {
+            anyhow::bail!("webrtc.bind must use IPv4 in the LAN-only release");
+        }
+        if self
+            .advertised_ip
+            .is_some_and(|value| value.is_unspecified())
+        {
+            anyhow::bail!("webrtc.advertised_ip must not be unspecified");
+        }
+        if self.advertised_ip.is_some_and(|value| !value.is_ipv4()) {
+            anyhow::bail!("webrtc.advertised_ip must use IPv4 in the LAN-only release");
+        }
+        if self.max_clients == 0 {
+            anyhow::bail!("webrtc.max_clients must be greater than zero");
+        }
+        if !(656..=1500).contains(&self.mtu) {
+            anyhow::bail!("webrtc.mtu must be in [656, 1500]");
+        }
+        if self.connect_timeout_ms == 0 || self.idle_timeout_ms == 0 {
+            anyhow::bail!("webrtc timeouts must be greater than zero");
+        }
+        Ok(())
+    }
+}
+
 impl Default for RtspConfig {
     fn default() -> Self {
         Self {
@@ -360,6 +422,7 @@ impl Default for DaemonConfig {
             preview: PreviewConfig::default(),
             recording: RecordingConfig::default(),
             rtsp: RtspConfig::default(),
+            webrtc: WebRtcConfig::default(),
         }
     }
 }
@@ -384,6 +447,7 @@ impl DaemonConfig {
             .iter()
             .map(|path| resolve(executable_dir, path))
             .collect();
+        config.webrtc.validate()?;
         Ok(config)
     }
 }
@@ -423,5 +487,21 @@ mod tests {
         let errors = config.validate();
         assert!(errors.iter().any(|item| item.contains("even")));
         assert!(errors.iter().any(|item| item.contains("G711A")));
+    }
+
+    #[test]
+    fn validates_webrtc_settings() {
+        assert!(WebRtcConfig::default().validate().is_ok());
+        let mut config = WebRtcConfig {
+            bind: "0.0.0.0:0".into(),
+            ..WebRtcConfig::default()
+        };
+        assert!(config.validate().is_err());
+        config.bind = "0.0.0.0:10000".into();
+        config.max_clients = 0;
+        assert!(config.validate().is_err());
+        config.max_clients = 1;
+        config.advertised_ip = Some("0.0.0.0".parse().unwrap());
+        assert!(config.validate().is_err());
     }
 }

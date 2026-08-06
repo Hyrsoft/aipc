@@ -37,7 +37,7 @@ _RV1106 Web 控制台运行概览（实验性界面，后续会随录像管理�
 flowchart LR
     C[摄像头 / 音频输入] --> W[C++ media_worker<br/>ISP · VI · VPSS · VENC · AI/AENC]
     W -- 编码音视频 IPC --> R[Rust aipc-daemon<br/>监督 · 配置 · 流分发 · 协议 · 业务]
-    R --> P[WebSocket / 浏览器预览]
+    R --> P[WebRTC 优先 / WebSocket 回退预览]
     R --> M[MP4 录像与文件管理]
     R --> T[RTSP 服务]
     R --> L[Lua 规则与业务编排]
@@ -56,7 +56,7 @@ flowchart LR
 - Rust/Tokio/Axum daemon 与 C++17/RKMPI media worker 双进程架构。
 - worker generation、启动状态、关键帧、流就绪、指标、异常退出和有界重启回退。
 - H.264 Annex-B 编码帧 IPC，包含 PTS、sequence 和关键帧标志。
-- WebSocket H.264 浏览器预览，慢客户端不会阻塞采集。
+- WebRTC H.264/PCMA 浏览器预览，失败时自动回退 WebSocket/MSE，慢客户端不会阻塞采集。
 - Rust MP4 录像：手动启停、关键帧起录、受管目录、文件索引和磁盘空间保护。
 - Web UI 录像管理：原生浏览器 H.264 解码、暂停、进度拖动、倍速、全屏、下载、批量删除和 ZIP 导出。
 - Rust 内置 RTSP 服务：`rtsp://<device>:8554/live`，支持 TCP interleaved 和 UDP RTP/RTCP。
@@ -75,6 +75,7 @@ flowchart LR
 | Rust worker 监督与冷重启回滚 | ✅ | ✅ | 🚧 | 🚧 | generation、启动超时、异常退出和 last-good 配置 |
 | 编码视频 IPC / VideoHub | 🧪 | ✅ | 🚧 | 🚧 | 当前协议面向 Rust daemon，后续需验证跨 SoC 时基和码流差异 |
 | WebSocket 实时预览 | ✅ | ✅ | 🚧 | 🚧 | Vue + jMuxer/MSE |
+| Rust WebRTC 音视频分发 | 🧪 | 🧪 | 🚧 | 🚧 | str0m、H.264 High Profile、PCMA、LAN-only ICE-lite |
 | Rust MP4 录像 | 🧪 | ✅ | 🚧 | 🚧 | H.264 视频，音频轨道尚未加入 |
 | 浏览器 MP4 播放 | 🧪 | ✅ | 🚧 | 🚧 | 依赖浏览器 H.264 解码能力和 HTTP Range |
 | Rust 内置 RTSP | 🧪 | ✅ | 🚧 | 🚧 | TCP interleaved、UDP RTP/RTCP、H.264 RTP 分包 |
@@ -137,6 +138,7 @@ AIPC_SKIP_BUILD=1 ./scripts/deploy-rv1106-adb.sh
 
 - HTTP/Web UI：`http://<board-ip>:8080`
 - RTSP：`rtsp://<board-ip>:8554/live`
+- WebRTC 媒体：`udp://<board-ip>:10000`（信令复用 HTTP API）
 - 默认部署目录：`/root/aipc-rust`
 - 默认录像目录：`/root/aipc-rust/recordings`
 

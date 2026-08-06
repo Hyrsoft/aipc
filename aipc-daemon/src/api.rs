@@ -3,10 +3,11 @@ use crate::preview::PreviewHub;
 use crate::recording::{RecordingManager, RecordingSettingsUpdate};
 use crate::rtsp::RtspServer;
 use crate::supervisor::{ActionAccepted, SupervisorError, SupervisorHandle};
+use crate::webrtc::{WebRtcError, WebRtcServer};
 use axum::Json;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Path as AxumPath, Query, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Path as AxumPath, Query, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -15,6 +16,7 @@ use futures_util::stream;
 use serde::Deserialize;
 use serde_json::json;
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -28,12 +30,14 @@ struct AppState {
     preview: PreviewHub,
     recording: RecordingManager,
     rtsp: RtspServer,
+    webrtc: WebRtcServer,
 }
 
 pub fn router(
     supervisor: SupervisorHandle,
     recording: RecordingManager,
     rtsp: RtspServer,
+    webrtc: WebRtcServer,
     web_dir: &Path,
 ) -> Router {
     let index = web_dir.join("index.html");
@@ -69,13 +73,52 @@ pub fn router(
         .route("/api/v1/recordings/export", post(recordings_export))
         .route("/api/v1/recordings/delete", post(recordings_delete))
         .route("/api/v1/rtsp/status", get(rtsp_status))
+        .route("/api/v1/webrtc/status", get(webrtc_status))
+        .route("/api/v1/webrtc/sessions", post(webrtc_create))
+        .route(
+            "/api/v1/webrtc/sessions/{id}",
+            axum::routing::delete(webrtc_delete),
+        )
         .fallback_service(static_service)
         .with_state(AppState {
             preview: supervisor.preview.clone(),
             recording,
             rtsp,
+            webrtc,
             supervisor,
         })
+}
+
+#[derive(Deserialize)]
+struct WebRtcOffer {
+    r#type: String,
+    sdp: String,
+}
+
+async fn webrtc_status(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.webrtc.status())
+}
+
+async fn webrtc_create(
+    State(state): State<AppState>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    Json(offer): Json<WebRtcOffer>,
+) -> Result<impl IntoResponse, WebRtcApiError> {
+    if offer.r#type != "offer" || offer.sdp.trim().is_empty() {
+        return Err(WebRtcApiError(WebRtcError::InvalidOffer(
+            "body must contain type=offer and a non-empty SDP".into(),
+        )));
+    }
+    let answer = state.webrtc.create_session(offer.sdp, remote).await?;
+    Ok((StatusCode::CREATED, Json(answer)))
+}
+
+async fn webrtc_delete(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, WebRtcApiError> {
+    state.webrtc.delete_session(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn recording_settings(State(state): State<AppState>) -> impl IntoResponse {
@@ -640,6 +683,33 @@ async fn logs(State(state): State<AppState>, Query(query): Query<LogsQuery>) -> 
 
 struct ApiError(SupervisorError);
 
+struct WebRtcApiError(WebRtcError);
+
+impl From<WebRtcError> for WebRtcApiError {
+    fn from(value: WebRtcError) -> Self {
+        Self(value)
+    }
+}
+
+impl IntoResponse for WebRtcApiError {
+    fn into_response(self) -> Response {
+        let (status, code) = match self.0 {
+            WebRtcError::Disabled => (StatusCode::SERVICE_UNAVAILABLE, "webrtc_disabled"),
+            WebRtcError::NotReady => (StatusCode::SERVICE_UNAVAILABLE, "webrtc_not_ready"),
+            WebRtcError::ClientLimit => (StatusCode::TOO_MANY_REQUESTS, "webrtc_client_limit"),
+            WebRtcError::InvalidOffer(_) => (StatusCode::BAD_REQUEST, "webrtc_invalid_offer"),
+            WebRtcError::Codec(_) => (StatusCode::BAD_REQUEST, "webrtc_codec"),
+            WebRtcError::NotFound => (StatusCode::NOT_FOUND, "webrtc_session_not_found"),
+            WebRtcError::Operation(_) => (StatusCode::INTERNAL_SERVER_ERROR, "webrtc_operation"),
+        };
+        (
+            status,
+            Json(json!({"error": {"code": code, "message": self.0.to_string()}})),
+        )
+            .into_response()
+    }
+}
+
 impl From<SupervisorError> for ApiError {
     fn from(value: SupervisorError) -> Self {
         Self(value)
@@ -671,7 +741,7 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DaemonConfig, RtspConfig};
+    use crate::config::{DaemonConfig, RtspConfig, WebRtcConfig};
     use crate::model::PersistentState;
     use crate::supervisor::spawn_supervisor;
     use axum::body::Body;
@@ -739,7 +809,17 @@ mod tests {
         )
         .await
         .unwrap();
-        let app = router(handle.clone(), recording, rtsp, temp.path());
+        let webrtc = WebRtcServer::start(
+            WebRtcConfig {
+                enabled: false,
+                ..WebRtcConfig::default()
+            },
+            handle.preview.clone(),
+            handle.events.clone(),
+        )
+        .await
+        .unwrap();
+        let app = router(handle.clone(), recording, rtsp, webrtc, temp.path());
         let response = app
             .clone()
             .oneshot(

@@ -464,6 +464,7 @@ impl SupervisorActor {
         let video_ipc_pair = if self.preview.enabled()
             || self.settings.recording.enabled
             || self.settings.rtsp.enabled
+            || self.settings.webrtc.enabled
         {
             let (parent, child) = StdUnixStream::pair().map_err(|error| error.to_string())?;
             parent
@@ -474,7 +475,9 @@ impl SupervisorActor {
             None
         };
         let audio_ipc_pair = if pending.config.audio.enabled
-            && (self.preview.enabled() || self.settings.recording.enabled)
+            && (self.preview.enabled()
+                || self.settings.recording.enabled
+                || self.settings.webrtc.enabled)
         {
             let (parent, child) = StdUnixStream::pair().map_err(|error| error.to_string())?;
             parent

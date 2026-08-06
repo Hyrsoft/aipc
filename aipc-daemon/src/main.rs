@@ -6,6 +6,7 @@ mod recording;
 mod rtsp;
 mod store;
 mod supervisor;
+mod webrtc;
 
 use anyhow::{Context, bail};
 use clap::Parser;
@@ -81,10 +82,17 @@ async fn main() -> anyhow::Result<()> {
         supervisor.events.clone(),
     )
     .await?;
+    let webrtc = webrtc::WebRtcServer::start(
+        settings.webrtc.clone(),
+        supervisor.preview.clone(),
+        supervisor.events.clone(),
+    )
+    .await?;
     let app = api::router(
         supervisor.clone(),
         recording.clone(),
         rtsp.clone(),
+        webrtc.clone(),
         &settings.web_dir,
     );
     let listener = TcpListener::bind(&settings.bind)
@@ -92,12 +100,16 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("bind HTTP server at {}", settings.bind))?;
     info!(bind = %settings.bind, "aipc daemon ready (trusted LAN, authentication disabled)");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     info!("HTTP shutdown requested; stopping media worker");
     recording.shutdown().await;
     rtsp.shutdown().await;
+    webrtc.shutdown().await;
     supervisor.shutdown().await;
     Ok(())
 }
