@@ -5,7 +5,7 @@ The deployed service has one business entry point and one hardware worker.
 ## Rust daemon
 
 `aipc-daemon` owns configuration, HTTP APIs, SSE events, WebSocket preview,
-MP4 recording, RTSP, static Web UI delivery and worker lifecycle decisions. Configuration changes use
+WebRTC distribution, MP4 recording, RTSP, static Web UI delivery and worker lifecycle decisions. Configuration changes use
 a cold generation switch with validation and last-good rollback. Unexpected
 worker exits use bounded restart backoff.
 
@@ -15,8 +15,15 @@ defensive validation and execution; it does not own daemon runtime configuration
 
 The daemon creates two anonymous Unix socketpairs for each audio-enabled
 generation: fd 3 carries AIPV/Annex-B H264 and fd 4 carries AIPA/G711A. Rust
-distributes video to preview, MP4 recording and RTSP, and audio to WebAudio
-preview and WAV recording. Slow consumers never block hardware capture.
+distributes video to preview, MP4 recording, RTSP and WebRTC, and audio to
+WebAudio preview, WAV recording and WebRTC PCMA. Slow consumers never block
+hardware capture.
+
+The WebRTC server uses a shared UDP listener and one `str0m` state machine per
+browser session. It is ICE-lite and LAN-only in this release. H264 is sent
+without transcoding and G711A is negotiated directly as PCMA. Sessions are
+closed on worker generation changes and the browser falls back to the existing
+WebSocket/MSE preview when WebRTC negotiation or connectivity fails.
 
 Recordings atomically commit an MP4 and, when audio is available, a PCM16 WAV
 companion aligned to the first video PTS. HTTP byte ranges are supported for both

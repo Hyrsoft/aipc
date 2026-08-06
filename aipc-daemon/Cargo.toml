@@ -24,6 +24,7 @@ tower-http = { version = "0.6", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+str0m = { version = "=0.21.0", default-features = false, features = ["openssl"] }
 
 [build-dependencies]
 cc = "1"

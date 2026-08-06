@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api, connectEvents, reduceServerEvent, type LiveState } from './api'
 import type { PersistentState, WorkerConfig } from './types'
-import { PreviewController, initialPreviewSnapshot } from './preview'
+import { initialPreviewSnapshot } from './preview'
+import { AdaptivePreviewController } from './webrtcPreview'
 import RecordingsView from './RecordingsView.vue'
 import {
   currentBitrate, currentVideoFps, eventLevel, eventName, eventSummary, matchesEventFilter,
@@ -29,7 +30,7 @@ const eventFollow = ref(true)
 const activeView = ref<'overview' | 'recordings' | 'settings' | 'diagnostics'>('overview')
 const clockMs = ref(Date.now())
 const statusReceivedAtMs = ref(Date.now())
-let previewController: PreviewController | undefined
+let previewController: AdaptivePreviewController | undefined
 let clockTimer: number | undefined
 
 const status = computed(() => live.status)
@@ -133,7 +134,7 @@ function togglePreviewMute() { previewController?.setMuted(!preview.muted) }
 
 onMounted(() => {
   clockTimer = window.setInterval(() => { clockMs.value = Date.now() }, 1000)
-  previewController = new PreviewController((snapshot) => Object.assign(preview, snapshot))
+  previewController = new AdaptivePreviewController((snapshot) => Object.assign(preview, snapshot))
   load()
   disconnect = connectEvents((event) => assignLive(reduceServerEvent({ ...live }, event)), (up) => connected.value = up)
 })
@@ -198,7 +199,7 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); if (clockT
         <section class="overview-grid">
           <article class="panel preview-panel">
             <div class="section-head preview-head"><div><span class="label">LIVE PREVIEW</span><h3>实时画面</h3></div><div class="preview-actions"><span :class="['preview-state', preview.state]">{{ preview.state }}</span><button v-if="preview.state === 'disconnected' || preview.state === 'error'" class="accent compact" @click="connectPreview">连接</button><button v-else class="secondary compact" @click="disconnectPreview">断开</button></div></div>
-            <div class="preview-stage"><video ref="previewVideo" autoplay muted playsinline></video><div v-if="preview.state !== 'live'" class="preview-overlay"><span class="loader"></span><strong>{{ preview.state === 'unsupported' ? '浏览器不支持 H264 MSE' : preview.state === 'error' ? '预览连接异常' : '等待视频流' }}</strong><span>{{ preview.error || 'Worker 就绪后自动连接' }}</span></div></div>
+            <div class="preview-stage"><video ref="previewVideo" autoplay :muted="preview.muted" playsinline></video><div v-if="preview.state !== 'live'" class="preview-overlay"><span class="loader"></span><strong>{{ preview.state === 'unsupported' ? '浏览器不支持实时预览' : preview.state === 'error' ? '预览连接异常' : '等待视频流' }}</strong><span>{{ preview.error || '优先连接 WebRTC，失败时回退 WebSocket' }}</span></div></div>
             <div class="preview-stats"><span>分辨率 <b>{{ preview.stream ? `${preview.stream.width} × ${preview.stream.height}` : '—' }}</b></span><span>接收帧率 <b>{{ fmt(preview.receivedFps) }} FPS</b></span><span>实时码率 <b>{{ fmt(preview.bitrateKbps) }} Kbps</b></span><span>丢帧 / 重连 <b>{{ preview.droppedFrames }} / {{ preview.reconnects }}</b></span></div>
             <div class="audio-preview-controls"><span :class="['preview-state', preview.audioState]">音频 {{ preview.audioState }}</span><span>{{ fmt(preview.audioBitrateKbps) }} Kbps · {{ preview.audioPackets }} 包</span><button class="secondary compact" @click="togglePreviewMute">{{ preview.muted ? '取消静音' : '静音' }}</button><input aria-label="预览音量" type="range" min="0" max="1" step="0.05" :value="preview.volume" @input="setPreviewVolume(Number(($event.target as HTMLInputElement).value))"><span v-if="preview.audioError" class="audio-error">{{ preview.audioError }}</span></div>
           </article>

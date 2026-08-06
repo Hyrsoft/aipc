@@ -33,5 +33,14 @@
     "path": "/live",
     "max_clients": 4,
     "mtu": 1200
+  },
+  "webrtc": {
+    "enabled": true,
+    "bind": "0.0.0.0:10000",
+    "advertised_ip": null,
+    "max_clients": 4,
+    "mtu": 1200,
+    "connect_timeout_ms": 10000,
+    "idle_timeout_ms": 30000
   }
 }
