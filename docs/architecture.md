@@ -5,13 +5,15 @@ The deployed service has one business entry point and one hardware worker.
 ## Rust daemon
 
 `aipc-daemon` owns configuration, HTTP APIs, SSE events, WebSocket preview,
-static Web UI delivery and worker lifecycle decisions. Configuration changes use
+MP4 recording, RTSP, static Web UI delivery and worker lifecycle decisions. Configuration changes use
 a cold generation switch with validation and last-good rollback. Unexpected
 worker exits use bounded restart backoff.
 
 The daemon creates an anonymous Unix socketpair for each generation, passes the
-child endpoint as file descriptor 3 and broadcasts received Annex-B H264 access
-units to browser clients. Slow preview clients never block media capture.
+child endpoint as file descriptor 3 and distributes received Annex-B H264 access
+units to independent preview, MP4 recording and RTSP consumers. Slow consumers
+never block media capture. MP4 files use HTTP byte ranges so browsers decode and
+seek them without board-side transcoding.
 
 ## C++ media worker
 
@@ -20,8 +22,8 @@ VI → VPSS → VENC/H264. The audio path is AI → AENC/G711A. Configuration is
 injected as JSON with optional CLI overrides.
 
 stdout is reserved for JSONL lifecycle and Metrics events. stderr contains SDK
-diagnostics. Encoded video is published to the inherited IPC descriptor while
-configured elementary-stream outputs remain independent.
+diagnostics. Encoded video is published to the inherited IPC descriptor. Optional
+elementary-stream dumps are disabled by default and reserved for diagnostics.
 
 ## Build and deployment
 

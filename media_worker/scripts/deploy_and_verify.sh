@@ -36,6 +36,8 @@ adb shell "LD_LIBRARY_PATH='${REMOTE_DIR}/lib:/oem/usr/lib:/oem/lib' \
     '${REMOTE_DIR}/bin/media_worker' \
     --config '${REMOTE_DIR}/config/media_worker.example.json' \
     --generation 'adb-verify' --duration-sec '${DURATION_SEC}' \
+    --video-output /tmp/media_worker_video.h264 \
+    --audio-output /tmp/media_worker_audio.g711a \
     >/tmp/media_worker_events.jsonl 2>/tmp/media_worker_stderr.log"
 REMOTE_STATUS=$?
 set -e

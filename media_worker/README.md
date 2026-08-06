@@ -1,8 +1,9 @@
 # Media Worker
 
 Independent C++17 worker for the Luckfox Pico/RV1106 media hardware. It owns the
-ISP, VI, VPSS, VENC, AI and AENC resources and writes H264/G711A elementary
-streams to externally configured files. Lifecycle and metrics events are emitted
+ISP, VI, VPSS, VENC, AI and AENC resources and publishes encoded H264 through
+the inherited daemon IPC descriptor. Optional H264/G711A elementary-stream
+debug dumps can be enabled through explicit paths. Lifecycle and metrics events are emitted
 as one JSON object per stdout line; diagnostics from the vendor SDK remain on
 stderr.
 

@@ -30,7 +30,7 @@
     "gop": 30,
     "venc_channel_id": 0,
     "stream_buffer_count": 3,
-    "output_path": "/tmp/media_worker_video.h264"
+    "output_path": ""
   },
   "audio": {
     "enabled": true,
@@ -46,7 +46,6 @@
     "frame_samples": 1024,
     "bitrate": 64000,
     "buffer_count": 4,
-    "output_path": "/tmp/media_worker_audio.g711a"
+    "output_path": ""
   }
 }
-

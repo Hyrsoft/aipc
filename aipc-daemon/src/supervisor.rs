@@ -461,7 +461,10 @@ impl SupervisorActor {
             .map_err(|error| error.to_string())?;
 
         let mut command = Command::new(&self.settings.worker_path);
-        let ipc_pair = if self.preview.enabled() {
+        let ipc_pair = if self.preview.enabled()
+            || self.settings.recording.enabled
+            || self.settings.rtsp.enabled
+        {
             let (parent, child) = StdUnixStream::pair().map_err(|error| error.to_string())?;
             parent
                 .set_nonblocking(true)

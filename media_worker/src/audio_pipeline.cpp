@@ -31,11 +31,13 @@ AudioPipeline::~AudioPipeline() {
 }
 
 bool AudioPipeline::Init(std::string* error) {
-    output_ = std::fopen(config_.audio.output_path.c_str(), "wb");
-    if (output_ == nullptr) {
-        *error = "cannot open audio output " + config_.audio.output_path + ": " +
-                 std::strerror(errno);
-        return false;
+    if (!config_.audio.output_path.empty()) {
+        output_ = std::fopen(config_.audio.output_path.c_str(), "wb");
+        if (output_ == nullptr) {
+            *error = "cannot open audio debug output " + config_.audio.output_path + ": " +
+                     std::strerror(errno);
+            return false;
+        }
     }
 
     AIO_ATTR_S ai_attr{};
@@ -151,7 +153,7 @@ void AudioPipeline::FetchLoop() {
         void* data = RK_MPI_MB_Handle2VirAddr(stream.pMbBlk);
         bool write_failed = false;
         if (data != nullptr && stream.u32Len > 0) {
-            if (std::fwrite(data, 1, stream.u32Len, output_) != stream.u32Len) {
+            if (output_ != nullptr && std::fwrite(data, 1, stream.u32Len, output_) != stream.u32Len) {
                 write_failed = true;
             } else {
                 stats_.packets.fetch_add(1);
@@ -170,7 +172,7 @@ void AudioPipeline::FetchLoop() {
             ReportFatal("audio output write failed: " + std::string(std::strerror(errno)));
             break;
         }
-        if (stats_.packets.load() % 50 == 0) std::fflush(output_);
+        if (output_ != nullptr && stats_.packets.load() % 50 == 0) std::fflush(output_);
         if (stream.u32Len > 0 && !ready_reported_.exchange(true)) {
             events_->Emit("StreamReady",
                           {{"media", "audio"}, {"codec", "g711a"},
@@ -233,4 +235,3 @@ void AudioPipeline::Deinit() {
 }
 
 }  // namespace media_worker
-

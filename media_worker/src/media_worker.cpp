@@ -34,8 +34,9 @@ bool MediaWorker::PreflightOutputs(std::string* error) {
         std::fclose(file);
         return true;
     };
-    if (!check("video", config_.video.output_path)) return false;
-    if (config_.audio.enabled && !check("audio", config_.audio.output_path)) return false;
+    if (!config_.video.output_path.empty() && !check("video", config_.video.output_path)) return false;
+    if (config_.audio.enabled && !config_.audio.output_path.empty() &&
+        !check("audio", config_.audio.output_path)) return false;
     return true;
 }
 

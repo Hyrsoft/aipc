@@ -24,7 +24,7 @@ install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/media_worker" \
     "${PACKAGE_DIR}/bin/media_worker"
 install -m 0644 "${PROJECT_ROOT}/config/aipc-daemon.example.json" \
     "${PACKAGE_DIR}/config/aipc-daemon.json"
-jq '.video.output_path = "/dev/null" | .audio.output_path = "/dev/null"' \
+jq '.video.output_path = "" | .audio.output_path = ""' \
     "${PROJECT_ROOT}/media_worker/config/media_worker.example.json" \
     >"${PACKAGE_DIR}/config/media_worker.json"
 chmod 0644 "${PACKAGE_DIR}/config/media_worker.json"

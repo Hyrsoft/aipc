@@ -95,3 +95,41 @@ export interface WorkerMetrics {
 
 export interface LogEntry { timestamp_ms: number; stream: string; line: string }
 export interface ServerEvent { kind: string; timestamp_ms: number; payload: any }
+
+export interface RecordingSettings {
+  enabled: boolean
+  directory: string
+  allowed_roots: string[]
+  queue_capacity: number
+  max_duration_sec: number
+  max_file_bytes: number
+  min_free_bytes: number
+  max_export_files: number
+}
+
+export type RecordingState = 'idle' | 'waiting_keyframe' | 'recording' | 'finalizing' | 'failed'
+export interface RecordingStatus {
+  state: RecordingState
+  id: string | null
+  file_name: string | null
+  generation: string | null
+  started_at_ms: number | null
+  duration_ms: number
+  bytes: number
+  last_error: string | null
+}
+
+export interface RecordingEntry {
+  id: string
+  file_name: string
+  created_at_ms: number
+  duration_ms: number
+  bytes: number
+  width: number
+  height: number
+  fps: number
+  generation: string
+}
+
+export interface RecordingList { items: RecordingEntry[]; total: number; offset: number; limit: number }
+export interface RtspStatus { enabled: boolean; listening: boolean; bind: string; path: string; clients: number; max_clients: number; last_error: string | null }

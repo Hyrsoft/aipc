@@ -266,7 +266,6 @@ std::vector<std::string> ValidateConfig(const WorkerConfig& config) {
     require_range("video.gop", config.video.gop, 1, 300);
     require_range("vi.buffer_count", config.vi.buffer_count, 1, 16);
     require_range("video.stream_buffer_count", config.video.stream_buffer_count, 1, 16);
-    if (config.video.output_path.empty()) errors.push_back("video.output_path is required");
     if (config.video.ipc_fd != -1 &&
         (config.video.ipc_fd < 3 || config.video.ipc_fd > 1024)) {
         errors.push_back("video IPC fd must be -1 or in [3, 1024]");
@@ -301,7 +300,6 @@ std::vector<std::string> ValidateConfig(const WorkerConfig& config) {
         if (config.audio.bitrate != 64000) {
             errors.push_back("audio.bitrate must be 64000 for G711A v1");
         }
-        if (config.audio.output_path.empty()) errors.push_back("audio.output_path is required");
         if (config.audio.device_id < 0 || config.audio.channel_id < 0 ||
             config.audio.aenc_channel_id < 0) {
             errors.push_back("audio hardware channel IDs must be non-negative");
@@ -320,8 +318,8 @@ std::string Usage(const char* program_name) {
            << "  --fps <value>            Override frame rate\n"
            << "  --bitrate-kbps <value>   Override H264 CBR bitrate\n"
            << "  --gop <value>            Override H264 GOP\n"
-           << "  --video-output <path>    Override H264 output path\n"
-           << "  --audio-output <path>    Override G711A output path\n"
+           << "  --video-output <path>    Optional H264 diagnostic dump\n"
+           << "  --audio-output <path>    Optional G711A diagnostic dump\n"
            << "  --iq-dir <path>          Override ISP IQ directory\n"
            << "  --video-ipc-fd <fd>      Publish framed H264 to inherited descriptor\n"
            << "  --no-audio               Disable AI/AENC pipeline\n"
