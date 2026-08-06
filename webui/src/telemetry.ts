@@ -1,4 +1,4 @@
-import type { MediaMetrics, ServerEvent, VideoMetrics } from './types'
+import type { DaemonStatus, MediaMetrics, ServerEvent, VideoMetrics } from './types'
 
 export type EventLevel = 'info' | 'warn' | 'error'
 export type EventFilter = 'all' | EventLevel
@@ -65,6 +65,22 @@ export function matchesEventFilter(event: ServerEvent, filter: EventFilter): boo
 
 export function isEventViewportAtBottom(scrollHeight: number, scrollTop: number, clientHeight: number): boolean {
   return scrollHeight - scrollTop - clientHeight < 24
+}
+
+export function workerUptimeSeconds(status: DaemonStatus | null, statusReceivedAtMs: number, nowMs: number): number {
+  if (!status?.pid || status.started_at_ms === null) return 0
+  const boardElapsedMs = Math.max(0, status.updated_at_ms - status.started_at_ms)
+  const localElapsedMs = Math.max(0, nowMs - statusReceivedAtMs)
+  return Math.floor((boardElapsedMs + localElapsedMs) / 1000)
+}
+
+export function formatDuration(totalSeconds: number): string {
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor(totalSeconds % 86400 / 3600)
+  const minutes = Math.floor(totalSeconds % 3600 / 60)
+  const seconds = totalSeconds % 60
+  const clock = [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':')
+  return days > 0 ? `${days}d ${clock}` : clock
 }
 
 function finite(value: unknown): number | null {

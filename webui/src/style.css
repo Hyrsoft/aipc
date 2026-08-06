@@ -28,3 +28,6 @@ button.compact.selected{border-color:var(--mint);color:var(--mint);background:#1
 .event-empty{padding:30px;text-align:center;color:var(--muted);font:11px ui-monospace,monospace}
 @media(max-width:900px){.event-row summary{grid-template-columns:10px 70px 48px 120px 1fr}.event-tools{width:100%;justify-content:space-between}}
 @media(max-width:620px){.event-row summary{grid-template-columns:10px 66px 48px 1fr}.event-summary{grid-column:2/5;padding-bottom:2px}.event-filters{width:100%}}
+.hero-stats{grid-template-columns:repeat(5,1fr)}
+.hero-stats div:nth-child(3) strong{font-size:12px;white-space:nowrap}
+@media(max-width:900px){.hero-stats{grid-template-columns:1fr 1fr}}

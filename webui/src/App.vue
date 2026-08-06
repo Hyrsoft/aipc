@@ -5,7 +5,7 @@ import type { PersistentState, WorkerConfig } from './types'
 import { PreviewController, initialPreviewSnapshot } from './preview'
 import {
   currentBitrate, currentVideoFps, eventLevel, eventName, eventSummary, matchesEventFilter,
-  isEventViewportAtBottom,
+  formatDuration, isEventViewportAtBottom, workerUptimeSeconds,
   type EventFilter,
 } from './telemetry'
 
@@ -25,7 +25,10 @@ const eventViewport = ref<HTMLDivElement | null>(null)
 const eventFilter = ref<EventFilter>('all')
 const eventFilters: EventFilter[] = ['all', 'info', 'warn', 'error']
 const eventFollow = ref(true)
+const clockMs = ref(Date.now())
+const statusReceivedAtMs = ref(Date.now())
 let previewController: PreviewController | undefined
+let clockTimer: number | undefined
 
 const status = computed(() => live.status)
 const metrics = computed(() => status.value?.metrics)
@@ -40,7 +43,10 @@ const activeAudioEnabled = computed(() =>
 const videoMetricState = computed(() => videoFps.value === null ? '等待指标' : '')
 const audioMetricState = computed(() => !activeAudioEnabled.value ? '已禁用' : audioBitrate.value === null ? '等待指标' : '')
 const filteredEvents = computed(() => live.events.filter((event) => matchesEventFilter(event, eventFilter.value)))
-const uptime = computed(() => status.value?.started_at_ms ? Math.max(0, Math.floor((Date.now() - status.value.started_at_ms) / 1000)) : 0)
+const uptime = computed(() => formatDuration(workerUptimeSeconds(status.value, statusReceivedAtMs.value, clockMs.value)))
+const startedAt = computed(() => status.value?.pid && status.value.started_at_ms
+  ? new Date(status.value.started_at_ms).toLocaleString()
+  : '—')
 const configDiff = computed(() => {
   if (!configs.value) return []
   const rows: Array<{ name: string; value: WorkerConfig | null }> = [
@@ -122,6 +128,7 @@ function disconnectPreview() {
 }
 
 onMounted(() => {
+  clockTimer = window.setInterval(() => { clockMs.value = Date.now() }, 1000)
   previewController = new PreviewController((snapshot) => Object.assign(preview, snapshot))
   load()
   disconnect = connectEvents((event) => assignLive(reduceServerEvent({ ...live }, event)), (up) => connected.value = up)
@@ -132,8 +139,9 @@ watch(() => [status.value?.state, status.value?.video_ready, status.value?.gener
     connectPreview()
   }
 })
+watch(() => status.value?.updated_at_ms, () => { statusReceivedAtMs.value = Date.now() })
 watch(() => [live.events.at(-1), eventFilter.value], () => scrollEventsToBottom(), { flush: 'post' })
-onBeforeUnmount(() => { disconnect?.(); previewController?.destroy() })
+onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); if (clockTimer) window.clearInterval(clockTimer) })
 </script>
 
 <template>
@@ -152,8 +160,9 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy() })
       <div class="hero-stats">
         <div><span>PID</span><strong>{{ status?.pid || '—' }}</strong></div>
         <div><span>Generation</span><strong>{{ short(status?.generation) }}</strong></div>
-        <div><span>Uptime</span><strong>{{ uptime }}s</strong></div>
-        <div><span>Restarts</span><strong>{{ status?.restart_count || 0 }}</strong></div>
+        <div><span>Started</span><strong>{{ startedAt }}</strong></div>
+        <div><span>Uptime</span><strong>{{ uptime }}</strong></div>
+        <div><span>Restarts</span><strong>{{ status?.restart_count ?? 0 }}</strong></div>
       </div>
       <div class="controls">
         <button :disabled="busy" @click="control('start')">Start</button>

@@ -144,6 +144,7 @@ pub async fn spawn_supervisor(
         running: None,
         after_stop: None,
         restart_times: VecDeque::new(),
+        total_starts: 0,
         backoff_deadline: None,
         shutting_down: false,
     };
@@ -224,6 +225,7 @@ struct SupervisorActor {
     running: Option<RunningProcess>,
     after_stop: Option<PendingStart>,
     restart_times: VecDeque<Instant>,
+    total_starts: usize,
     backoff_deadline: Option<(Instant, PendingStart)>,
     shutting_down: bool,
 }
@@ -551,6 +553,8 @@ impl SupervisorActor {
             manual_stop: false,
             startup_timed_out: false,
         });
+        self.total_starts += 1;
+        let restart_count = self.total_starts.saturating_sub(1);
         self.update_status(|status| {
             status.state = state;
             status.pid = Some(pid);
@@ -560,6 +564,7 @@ impl SupervisorActor {
             status.video_ready = false;
             status.audio_ready = false;
             status.metrics = None;
+            status.restart_count = restart_count;
             if clear_error {
                 status.last_error = None;
             }
@@ -811,11 +816,9 @@ impl SupervisorActor {
                 reason: StartReason::AutoRestart,
             },
         ));
-        let restart_count = self.restart_times.len();
         self.update_status(|status| {
             status.state = ProcessState::Backoff;
             status.stage = Some(format!("restart_in_{delay}s"));
-            status.restart_count = restart_count;
             status.generation = Some(generation);
         });
     }
@@ -1108,6 +1111,7 @@ while :; do sleep 1; done
         let accepted = handle.apply(updated.clone()).await.unwrap();
         let applied_generation = accepted.generation.unwrap();
         wait_for_generation(&handle, &applied_generation).await;
+        assert_eq!(handle.status.borrow().restart_count, 1);
         wait_for_preview(&handle).await;
         assert_eq!(
             handle.preview.status().generation.as_deref(),
@@ -1135,6 +1139,7 @@ while :; do sleep 1; done
         assert!(persistent.last_error.is_some());
         assert_eq!(persistent.active.as_ref().unwrap().video.width, 1280);
         drop(persistent);
+        assert_eq!(handle.status.borrow().restart_count, 3);
 
         handle.stop().await.unwrap();
         wait_for_state(&handle, ProcessState::Stopped).await;
