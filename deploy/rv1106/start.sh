@@ -22,7 +22,6 @@ if [ -f "${STATE_PATH}" ]; then
 fi
 
 pkill -TERM media_worker >/dev/null 2>&1 || true
-pkill -TERM aipc >/dev/null 2>&1 || true
 if [ -x /oem/usr/bin/RkLunch-stop.sh ]; then
     /oem/usr/bin/RkLunch-stop.sh >/dev/null 2>&1 || true
 else

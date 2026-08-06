@@ -30,9 +30,8 @@ media_worker --config media_worker.example.json --duration-sec 10
 Configuration values are loaded from defaults, then JSON, then explicit CLI
 overrides. Run `media_worker --help` for the supported overrides.
 
-The worker intentionally does not stop an existing `aipc` process. Stop all
-processes that own the media hardware before starting it. The installed
-`run_on_board.sh` stops the default `rkipc` service after checking this condition.
+Stop any board service that owns VI/VPSS/VENC/AI/AENC resources before starting
+the worker. The installed `run_on_board.sh` stops the default `rkipc` service.
 
 ## ADB verification
 

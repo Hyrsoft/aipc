@@ -27,7 +27,6 @@ adb push "${INSTALL_DIR}/config/media_worker.example.json" \
     "${REMOTE_DIR}/config/media_worker.example.json"
 
 adb shell "pkill -TERM media_worker 2>/dev/null || true"
-adb shell "pkill -TERM aipc 2>/dev/null || true"
 adb shell "/oem/usr/bin/RkLunch-stop.sh >/dev/null 2>&1 || true"
 adb shell "rm -f /tmp/media_worker_video.h264 /tmp/media_worker_audio.g711a \
     /tmp/media_worker_events.jsonl /tmp/media_worker_stderr.log"

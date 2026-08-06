@@ -8,6 +8,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../media_worker/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../media_worker/src");
     println!("cargo:rerun-if-changed=../media_worker/config");
+    println!("cargo:rerun-if-changed=../3rdparty/nlohmann_json/include");
     println!("cargo:rerun-if-changed=csrc/auxval_stub.c");
 
     let target = env::var("TARGET").expect("Cargo did not provide TARGET");
@@ -73,12 +74,14 @@ fn build_media_worker(target: &str) {
         .join("target/cpp")
         .join(target)
         .join(profile.to_ascii_lowercase());
+    let json_include = workspace_root.join("3rdparty/nlohmann_json/include");
     let installed = cmake::Config::new(workspace_root.join("media_worker"))
         .generator("Ninja")
         .profile(profile)
         .out_dir(&cpp_out)
         .define("CMAKE_TOOLCHAIN_FILE", &toolchain_file)
         .define("MEDIA_WORKER_SDK_ROOT", &sdk_root)
+        .define("MEDIA_WORKER_JSON_INCLUDE_DIR", &json_include)
         .define("MEDIA_WORKER_BUILD_RUNTIME", "ON")
         .define("MEDIA_WORKER_BUILD_TESTS", "OFF")
         .build();

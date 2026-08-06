@@ -1,83 +1,59 @@
-# AIPC Edge AI Camera
+# AIPC Rust/C++ Media Service
 
-基于瑞芯微 RV1106 平台的高性能边缘智能网络摄像头设计，支持 RTSP 推流、WebRTC、mp4 离线录制、WebSocket 网页实时预览，通过 RKNN 部署轻量级视觉模型。
+AIPC is an RV1106 media service built around two processes:
 
-## About
+- `aipc-daemon`: Rust/Tokio/Axum control plane, worker supervisor, REST/SSE API,
+  H264 WebSocket preview bridge, persistent configuration and Vue static server.
+- `media_worker`: C++17/RKMPI hardware worker for ISP, VI, VPSS, VENC, AI and
+  AENC. It emits JSONL lifecycle events and publishes Annex-B H264 over inherited
+  IPC.
 
-AIPC 是面向 Luckfox Pico / RV1106 的边缘智能摄像头应用，采用 C++ 服务端 + Python AI 脚本协同架构，支持在设备端完成采集、推流、录制与视觉推理，并通过 Web 控制台进行管理和热部署。
+The browser dashboard is implemented in Vue 3 under `webui/`.
 
-## 核心功能
-
-- 双模式采集与处理
-	- SimpleIPC 模式：硬件链路直通，低开销稳定推流
-	- VisionG 模式：Python 驱动摄像头与推理流程
-- 多路媒体分发
-	- RTSP 实时推流
-	- WebRTC 低延迟预览
-	- WebSocket 网页 H264 预览
-	- MP4 本地离线录制
-- AI 工程热更新
-	- Web 端创建/编辑/部署 Python 工程
-	- 运行时切换模型逻辑，无需整机重启
-- 统一 HTTP API
-	- 设备状态、模式切换、流服务控制、Python 工程管理
-
-## 技术栈
-
-- C++17 + CMake
-- pybind11 嵌入 Python 3.11
-- cpp-httplib（HTTP API）
-- libdatachannel（WebRTC）
-- spdlog（日志）
-- Rockchip RKMPI（VI/VPSS/VENC）
-- VisionG + RKNN（边缘推理）
-
-## 快速开始
-
-### 1. 编译
+## Host development
 
 ```bash
-# 调用预设的配置 (例如 Debug)
-cmake --preset Debug
+cargo test --workspace
+npm --prefix webui test
+npm --prefix webui run build
 
-# 使用预设进行构建
-cmake --build --preset Debug
+cmake --preset HostDebug -S media_worker
+cmake --build media_worker/build/HostDebug
+ctest --test-dir media_worker/build/HostDebug --output-on-failure
 ```
 
-### 2. 一键部署到板端
+Host Cargo builds skip the hardware worker. The C++ host preset builds only
+hardware-independent tests.
+
+## RV1106 build and package
+
+The Luckfox SDK defaults to the repository parent directory and can be
+overridden with `AIPC_SDK_ROOT`.
 
 ```bash
-AIPC_REMOTE_HOST=root@<device_ip> AIPC_REMOTE_DIR=/root/aipc ./assets/install_rsync.sh
+./scripts/build-rv1106.sh
+./scripts/package-rv1106.sh
 ```
 
-### 3. 板端启动
+The package is assembled at `target/package/aipc-rust` with `bin/`, `config/`,
+`scripts/` and `www/` directories.
+
+## Deploy and validate
 
 ```bash
-ssh root@<device_ip>
-cd /root/aipc/bin
-./start_app.sh --daemon
+AIPC_SKIP_BUILD=1 ./scripts/deploy-rv1106-adb.sh
+./scripts/validate-rv1106-adb.sh
 ```
 
-### 4. 访问控制台
+The default deployment directory is `/root/aipc-rust`. The daemon listens on
+`0.0.0.0:8080` without authentication and must only be exposed to a trusted LAN.
 
-- Web UI: `http://<device_ip>:8080`
-- 健康状态: `http://<device_ip>:8080/api/status`
+## Repository layout
 
-## 常用接口
-
-- `POST /api/ai/switch`：切换 AI 模式（`visiong` / `none`）
-- `GET /api/python/projects`：获取 Python 工程列表
-- `POST /api/python/deploy`：部署指定 Python 工程
-- `POST /api/rtsp/start`：启动 RTSP
-- `POST /api/webrtc/start`：启动 WebRTC
-
-## 目录参考
-
-- `src/`：核心 C++ 服务与媒体管线
-- `assets/`：部署脚本、模型与内置 Python 工程
-- `www/`：前端控制台
-- `docs/`：架构与调试文档
-
-## License
-
-本项目遵循仓库内各组件对应的开源许可证。
+- `aipc-daemon/`: Rust daemon and Cargo-driven CMake integration.
+- `media_worker/`: standalone C++17 RV1106 media process.
+- `webui/`: Vue 3 management and live-preview UI.
+- `config/`: packaged daemon configuration.
+- `deploy/` and `scripts/`: board startup, build, package and validation flows.
+- `3rdparty/luckfox_pico_rkmpi_example`: RKMPI headers and uClibc libraries.
+- `3rdparty/nlohmann_json`: worker JSON dependency.

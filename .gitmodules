@@ -1,18 +1,6 @@
 [submodule "3rdparty/luckfox_pico_rkmpi_example"]
 	path = 3rdparty/luckfox_pico_rkmpi_example
 	url = https://github.com/LuckfoxTECH/luckfox_pico_rkmpi_example.git
-[submodule "3rdparty/libdatachannel"]
-	path = 3rdparty/libdatachannel
-	url = https://github.com/paullouisageneau/libdatachannel.git
-[submodule "3rdparty/spdlog"]
-	path = 3rdparty/spdlog
-	url = https://github.com/gabime/spdlog.git
-[submodule "3rdparty/cpp-httplib"]
-	path = 3rdparty/cpp-httplib
-	url = https://github.com/yhirose/cpp-httplib.git
-[submodule "3rdparty/asio"]
-	path = 3rdparty/asio
-	url = https://github.com/chriskohlhoff/asio.git
-[submodule "3rdparty/visiong"]
-	path = 3rdparty/visiong
-	url = https://github.com/yiex/visiong.git
+[submodule "3rdparty/nlohmann_json"]
+	path = 3rdparty/nlohmann_json
+	url = https://github.com/nlohmann/json.git

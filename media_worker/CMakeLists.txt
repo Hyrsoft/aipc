@@ -19,8 +19,13 @@ set(MEDIA_WORKER_MPI_ROOT
     "${MEDIA_WORKER_REPO_ROOT}/3rdparty/luckfox_pico_rkmpi_example" CACHE PATH
     "Luckfox RKMPI headers and libraries")
 set(MEDIA_WORKER_JSON_INCLUDE_DIR
-    "${MEDIA_WORKER_REPO_ROOT}/3rdparty/libdatachannel/deps/json/include" CACHE PATH
+    "${MEDIA_WORKER_REPO_ROOT}/3rdparty/nlohmann_json/include" CACHE PATH
     "nlohmann/json include directory")
+if(MEDIA_WORKER_JSON_INCLUDE_DIR MATCHES "/3rdparty/libdatachannel/deps/json/include$")
+    set(MEDIA_WORKER_JSON_INCLUDE_DIR
+        "${MEDIA_WORKER_REPO_ROOT}/3rdparty/nlohmann_json/include" CACHE PATH
+        "nlohmann/json include directory" FORCE)
+endif()
 
 add_library(media_worker_config STATIC
     src/config.cpp
