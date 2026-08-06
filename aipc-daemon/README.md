@@ -29,3 +29,8 @@ Live H264 preview is available at `/api/v1/preview/ws`. The daemon receives
 framed Annex-B access units from the worker over an inherited Unix socketpair;
 the browser uses the locally bundled jMuxer/MSE player. Preview failure never
 stops the media pipeline or file output.
+
+The daemon package sends the legacy elementary-stream file outputs to
+`/dev/null` by default because `/tmp` is an 85 MiB tmpfs on the target board.
+Set explicit persistent output paths in the advanced configuration only when
+file capture is required.
