@@ -32,12 +32,16 @@ add_library(media_worker_config STATIC
     src/event_emitter.cpp
 )
 add_library(media_worker_video_ipc STATIC src/video_ipc_publisher.cpp)
+add_library(media_worker_audio_ipc STATIC src/audio_ipc_publisher.cpp)
 add_library(media_worker_metrics STATIC src/metrics_sampler.cpp)
 target_include_directories(media_worker_metrics PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(media_worker_metrics PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(media_worker_video_ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(media_worker_video_ipc PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(media_worker_video_ipc PUBLIC pthread)
+target_include_directories(media_worker_audio_ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(media_worker_audio_ipc PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(media_worker_audio_ipc PUBLIC pthread)
 target_include_directories(media_worker_config
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -96,6 +100,7 @@ if(MEDIA_WORKER_BUILD_RUNTIME)
         media_worker_config
         media_worker_metrics
         media_worker_video_ipc
+        media_worker_audio_ipc
         sample_comm
         rockit
         rockchip_mpp
@@ -131,6 +136,10 @@ if(MEDIA_WORKER_BUILD_TESTS)
     target_link_libraries(media_worker_video_ipc_tests PRIVATE media_worker_video_ipc)
     target_compile_options(media_worker_video_ipc_tests PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME media_worker_video_ipc_tests COMMAND media_worker_video_ipc_tests)
+    add_executable(media_worker_audio_ipc_tests tests/audio_ipc_publisher_test.cpp)
+    target_link_libraries(media_worker_audio_ipc_tests PRIVATE media_worker_audio_ipc)
+    target_compile_options(media_worker_audio_ipc_tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME media_worker_audio_ipc_tests COMMAND media_worker_audio_ipc_tests)
     add_executable(media_worker_metrics_tests tests/metrics_sampler_test.cpp)
     target_link_libraries(media_worker_metrics_tests PRIVATE media_worker_metrics)
     target_compile_options(media_worker_metrics_tests PRIVATE -Wall -Wextra -Wpedantic)

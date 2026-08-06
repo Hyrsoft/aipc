@@ -92,6 +92,20 @@ void TestVideoIpcFdCli() {
     Expect(!media_worker::ValidateConfig(config).empty(), "reserved IPC fd rejected");
 }
 
+void TestAudioIpcFdCli() {
+    const char* raw[] = {"media_worker", "--audio-ipc-fd", "4"};
+    auto argv = const_cast<char**>(raw);
+    media_worker::CliOptions options;
+    std::string error;
+    Expect(media_worker::ParseCli(3, argv, &options, &error), "audio IPC fd parses");
+    media_worker::WorkerConfig config;
+    media_worker::ApplyCliOverrides(options, &config);
+    Expect(config.audio.ipc_fd == 4, "audio IPC fd applied");
+    Expect(media_worker::ValidateConfig(config).empty(), "audio IPC fd validates");
+    config.audio.ipc_fd = 2;
+    Expect(!media_worker::ValidateConfig(config).empty(), "reserved audio IPC fd rejected");
+}
+
 void TestInvalidJson() {
     const std::string path = "/tmp/media_worker_invalid_config_test.json";
     {
@@ -113,6 +127,7 @@ int main() {
     TestInvalidCli();
     TestValidateOnlyCli();
     TestVideoIpcFdCli();
+    TestAudioIpcFdCli();
     TestInvalidJson();
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";

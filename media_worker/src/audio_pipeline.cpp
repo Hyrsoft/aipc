@@ -39,6 +39,15 @@ bool AudioPipeline::Init(std::string* error) {
             return false;
         }
     }
+    if (config_.audio.ipc_fd >= 0) {
+        ipc_publisher_ = std::make_unique<AudioIpcPublisher>(
+            config_.audio.ipc_fd, static_cast<std::size_t>(config_.audio.buffer_count * 2),
+            [this](const std::string& message) { ReportFatal(message); });
+        if (!ipc_publisher_->Start()) {
+            *error = "cannot start audio IPC publisher";
+            return false;
+        }
+    }
 
     AIO_ATTR_S ai_attr{};
     std::snprintf(reinterpret_cast<char*>(ai_attr.u8CardName), sizeof(ai_attr.u8CardName),
@@ -160,6 +169,14 @@ void AudioPipeline::FetchLoop() {
                 stats_.bytes.fetch_add(stream.u32Len);
                 stats_.last_pts.store(stream.u64TimeStamp);
             }
+            if (ipc_publisher_) {
+                const auto* bytes = static_cast<const std::uint8_t*>(data);
+                ipc_publisher_->Enqueue({
+                    std::vector<std::uint8_t>(bytes, bytes + stream.u32Len),
+                    stream.u64TimeStamp,
+                    ++ipc_sequence_,
+                });
+            }
         }
         result = RK_MPI_AENC_ReleaseStream(config_.audio.aenc_channel_id, &stream);
         if (result != RK_SUCCESS) {
@@ -203,7 +220,17 @@ void AudioPipeline::ReportFatal(const std::string& message) {
 void AudioPipeline::Stop() {
     running_.store(false);
     if (fetch_thread_.joinable()) fetch_thread_.join();
+    if (ipc_publisher_) ipc_publisher_->Stop();
     if (output_ != nullptr) std::fflush(output_);
+}
+
+nlohmann::json AudioPipeline::Stats() const {
+    auto stats = stats_.Snapshot();
+    stats["ipc_frames"] = ipc_publisher_ ? ipc_publisher_->Frames() : 0;
+    stats["ipc_bytes"] = ipc_publisher_ ? ipc_publisher_->Bytes() : 0;
+    stats["ipc_drops"] = ipc_publisher_ ? ipc_publisher_->Drops() : 0;
+    stats["ipc_errors"] = ipc_publisher_ ? ipc_publisher_->Errors() : 0;
+    return stats;
 }
 
 void AudioPipeline::Deinit() {

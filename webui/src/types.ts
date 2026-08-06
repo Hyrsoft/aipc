@@ -116,6 +116,9 @@ export interface RecordingStatus {
   started_at_ms: number | null
   duration_ms: number
   bytes: number
+  audio_file_name: string | null
+  audio_bytes: number
+  audio_available: boolean
   last_error: string | null
 }
 
@@ -129,6 +132,11 @@ export interface RecordingEntry {
   height: number
   fps: number
   generation: string
+  audio_file_name: string | null
+  audio_bytes: number
+  audio_sample_rate: number
+  audio_channels: number
+  audio_available: boolean
 }
 
 export interface RecordingList { items: RecordingEntry[]; total: number; offset: number; limit: number }

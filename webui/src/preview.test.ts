@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { PreviewController, type MuxerLike, type PreviewDependencies, type SocketLike } from './preview'
+import { PreviewController, decodeG711A, type MuxerLike, type PreviewDependencies, type SocketLike } from './preview'
 
 class FakeSocket implements SocketLike {
   binaryType: BinaryType = 'blob'
@@ -55,5 +55,12 @@ describe('PreviewController', () => {
     controller.connect({} as HTMLVideoElement)
     controller.disconnect()
     expect(setTimer).not.toHaveBeenCalled()
+  })
+})
+
+describe('decodeG711A', () => {
+  it('decodes positive and negative silence codes', () => {
+    expect(decodeG711A(0xd5)).toBe(8)
+    expect(decodeG711A(0x55)).toBe(-8)
   })
 })

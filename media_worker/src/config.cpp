@@ -127,6 +127,11 @@ bool ParseCli(int argc, char* argv[], CliOptions* options, std::string* error) {
                             error)) {
                 return false;
             }
+        } else if (arg == "--audio-ipc-fd") {
+            if (!RequireInt(argc, argv, &i, "--audio-ipc-fd", &options->audio_ipc_fd,
+                            error)) {
+                return false;
+            }
         } else if (arg == "--no-audio") {
             options->no_audio = true;
         } else if (arg == "--validate-only") {
@@ -231,6 +236,7 @@ void ApplyCliOverrides(const CliOptions& options, WorkerConfig* config) {
     if (options.audio_output) config->audio.output_path = *options.audio_output;
     if (options.iq_dir) config->isp.iq_dir = *options.iq_dir;
     if (options.video_ipc_fd) config->video.ipc_fd = *options.video_ipc_fd;
+    if (options.audio_ipc_fd) config->audio.ipc_fd = *options.audio_ipc_fd;
     if (options.no_audio) config->audio.enabled = false;
 }
 
@@ -304,6 +310,10 @@ std::vector<std::string> ValidateConfig(const WorkerConfig& config) {
             config.audio.aenc_channel_id < 0) {
             errors.push_back("audio hardware channel IDs must be non-negative");
         }
+        if (config.audio.ipc_fd != -1 &&
+            (config.audio.ipc_fd < 3 || config.audio.ipc_fd > 1024)) {
+            errors.push_back("audio IPC fd must be -1 or in [3, 1024]");
+        }
     }
     return errors;
 }
@@ -322,6 +332,7 @@ std::string Usage(const char* program_name) {
            << "  --audio-output <path>    Optional G711A diagnostic dump\n"
            << "  --iq-dir <path>          Override ISP IQ directory\n"
            << "  --video-ipc-fd <fd>      Publish framed H264 to inherited descriptor\n"
+           << "  --audio-ipc-fd <fd>      Publish framed G711A to inherited descriptor\n"
            << "  --no-audio               Disable AI/AENC pipeline\n"
            << "  --validate-only          Validate config without accessing hardware\n"
            << "  --help                   Show this help\n";

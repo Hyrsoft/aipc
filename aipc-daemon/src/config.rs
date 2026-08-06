@@ -277,6 +277,7 @@ pub struct PreviewConfig {
     pub enabled: bool,
     pub max_clients: usize,
     pub max_frame_bytes: usize,
+    pub max_audio_frame_bytes: usize,
     pub broadcast_capacity: usize,
 }
 
@@ -286,6 +287,7 @@ impl Default for PreviewConfig {
             enabled: true,
             max_clients: 5,
             max_frame_bytes: 4 * 1024 * 1024,
+            max_audio_frame_bytes: 64 * 1024,
             broadcast_capacity: 32,
         }
     }
