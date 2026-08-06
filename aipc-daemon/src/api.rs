@@ -1,10 +1,13 @@
 use crate::config::WorkerConfig;
 use crate::preview::PreviewHub;
+use crate::recording::{RecordingManager, RecordingSettingsUpdate};
+use crate::rtsp::RtspServer;
 use crate::supervisor::{ActionAccepted, SupervisorError, SupervisorHandle};
 use axum::Json;
 use axum::Router;
-use axum::extract::{Query, State, WebSocketUpgrade};
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::extract::{Path as AxumPath, Query, State, WebSocketUpgrade};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -13,16 +16,26 @@ use serde::Deserialize;
 use serde_json::json;
 use std::convert::Infallible;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, SeekFrom};
+use tokio_util::io::ReaderStream;
 use tower_http::services::{ServeDir, ServeFile};
 
 #[derive(Clone)]
 struct AppState {
     supervisor: SupervisorHandle,
     preview: PreviewHub,
+    recording: RecordingManager,
+    rtsp: RtspServer,
 }
 
-pub fn router(supervisor: SupervisorHandle, web_dir: &Path) -> Router {
+pub fn router(
+    supervisor: SupervisorHandle,
+    recording: RecordingManager,
+    rtsp: RtspServer,
+    web_dir: &Path,
+) -> Router {
     let index = web_dir.join("index.html");
     let static_service = ServeDir::new(web_dir).fallback(ServeFile::new(index));
     Router::new()
@@ -36,11 +49,408 @@ pub fn router(supervisor: SupervisorHandle, web_dir: &Path) -> Router {
         .route("/api/v1/logs", get(logs))
         .route("/api/v1/preview/status", get(preview_status))
         .route("/api/v1/preview/ws", get(preview_ws))
+        .route(
+            "/api/v1/recording/settings",
+            get(recording_settings).put(update_recording_settings),
+        )
+        .route("/api/v1/recording/status", get(recording_status))
+        .route("/api/v1/recording/start", post(recording_start))
+        .route("/api/v1/recording/stop", post(recording_stop))
+        .route("/api/v1/recordings", get(recordings))
+        .route(
+            "/api/v1/recordings/{id}/content",
+            get(recording_content).head(recording_head),
+        )
+        .route("/api/v1/recordings/{id}/download", get(recording_download))
+        .route("/api/v1/recordings/export", post(recordings_export))
+        .route("/api/v1/recordings/delete", post(recordings_delete))
+        .route("/api/v1/rtsp/status", get(rtsp_status))
         .fallback_service(static_service)
         .with_state(AppState {
             preview: supervisor.preview.clone(),
+            recording,
+            rtsp,
             supervisor,
         })
+}
+
+async fn recording_settings(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.recording.settings().await)
+}
+
+async fn update_recording_settings(
+    State(state): State<AppState>,
+    Json(update): Json<RecordingSettingsUpdate>,
+) -> Result<impl IntoResponse, AppError> {
+    Ok(Json(state.recording.update_settings(update).await?))
+}
+
+async fn recording_status(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.recording.status().await)
+}
+
+async fn recording_start(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    Ok((StatusCode::ACCEPTED, Json(state.recording.start().await?)))
+}
+
+async fn recording_stop(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    Ok((StatusCode::ACCEPTED, Json(state.recording.stop().await?)))
+}
+
+#[derive(Deserialize)]
+struct RecordingsQuery {
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+async fn recordings(
+    State(state): State<AppState>,
+    Query(query): Query<RecordingsQuery>,
+) -> impl IntoResponse {
+    Json(
+        state
+            .recording
+            .list(query.offset.unwrap_or(0), query.limit.unwrap_or(25))
+            .await,
+    )
+}
+
+async fn recording_content(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    serve_recording(&state.recording, &id, &headers, false, false).await
+}
+
+async fn recording_head(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    serve_recording(&state.recording, &id, &headers, false, true).await
+}
+
+async fn recording_download(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    serve_recording(&state.recording, &id, &headers, true, false).await
+}
+
+async fn serve_recording(
+    manager: &RecordingManager,
+    id: &str,
+    headers: &HeaderMap,
+    download: bool,
+    head_only: bool,
+) -> Result<Response, AppError> {
+    let (entry, path) = manager.path_for(id).await?;
+    let metadata = tokio::fs::metadata(&path).await?;
+    let size = metadata.len();
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok());
+    let (status, start, end) = match range {
+        Some(value) => match parse_range(value, size) {
+            Some((start, end)) => (StatusCode::PARTIAL_CONTENT, start, end),
+            None => {
+                return Ok(Response::builder()
+                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                    .header(header::CONTENT_RANGE, format!("bytes */{size}"))
+                    .body(Body::empty())?);
+            }
+        },
+        None => (StatusCode::OK, 0, size.saturating_sub(1)),
+    };
+    let length = if size == 0 { 0 } else { end - start + 1 };
+    let disposition = if download { "attachment" } else { "inline" };
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "video/mp4")
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, length)
+        .header(
+            header::ETAG,
+            format!("\"{}-{}-{}\"", entry.id, size, entry.created_at_ms),
+        )
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("{disposition}; filename=\"{}\"", entry.file_name),
+        );
+    if status == StatusCode::PARTIAL_CONTENT {
+        builder = builder.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{size}"));
+    }
+    if head_only || length == 0 {
+        return Ok(builder.body(Body::empty())?);
+    }
+    let mut file = tokio::fs::File::open(path).await?;
+    file.seek(SeekFrom::Start(start)).await?;
+    let stream = ReaderStream::new(file.take(length));
+    Ok(builder.body(Body::from_stream(stream))?)
+}
+
+fn parse_range(value: &str, size: u64) -> Option<(u64, u64)> {
+    let value = value.strip_prefix("bytes=")?;
+    if value.contains(',') || size == 0 {
+        return None;
+    }
+    let (start, end) = value.split_once('-')?;
+    if start.is_empty() {
+        let suffix: u64 = end.parse().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        return Some((size.saturating_sub(suffix.min(size)), size - 1));
+    }
+    let start: u64 = start.parse().ok()?;
+    if start >= size {
+        return None;
+    }
+    let end = if end.is_empty() {
+        size - 1
+    } else {
+        end.parse::<u64>().ok()?.min(size - 1)
+    };
+    (end >= start).then_some((start, end))
+}
+
+#[derive(Deserialize)]
+struct IdSelection {
+    ids: Vec<String>,
+}
+
+async fn recordings_delete(
+    State(state): State<AppState>,
+    Json(selection): Json<IdSelection>,
+) -> Result<impl IntoResponse, AppError> {
+    let count = state.recording.delete(&selection.ids).await?;
+    Ok(Json(json!({"deleted": count})))
+}
+
+async fn recordings_export(
+    State(state): State<AppState>,
+    Json(selection): Json<IdSelection>,
+) -> Result<Response, AppError> {
+    let settings = state.recording.settings().await;
+    if selection.ids.is_empty() || selection.ids.len() > settings.max_export_files {
+        return Err(AppError::bad_request("invalid recording selection"));
+    }
+    let mut files = Vec::new();
+    for id in selection.ids {
+        let (entry, path) = state.recording.path_for(&id).await?;
+        files.push((entry.file_name, path));
+    }
+    let (reader, writer) = tokio::io::duplex(128 * 1024);
+    tokio::spawn(async move {
+        let _ = write_zip64(writer, files).await;
+    });
+    let file_name = format!("aipc-recordings-{}.zip", crate::model::now_ms());
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{file_name}\""),
+        )
+        .body(Body::from_stream(ReaderStream::new(reader)))?)
+}
+
+struct ZipEntry {
+    name: Vec<u8>,
+    crc: u32,
+    size: u64,
+    offset: u64,
+}
+
+async fn write_zip64<W: AsyncWrite + Unpin>(
+    mut writer: W,
+    files: Vec<(String, PathBuf)>,
+) -> anyhow::Result<()> {
+    let mut entries = Vec::new();
+    let mut offset = 0_u64;
+    for (name, path) in files {
+        let safe_name: Vec<u8> = name
+            .bytes()
+            .map(|byte| {
+                if matches!(byte, b'/' | b'\\') {
+                    b'_'
+                } else {
+                    byte
+                }
+            })
+            .collect();
+        let local_offset = offset;
+        let mut header = Vec::new();
+        push_u32(&mut header, 0x04034b50);
+        push_u16(&mut header, 45);
+        push_u16(&mut header, 0x0008);
+        push_u16(&mut header, 0);
+        push_u16(&mut header, 0);
+        push_u16(&mut header, 0);
+        push_u32(&mut header, 0);
+        push_u32(&mut header, u32::MAX);
+        push_u32(&mut header, u32::MAX);
+        push_u16(&mut header, safe_name.len() as u16);
+        push_u16(&mut header, 20);
+        header.extend_from_slice(&safe_name);
+        push_u16(&mut header, 0x0001);
+        push_u16(&mut header, 16);
+        push_u64(&mut header, 0);
+        push_u64(&mut header, 0);
+        writer.write_all(&header).await?;
+        offset += header.len() as u64;
+        let mut file = tokio::fs::File::open(path).await?;
+        let mut buffer = vec![0_u8; 64 * 1024];
+        let mut hasher = crc32fast::Hasher::new();
+        let mut size = 0_u64;
+        loop {
+            let count = file.read(&mut buffer).await?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+            writer.write_all(&buffer[..count]).await?;
+            size += count as u64;
+            offset += count as u64;
+        }
+        let crc = hasher.finalize();
+        let mut descriptor = Vec::new();
+        push_u32(&mut descriptor, 0x08074b50);
+        push_u32(&mut descriptor, crc);
+        push_u64(&mut descriptor, size);
+        push_u64(&mut descriptor, size);
+        writer.write_all(&descriptor).await?;
+        offset += descriptor.len() as u64;
+        entries.push(ZipEntry {
+            name: safe_name,
+            crc,
+            size,
+            offset: local_offset,
+        });
+    }
+    let central_offset = offset;
+    for entry in &entries {
+        let mut header = Vec::new();
+        push_u32(&mut header, 0x02014b50);
+        push_u16(&mut header, 45);
+        push_u16(&mut header, 45);
+        push_u16(&mut header, 0x0008);
+        push_u16(&mut header, 0);
+        push_u16(&mut header, 0);
+        push_u16(&mut header, 0);
+        push_u32(&mut header, entry.crc);
+        push_u32(&mut header, u32::MAX);
+        push_u32(&mut header, u32::MAX);
+        push_u16(&mut header, entry.name.len() as u16);
+        push_u16(&mut header, 28);
+        push_u16(&mut header, 0);
+        push_u16(&mut header, 0);
+        push_u16(&mut header, 0);
+        push_u32(&mut header, 0);
+        push_u32(&mut header, u32::MAX);
+        header.extend_from_slice(&entry.name);
+        push_u16(&mut header, 0x0001);
+        push_u16(&mut header, 24);
+        push_u64(&mut header, entry.size);
+        push_u64(&mut header, entry.size);
+        push_u64(&mut header, entry.offset);
+        writer.write_all(&header).await?;
+        offset += header.len() as u64;
+    }
+    let central_size = offset - central_offset;
+    let zip64_offset = offset;
+    let mut ending = Vec::new();
+    push_u32(&mut ending, 0x06064b50);
+    push_u64(&mut ending, 44);
+    push_u16(&mut ending, 45);
+    push_u16(&mut ending, 45);
+    push_u32(&mut ending, 0);
+    push_u32(&mut ending, 0);
+    push_u64(&mut ending, entries.len() as u64);
+    push_u64(&mut ending, entries.len() as u64);
+    push_u64(&mut ending, central_size);
+    push_u64(&mut ending, central_offset);
+    push_u32(&mut ending, 0x07064b50);
+    push_u32(&mut ending, 0);
+    push_u64(&mut ending, zip64_offset);
+    push_u32(&mut ending, 1);
+    push_u32(&mut ending, 0x06054b50);
+    push_u16(&mut ending, 0);
+    push_u16(&mut ending, 0);
+    push_u16(&mut ending, u16::MAX);
+    push_u16(&mut ending, u16::MAX);
+    push_u32(&mut ending, u32::MAX);
+    push_u32(&mut ending, u32::MAX);
+    push_u16(&mut ending, 0);
+    writer.write_all(&ending).await?;
+    writer.shutdown().await?;
+    Ok(())
+}
+
+fn push_u16(output: &mut Vec<u8>, value: u16) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+fn push_u32(output: &mut Vec<u8>, value: u32) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+fn push_u64(output: &mut Vec<u8>, value: u64) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+async fn rtsp_status(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.rtsp.status())
+}
+
+struct AppError {
+    status: StatusCode,
+    message: String,
+}
+
+impl AppError {
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+}
+
+impl<E: Into<anyhow::Error>> From<E> for AppError {
+    fn from(error: E) -> Self {
+        let message = error.into().to_string();
+        let status = if message.contains("not found") {
+            StatusCode::NOT_FOUND
+        } else if message.contains("already")
+            || message.contains("while recording")
+            || message.contains("not active")
+        {
+            StatusCode::CONFLICT
+        } else if message.contains("not ready") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else if message.contains("invalid")
+            || message.contains("must be")
+            || message.contains("outside")
+            || message.contains("insufficient")
+            || message.contains("disabled")
+        {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        Self { status, message }
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Json(json!({"error": {"code": "recording_error", "message": self.message}})),
+        )
+            .into_response()
+    }
 }
 
 async fn preview_status(State(state): State<AppState>) -> impl IntoResponse {
@@ -183,13 +593,40 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DaemonConfig;
+    use crate::config::{DaemonConfig, RtspConfig};
     use crate::model::PersistentState;
     use crate::supervisor::spawn_supervisor;
     use axum::body::Body;
     use http_body_util::BodyExt;
     use tempfile::tempdir;
     use tower::ServiceExt;
+
+    #[test]
+    fn parses_http_byte_ranges() {
+        assert_eq!(parse_range("bytes=10-19", 100), Some((10, 19)));
+        assert_eq!(parse_range("bytes=90-", 100), Some((90, 99)));
+        assert_eq!(parse_range("bytes=-10", 100), Some((90, 99)));
+        assert_eq!(parse_range("bytes=100-", 100), None);
+        assert_eq!(parse_range("bytes=0-1,3-4", 100), None);
+    }
+
+    #[tokio::test]
+    async fn streams_zip64_without_a_temporary_archive() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("sample.mp4");
+        tokio::fs::write(&path, b"sample-video").await.unwrap();
+        let (mut reader, writer) = tokio::io::duplex(4096);
+        let task = tokio::spawn(write_zip64(writer, vec![("sample.mp4".into(), path)]));
+        let mut data = Vec::new();
+        reader.read_to_end(&mut data).await.unwrap();
+        task.await.unwrap().unwrap();
+        assert!(data.starts_with(&0x04034b50_u32.to_le_bytes()));
+        assert!(
+            data.windows(4)
+                .any(|item| item == 0x06064b50_u32.to_le_bytes())
+        );
+        assert!(data.windows(10).any(|item| item == b"sample.mp4"));
+    }
 
     #[tokio::test]
     async fn exposes_status_and_rejects_invalid_config() {
@@ -201,9 +638,30 @@ mod tests {
             web_dir: temp.path().to_path_buf(),
             ..DaemonConfig::default()
         };
-        let handle =
-            spawn_supervisor(settings, PersistentState::new(WorkerConfig::default())).await;
-        let app = router(handle.clone(), temp.path());
+        let handle = spawn_supervisor(
+            settings.clone(),
+            PersistentState::new(WorkerConfig::default()),
+        )
+        .await;
+        let recording = RecordingManager::new(
+            settings.recording.clone(),
+            &settings.data_dir,
+            handle.preview.clone(),
+            handle.events.clone(),
+        )
+        .await
+        .unwrap();
+        let rtsp = RtspServer::start(
+            RtspConfig {
+                enabled: false,
+                ..RtspConfig::default()
+            },
+            handle.preview.clone(),
+            handle.events.clone(),
+        )
+        .await
+        .unwrap();
+        let app = router(handle.clone(), recording, rtsp, temp.path());
         let response = app
             .clone()
             .oneshot(

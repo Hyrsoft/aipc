@@ -50,6 +50,13 @@ pub struct PreviewFrame {
     pub data: Bytes,
 }
 
+#[derive(Debug, Clone)]
+pub struct CodecConfig {
+    pub info: StreamInfo,
+    pub sps: Bytes,
+    pub pps: Bytes,
+}
+
 #[derive(Clone)]
 enum PreviewEvent {
     Frame(Arc<PreviewFrame>),
@@ -68,9 +75,14 @@ pub struct PreviewHub {
     config: PreviewConfig,
     state: Arc<RwLock<PreviewState>>,
     sender: broadcast::Sender<PreviewEvent>,
+    frames: broadcast::Sender<Arc<PreviewFrame>>,
     clients: Arc<AtomicUsize>,
     server_events: broadcast::Sender<ServerEvent>,
 }
+
+/// Public media-bus name used by non-preview consumers. The implementation is
+/// kept in this module so the existing WebSocket preview path remains stable.
+pub type VideoHub = PreviewHub;
 
 pub struct PreviewClientGuard {
     clients: Arc<AtomicUsize>,
@@ -85,6 +97,7 @@ impl Drop for PreviewClientGuard {
 impl PreviewHub {
     pub fn new(config: PreviewConfig, server_events: broadcast::Sender<ServerEvent>) -> Self {
         let (sender, _) = broadcast::channel(config.broadcast_capacity.max(1));
+        let (frames, _) = broadcast::channel(config.broadcast_capacity.max(64));
         let status = PreviewStatus {
             enabled: config.enabled,
             available: false,
@@ -109,6 +122,7 @@ impl PreviewHub {
                 bootstrap: None,
             })),
             sender,
+            frames,
             clients: Arc::new(AtomicUsize::new(0)),
             server_events,
         }
@@ -126,6 +140,20 @@ impl PreviewHub {
         let mut status = self.state.read().unwrap().status.clone();
         status.clients = self.clients.load(Ordering::Acquire);
         status
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<PreviewFrame>> {
+        self.frames.subscribe()
+    }
+
+    pub fn codec_config(&self) -> Option<CodecConfig> {
+        let state = self.state.read().unwrap();
+        let info = state.status.stream.clone()?;
+        Some(CodecConfig {
+            info,
+            sps: strip_start_code(state.sps.as_ref()?),
+            pps: strip_start_code(state.pps.as_ref()?),
+        })
     }
 
     pub fn begin_generation(&self, info: StreamInfo) {
@@ -189,6 +217,7 @@ impl PreviewHub {
             }
         }
         drop(state);
+        let _ = self.frames.send(frame.clone());
         let _ = self.sender.send(PreviewEvent::Frame(frame));
     }
 
@@ -293,6 +322,16 @@ impl PreviewHub {
     }
 }
 
+fn strip_start_code(nal: &Bytes) -> Bytes {
+    if nal.starts_with(&[0, 0, 0, 1]) {
+        nal.slice(4..)
+    } else if nal.starts_with(&[0, 0, 1]) {
+        nal.slice(3..)
+    } else {
+        nal.clone()
+    }
+}
+
 async fn send_json(socket: &mut WebSocket, value: serde_json::Value) -> Result<(), ()> {
     socket
         .send(Message::Text(value.to_string().into()))
@@ -346,7 +385,7 @@ pub async fn read_video_ipc<R: AsyncRead + Unpin>(
     hub.stop_generation(&info.generation);
 }
 
-fn annex_b_nals(data: &Bytes) -> Vec<(u8, Bytes)> {
+pub fn annex_b_nals(data: &Bytes) -> Vec<(u8, Bytes)> {
     let mut starts = Vec::new();
     let mut index = 0;
     while index + 3 <= data.len() {

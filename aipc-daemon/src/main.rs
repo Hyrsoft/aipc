@@ -2,6 +2,8 @@ mod api;
 mod config;
 mod model;
 mod preview;
+mod recording;
+mod rtsp;
 mod store;
 mod supervisor;
 
@@ -55,6 +57,10 @@ async fn main() -> anyhow::Result<()> {
     if args.no_autostart {
         settings.autostart = false;
     }
+    settings.preview.broadcast_capacity = settings
+        .preview
+        .broadcast_capacity
+        .max(settings.recording.queue_capacity);
 
     let store = StateStore::new(&settings.data_dir);
     let initial = match store.load().await? {
@@ -62,7 +68,25 @@ async fn main() -> anyhow::Result<()> {
         None => PersistentState::new(load_seed(&settings.seed_config).await?),
     };
     let supervisor = spawn_supervisor(settings.clone(), initial).await;
-    let app = api::router(supervisor.clone(), &settings.web_dir);
+    let recording = recording::RecordingManager::new(
+        settings.recording.clone(),
+        &settings.data_dir,
+        supervisor.preview.clone(),
+        supervisor.events.clone(),
+    )
+    .await?;
+    let rtsp = rtsp::RtspServer::start(
+        settings.rtsp.clone(),
+        supervisor.preview.clone(),
+        supervisor.events.clone(),
+    )
+    .await?;
+    let app = api::router(
+        supervisor.clone(),
+        recording.clone(),
+        rtsp.clone(),
+        &settings.web_dir,
+    );
     let listener = TcpListener::bind(&settings.bind)
         .await
         .with_context(|| format!("bind HTTP server at {}", settings.bind))?;
@@ -72,6 +96,8 @@ async fn main() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     info!("HTTP shutdown requested; stopping media worker");
+    recording.shutdown().await;
+    rtsp.shutdown().await;
     supervisor.shutdown().await;
     Ok(())
 }

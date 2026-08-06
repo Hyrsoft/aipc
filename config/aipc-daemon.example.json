@@ -15,5 +15,22 @@
     "max_clients": 5,
     "max_frame_bytes": 4194304,
     "broadcast_capacity": 32
+  },
+  "recording": {
+    "enabled": true,
+    "directory": "../recordings",
+    "allowed_roots": ["../recordings"],
+    "queue_capacity": 256,
+    "max_duration_sec": 3600,
+    "max_file_bytes": 2147483648,
+    "min_free_bytes": 67108864,
+    "max_export_files": 100
+  },
+  "rtsp": {
+    "enabled": true,
+    "bind": "0.0.0.0:8554",
+    "path": "/live",
+    "max_clients": 4,
+    "mtu": 1200
   }
 }

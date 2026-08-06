@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { api, connectEvents, reduceServerEvent, type LiveState } from './api'
 import type { PersistentState, WorkerConfig } from './types'
 import { PreviewController, initialPreviewSnapshot } from './preview'
+import RecordingsView from './RecordingsView.vue'
 import {
   currentBitrate, currentVideoFps, eventLevel, eventName, eventSummary, matchesEventFilter,
   formatDuration, isEventViewportAtBottom, workerUptimeSeconds,
@@ -25,7 +26,7 @@ const eventViewport = ref<HTMLDivElement | null>(null)
 const eventFilter = ref<EventFilter>('all')
 const eventFilters: EventFilter[] = ['all', 'info', 'warn', 'error']
 const eventFollow = ref(true)
-const activeView = ref<'overview' | 'settings' | 'diagnostics'>('overview')
+const activeView = ref<'overview' | 'recordings' | 'settings' | 'diagnostics'>('overview')
 const clockMs = ref(Date.now())
 const statusReceivedAtMs = ref(Date.now())
 let previewController: PreviewController | undefined
@@ -161,8 +162,9 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); if (clockT
       <div class="brand"><span class="brand-mark">AI</span><div><p class="eyebrow">RV1106 CONTROL</p><h1>Media Console</h1></div></div>
       <nav class="nav-tabs" aria-label="主导航">
         <button :class="activeView === 'overview' && 'active'" @click="activeView = 'overview'"><span>01</span>运行概览</button>
-        <button :class="activeView === 'settings' && 'active'" @click="activeView = 'settings'"><span>02</span>媒体配置</button>
-        <button :class="activeView === 'diagnostics' && 'active'" @click="activeView = 'diagnostics'"><span>03</span>日志诊断<i v-if="live.events.some(event => eventLevel(event) === 'error')"></i></button>
+        <button :class="activeView === 'recordings' && 'active'" @click="activeView = 'recordings'"><span>02</span>录像管理</button>
+        <button :class="activeView === 'settings' && 'active'" @click="activeView = 'settings'"><span>03</span>媒体配置</button>
+        <button :class="activeView === 'diagnostics' && 'active'" @click="activeView = 'diagnostics'"><span>04</span>日志诊断<i v-if="live.events.some(event => eventLevel(event) === 'error')"></i></button>
       </nav>
       <div class="sidebar-meta">
         <div class="connection"><span :class="['dot', connected && 'online']"></span><div><b>{{ connected ? '服务已连接' : '正在重连' }}</b><small>SSE EVENT STREAM</small></div></div>
@@ -172,7 +174,7 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); if (clockT
 
     <main>
       <header class="topbar">
-        <div><p class="eyebrow">{{ activeView === 'overview' ? 'OVERVIEW' : activeView === 'settings' ? 'CONFIGURATION' : 'DIAGNOSTICS' }}</p><h2>{{ activeView === 'overview' ? '运行概览' : activeView === 'settings' ? '媒体配置' : '日志诊断' }}</h2></div>
+        <div><p class="eyebrow">{{ activeView === 'overview' ? 'OVERVIEW' : activeView === 'recordings' ? 'RECORDINGS' : activeView === 'settings' ? 'CONFIGURATION' : 'DIAGNOSTICS' }}</p><h2>{{ activeView === 'overview' ? '运行概览' : activeView === 'recordings' ? '录像管理' : activeView === 'settings' ? '媒体配置' : '日志诊断' }}</h2></div>
         <div class="header-status"><span :class="['status-pill', status?.state]">{{ status?.state || 'offline' }}</span><span>运行 {{ uptime }}</span></div>
       </header>
 
@@ -204,6 +206,8 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); if (clockT
           </div>
         </section>
       </template>
+
+      <RecordingsView v-else-if="activeView === 'recordings'" />
 
       <template v-else-if="activeView === 'settings'">
         <section class="panel config" v-if="form">

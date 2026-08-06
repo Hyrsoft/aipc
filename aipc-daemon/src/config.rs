@@ -94,7 +94,7 @@ impl Default for VideoConfig {
             gop: 30,
             venc_channel_id: 0,
             stream_buffer_count: 3,
-            output_path: "/tmp/media_worker_video.h264".into(),
+            output_path: String::new(),
         }
     }
 }
@@ -134,7 +134,7 @@ impl Default for AudioConfig {
             frame_samples: 1024,
             bitrate: 64_000,
             buffer_count: 4,
-            output_path: "/tmp/media_worker_audio.g711a".into(),
+            output_path: String::new(),
         }
     }
 }
@@ -178,9 +178,6 @@ impl WorkerConfig {
             1,
             16,
         );
-        if self.video.output_path.is_empty() {
-            errors.push("video.output_path is required".into());
-        }
         if self.runtime.warning_timeout_count >= self.runtime.stalled_timeout_count
             || self.runtime.stalled_timeout_count >= self.runtime.fatal_timeout_count
         {
@@ -196,9 +193,6 @@ impl WorkerConfig {
                 || self.audio.bitrate != 64_000
             {
                 errors.push("G711A requires 8000Hz, mono, 16-bit input and 64000 bitrate".into());
-            }
-            if self.audio.output_path.is_empty() {
-                errors.push("audio.output_path is required".into());
             }
             range(
                 &mut errors,
@@ -273,6 +267,8 @@ pub struct DaemonConfig {
     pub max_restarts: usize,
     pub restart_window_sec: u64,
     pub preview: PreviewConfig,
+    pub recording: RecordingConfig,
+    pub rtsp: RtspConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -295,6 +291,56 @@ impl Default for PreviewConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RecordingConfig {
+    pub enabled: bool,
+    pub directory: PathBuf,
+    pub allowed_roots: Vec<PathBuf>,
+    pub queue_capacity: usize,
+    pub max_duration_sec: u64,
+    pub max_file_bytes: u64,
+    pub min_free_bytes: u64,
+    pub max_export_files: usize,
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            directory: "../recordings".into(),
+            allowed_roots: vec!["../recordings".into()],
+            queue_capacity: 256,
+            max_duration_sec: 3600,
+            max_file_bytes: 2 * 1024 * 1024 * 1024,
+            min_free_bytes: 64 * 1024 * 1024,
+            max_export_files: 100,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RtspConfig {
+    pub enabled: bool,
+    pub bind: String,
+    pub path: String,
+    pub max_clients: usize,
+    pub mtu: usize,
+}
+
+impl Default for RtspConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bind: "0.0.0.0:8554".into(),
+            path: "/live".into(),
+            max_clients: 4,
+            mtu: 1200,
+        }
+    }
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
@@ -310,6 +356,8 @@ impl Default for DaemonConfig {
             max_restarts: 5,
             restart_window_sec: 300,
             preview: PreviewConfig::default(),
+            recording: RecordingConfig::default(),
+            rtsp: RtspConfig::default(),
         }
     }
 }
@@ -327,6 +375,13 @@ impl DaemonConfig {
         config.data_dir = resolve(executable_dir, &config.data_dir);
         config.runtime_dir = resolve(executable_dir, &config.runtime_dir);
         config.seed_config = resolve(executable_dir, &config.seed_config);
+        config.recording.directory = resolve(executable_dir, &config.recording.directory);
+        config.recording.allowed_roots = config
+            .recording
+            .allowed_roots
+            .iter()
+            .map(|path| resolve(executable_dir, path))
+            .collect();
         Ok(config)
     }
 }

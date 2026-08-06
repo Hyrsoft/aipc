@@ -1,4 +1,4 @@
-import type { DaemonStatus, LogEntry, PersistentState, ServerEvent, WorkerConfig } from './types'
+import type { DaemonStatus, LogEntry, PersistentState, RecordingList, RecordingSettings, RecordingStatus, RtspStatus, ServerEvent, WorkerConfig } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -19,6 +19,24 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(config),
     }),
+  recordingSettings: () => request<RecordingSettings>('/api/v1/recording/settings'),
+  updateRecordingSettings: (directory: string) => request<RecordingSettings>('/api/v1/recording/settings', {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ directory }),
+  }),
+  recordingStatus: () => request<RecordingStatus>('/api/v1/recording/status'),
+  recordingControl: (action: 'start' | 'stop') => request<RecordingStatus>(`/api/v1/recording/${action}`, { method: 'POST' }),
+  recordings: (offset = 0, limit = 25) => request<RecordingList>(`/api/v1/recordings?offset=${offset}&limit=${limit}`),
+  deleteRecordings: (ids: string[]) => request<{ deleted: number }>('/api/v1/recordings/delete', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids }),
+  }),
+  exportRecordings: async (ids: string[]) => {
+    const response = await fetch('/api/v1/recordings/export', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids }),
+    })
+    if (!response.ok) throw new Error((await response.json().catch(() => ({})))?.error?.message || `HTTP ${response.status}`)
+    return response.blob()
+  },
+  rtspStatus: () => request<RtspStatus>('/api/v1/rtsp/status'),
 }
 
 export interface LiveState {

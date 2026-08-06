@@ -35,11 +35,13 @@ VideoPipeline::~VideoPipeline() {
 }
 
 bool VideoPipeline::Init(std::string* error) {
-    output_ = std::fopen(config_.video.output_path.c_str(), "wb");
-    if (output_ == nullptr) {
-        *error = "cannot open video output " + config_.video.output_path + ": " +
-                 std::strerror(errno);
-        return false;
+    if (!config_.video.output_path.empty()) {
+        output_ = std::fopen(config_.video.output_path.c_str(), "wb");
+        if (output_ == nullptr) {
+            *error = "cannot open video debug output " + config_.video.output_path + ": " +
+                     std::strerror(errno);
+            return false;
+        }
     }
     if (!InitVi(error) || !InitVpss(error) || !InitVenc(error) || !Bind(error)) {
         return false;
@@ -268,7 +270,7 @@ void VideoPipeline::FetchLoop() {
             // circular-buffer packets on this SDK release.
             const auto* data = static_cast<const unsigned char*>(base);
             access_unit.insert(access_unit.end(), data, data + pack.u32Len);
-            if (std::fwrite(data, 1, pack.u32Len, output_) != pack.u32Len) {
+            if (output_ != nullptr && std::fwrite(data, 1, pack.u32Len, output_) != pack.u32Len) {
                 write_failed = true;
                 break;
             }
@@ -301,7 +303,7 @@ void VideoPipeline::FetchLoop() {
                 RK_MPI_VENC_RequestIDR(config_.video.venc_channel_id, RK_TRUE);
             }
         }
-        if (stats_.packets.load() % 30 == 0) std::fflush(output_);
+        if (output_ != nullptr && stats_.packets.load() % 30 == 0) std::fflush(output_);
         if (keyframe && !ready_reported_.exchange(true)) {
             events_->Emit("StreamReady",
                           {{"media", "video"}, {"codec", "h264"},

@@ -42,7 +42,7 @@ struct VideoConfig {
     int gop = 30;
     int venc_channel_id = 0;
     int stream_buffer_count = 3;
-    std::string output_path = "/tmp/media_worker_video.h264";
+    std::string output_path;
     int ipc_fd = -1;
 };
 
@@ -60,7 +60,7 @@ struct AudioConfig {
     int frame_samples = 1024;
     int bitrate = 64000;
     int buffer_count = 4;
-    std::string output_path = "/tmp/media_worker_audio.g711a";
+    std::string output_path;
 };
 
 struct WorkerConfig {
