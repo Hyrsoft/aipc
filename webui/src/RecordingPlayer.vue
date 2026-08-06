@@ -6,6 +6,7 @@ import { PLAYBACK_RATES, clampPlaybackTime, formatPlaybackTime } from './recordi
 const props = defineProps<{ recording: RecordingEntry }>()
 const emit = defineEmits<{ close: [] }>()
 const video = ref<HTMLVideoElement | null>(null)
+const audio = ref<HTMLAudioElement | null>(null)
 const shell = ref<HTMLElement | null>(null)
 const playing = ref(false)
 const buffering = ref(false)
@@ -15,16 +16,25 @@ const volume = ref(1)
 const speed = ref(1)
 const error = ref('')
 const source = computed(() => `/api/v1/recordings/${encodeURIComponent(props.recording.id)}/content`)
+const audioSource = computed(() => `/api/v1/recordings/${encodeURIComponent(props.recording.id)}/audio`)
 
 async function toggle() { if (!video.value) return; if (video.value.paused) await video.value.play(); else video.value.pause() }
-function seek(value: number) { if (video.value) video.value.currentTime = value }
-function skip(delta: number) { if (video.value) video.value.currentTime = clampPlaybackTime(video.value.currentTime, delta, duration.value) }
-function setSpeed(value: number) { speed.value = value; if (video.value) video.value.playbackRate = value }
-function setVolume(value: number) { volume.value = value; if (video.value) video.value.volume = value }
+function seek(value: number) { if (video.value) video.value.currentTime = value; if (audio.value) audio.value.currentTime = value }
+function skip(delta: number) { if (video.value) seek(clampPlaybackTime(video.value.currentTime, delta, duration.value)) }
+function setSpeed(value: number) { speed.value = value; if (video.value) video.value.playbackRate = value; if (audio.value) audio.value.playbackRate = value }
+function setVolume(value: number) { volume.value = value; if (audio.value) audio.value.volume = value }
 function mute() { setVolume(volume.value > 0 ? 0 : 1) }
 async function fullscreen() { if (shell.value?.requestFullscreen) await shell.value.requestFullscreen() }
 function close() { cleanup(); emit('close') }
-function cleanup() { if (!video.value) return; video.value.pause(); video.value.removeAttribute('src'); video.value.load() }
+function cleanup() { video.value?.pause(); audio.value?.pause(); if (video.value) { video.value.removeAttribute('src'); video.value.load() }; if (audio.value) { audio.value.removeAttribute('src'); audio.value.load() } }
+async function syncPlay() {
+  if (!audio.value || !props.recording.audio_available || !video.value) return
+  if (Math.abs(audio.value.currentTime - video.value.currentTime) > 0.08) audio.value.currentTime = video.value.currentTime
+  audio.value.playbackRate = video.value.playbackRate
+  try { await audio.value.play() } catch { error.value = '录像音频播放失败，视频将继续静音播放' }
+}
+function syncPause() { audio.value?.pause() }
+function keepSynced() { if (audio.value && video.value && Math.abs(audio.value.currentTime - video.value.currentTime) > 0.2) audio.value.currentTime = video.value.currentTime }
 
 watch(() => props.recording.id, async () => {
   cleanup(); error.value = ''; current.value = 0; duration.value = 0
@@ -39,11 +49,12 @@ onBeforeUnmount(cleanup)
       <header><div><span class="label">MP4 PLAYBACK</span><h3>{{ recording.file_name }}</h3></div><button class="secondary compact" @click="close">关闭</button></header>
       <div class="player-stage">
         <video ref="video" :src="source" playsinline preload="metadata"
-          @play="playing = true" @pause="playing = false" @waiting="buffering = true" @playing="buffering = false"
-          @timeupdate="current = video?.currentTime || 0" @durationchange="duration = video?.duration || 0"
-          @ended="playing = false" @error="error = '浏览器无法播放该 MP4/H.264 文件'" @click="toggle" />
+          @play="playing = true; syncPlay()" @pause="playing = false; syncPause()" @waiting="buffering = true" @playing="buffering = false"
+          @timeupdate="current = video?.currentTime || 0; keepSynced()" @seeked="audio && (audio.currentTime = video?.currentTime || 0)" @durationchange="duration = video?.duration || 0"
+          @ended="playing = false; syncPause()" @ratechange="audio && (audio.playbackRate = video?.playbackRate || 1)" @error="error = '浏览器无法播放该 MP4/H.264 文件'" @click="toggle" />
+        <audio v-if="recording.audio_available" ref="audio" :src="audioSource" preload="auto" @error="error = 'WAV 音频不可用，视频将静音播放'" />
         <div v-if="buffering" class="player-message"><span class="loader"></span>正在缓冲</div>
-        <div v-if="error" class="player-message error-text">{{ error }}</div>
+        <div v-if="error" class="player-message error-text">{{ error }}</div><div v-else-if="!recording.audio_available" class="player-message">该录像没有可用音频</div>
       </div>
       <div class="player-controls">
         <button class="accent compact" @click="toggle">{{ playing ? '暂停' : current >= duration && duration ? '重播' : '播放' }}</button>

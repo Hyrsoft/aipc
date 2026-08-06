@@ -52,7 +52,7 @@ capture_preview() {
     node "${SCRIPT_DIR}/capture-preview.mjs" \
         "ws://127.0.0.1:${LOCAL_PORT}/api/v1/preview/ws" \
         "${WORK_DIR}/preview.h264" "${duration}" >"${WORK_DIR}/preview-capture.json"
-    jq -e '.frames > 0 and .bytes > 0 and .first_frame_ms <= 2000' \
+    jq -e '.frames > 0 and .bytes > 0 and .audio_frames > 0 and .audio_bytes > 0 and .first_frame_ms <= 2000' \
         "${WORK_DIR}/preview-capture.json" >/dev/null
     ffprobe -v error -f h264 -show_entries stream=codec_name,width,height \
         -of json "${WORK_DIR}/preview.h264" >"${WORK_DIR}/preview-probe.json"
@@ -69,12 +69,35 @@ generation=$(curl -fsS -X PUT -H 'content-type: application/json' --data-binary 
     "${BASE_URL}/api/v1/config" | jq -r '.generation')
 wait_running "${generation}"
 capture_preview 5
+curl -fsS "${BASE_URL}/api/v1/preview/status" | jq -e \
+    '.available == true and .audio.available == true and .audio.stream.codec == "g711a"' >/dev/null
+
+curl -fsS -X POST "${BASE_URL}/api/v1/recording/start" >"${WORK_DIR}/recording-start.json"
+sleep 5
+curl -fsS -X POST "${BASE_URL}/api/v1/recording/stop" >/dev/null
+for _ in $(seq 1 30); do
+    curl -fsS "${BASE_URL}/api/v1/recordings" >"${WORK_DIR}/recordings.json"
+    recording_id=$(jq -r '.items[0].id // ""' "${WORK_DIR}/recordings.json")
+    if [ -n "${recording_id}" ] && [ "$(jq -r '.items[0].audio_available' "${WORK_DIR}/recordings.json")" = "true" ]; then
+        break
+    fi
+    sleep 1
+done
+[ -n "${recording_id:-}" ]
+curl -fsS -H 'Range: bytes=0-43' "${BASE_URL}/api/v1/recordings/${recording_id}/audio" \
+    >"${WORK_DIR}/recording.wav.header"
+[ "$(head -c 4 "${WORK_DIR}/recording.wav.header")" = "RIFF" ]
 
 jq '.video.width=1' "${WORK_DIR}/720p.json" >"${WORK_DIR}/invalid.json"
 http_code=$(curl -sS -o "${WORK_DIR}/invalid-response.json" -w '%{http_code}' -X PUT \
     -H 'content-type: application/json' --data-binary "@${WORK_DIR}/invalid.json" "${BASE_URL}/api/v1/config")
 [ "${http_code}" = "400" ]
 [ "$(curl -fsS "${BASE_URL}/api/v1/status" | jq -r '.generation')" = "${generation}" ]
+
+jq '.audio.sample_rate=16000' "${WORK_DIR}/720p.json" >"${WORK_DIR}/invalid-audio.json"
+http_code=$(curl -sS -o "${WORK_DIR}/invalid-audio-response.json" -w '%{http_code}' -X PUT \
+    -H 'content-type: application/json' --data-binary "@${WORK_DIR}/invalid-audio.json" "${BASE_URL}/api/v1/config")
+[ "${http_code}" = "400" ]
 
 worker_pid=$(curl -fsS "${BASE_URL}/api/v1/status" | jq -r '.pid')
 adb shell "kill -KILL '${worker_pid}'"

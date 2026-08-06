@@ -61,6 +61,7 @@ struct AudioConfig {
     int bitrate = 64000;
     int buffer_count = 4;
     std::string output_path;
+    int ipc_fd = -1;
 };
 
 struct WorkerConfig {
@@ -85,6 +86,7 @@ struct CliOptions {
     std::optional<std::string> audio_output;
     std::optional<std::string> iq_dir;
     std::optional<int> video_ipc_fd;
+    std::optional<int> audio_ipc_fd;
     bool no_audio = false;
     bool validate_only = false;
     bool help = false;

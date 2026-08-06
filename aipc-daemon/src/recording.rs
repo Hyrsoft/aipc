@@ -1,13 +1,14 @@
 use crate::config::RecordingConfig;
 use crate::model::{ServerEvent, now_ms};
-use crate::preview::{CodecConfig, PreviewFrame, VideoHub, annex_b_nals};
+use crate::preview::{AudioFrame, CodecConfig, PreviewFrame, VideoHub, annex_b_nals};
 use anyhow::{Context, anyhow, bail};
 use bytes::{Bytes, BytesMut};
 use mp4::{AvcConfig, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig, TrackType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock, broadcast, oneshot};
@@ -32,6 +33,9 @@ pub struct RecordingStatus {
     pub started_at_ms: Option<u64>,
     pub duration_ms: u64,
     pub bytes: u64,
+    pub audio_file_name: Option<String>,
+    pub audio_bytes: u64,
+    pub audio_available: bool,
     pub last_error: Option<String>,
 }
 
@@ -45,6 +49,9 @@ impl Default for RecordingStatus {
             started_at_ms: None,
             duration_ms: 0,
             bytes: 0,
+            audio_file_name: None,
+            audio_bytes: 0,
+            audio_available: false,
             last_error: None,
         }
     }
@@ -61,6 +68,16 @@ pub struct RecordingEntry {
     pub height: i32,
     pub fps: i32,
     pub generation: String,
+    #[serde(default)]
+    pub audio_file_name: Option<String>,
+    #[serde(default)]
+    pub audio_bytes: u64,
+    #[serde(default)]
+    pub audio_sample_rate: i32,
+    #[serde(default)]
+    pub audio_channels: i32,
+    #[serde(default)]
+    pub audio_available: bool,
     #[serde(default)]
     pub storage_directory: PathBuf,
 }
@@ -121,6 +138,11 @@ impl RecordingManager {
                 entry.storage_directory.clone()
             };
             directory.join(&entry.file_name).is_file()
+                && (!entry.audio_available
+                    || entry
+                        .audio_file_name
+                        .as_ref()
+                        .is_some_and(|name| directory.join(name).is_file()))
         });
         Ok(Self {
             config: Arc::new(RwLock::new(config)),
@@ -180,7 +202,9 @@ impl RecordingManager {
             bail!("recording is already active");
         }
         let id = Uuid::new_v4().to_string();
-        let file_name = format!("recording-{}-{}.mp4", now_ms(), &id[..8]);
+        let timestamp = now_ms();
+        let file_name = format!("recording-{timestamp}-{}.mp4", &id[..8]);
+        let audio_file_name = format!("recording-{timestamp}-{}.wav", &id[..8]);
         let (stop, stop_rx) = oneshot::channel();
         *active = Some(ActiveRecording {
             id: id.clone(),
@@ -194,6 +218,9 @@ impl RecordingManager {
             started_at_ms: Some(now_ms()),
             duration_ms: 0,
             bytes: 0,
+            audio_file_name: Some(audio_file_name.clone()),
+            audio_bytes: 0,
+            audio_available: false,
             last_error: None,
         };
         *self.status.write().await = status.clone();
@@ -203,8 +230,31 @@ impl RecordingManager {
         );
         let manager = self.clone();
         let receiver = self.hub.subscribe();
+        let audio_receiver = self.hub.subscribe_audio();
         tokio::spawn(async move {
-            let result = run_recording(manager.clone(), config, codec, receiver, stop_rx).await;
+            let cleanup_directory = config.directory.clone();
+            let result = run_recording(
+                manager.clone(),
+                config,
+                codec,
+                receiver,
+                audio_receiver,
+                stop_rx,
+            )
+            .await;
+            if result.is_err() {
+                let status = manager.status().await;
+                if let Some(name) = status.file_name {
+                    let final_path = cleanup_directory.join(name);
+                    let _ = tokio::fs::remove_file(final_path.with_extension("mp4.part")).await;
+                    let _ = tokio::fs::remove_file(final_path).await;
+                }
+                if let Some(name) = status.audio_file_name {
+                    let final_path = cleanup_directory.join(name);
+                    let _ = tokio::fs::remove_file(final_path.with_extension("wav.part")).await;
+                    let _ = tokio::fs::remove_file(final_path).await;
+                }
+            }
             manager.finish(result).await;
         });
         Ok(status)
@@ -293,6 +343,49 @@ impl RecordingManager {
         Ok((entry, canonical))
     }
 
+    pub async fn audio_path_for(&self, id: &str) -> anyhow::Result<(RecordingEntry, PathBuf)> {
+        let entry = self
+            .entry(id)
+            .await
+            .ok_or_else(|| anyhow!("recording not found"))?;
+        if !entry.audio_available {
+            bail!("recording audio not found");
+        }
+        let name = entry
+            .audio_file_name
+            .as_ref()
+            .ok_or_else(|| anyhow!("recording audio not found"))?;
+        self.checked_path(&entry, name).await
+    }
+
+    async fn checked_path(
+        &self,
+        entry: &RecordingEntry,
+        name: &str,
+    ) -> anyhow::Result<(RecordingEntry, PathBuf)> {
+        let config = self.config.read().await;
+        let directory = if entry.storage_directory.as_os_str().is_empty() {
+            &config.directory
+        } else {
+            &entry.storage_directory
+        };
+        let canonical = tokio::fs::canonicalize(directory.join(name))
+            .await
+            .map_err(|error| anyhow!("recording file not found: {error}"))?;
+        let managed = tokio::fs::canonicalize(directory).await?;
+        let mut allowed = false;
+        for root in &config.allowed_roots {
+            if canonical.starts_with(tokio::fs::canonicalize(root).await?) {
+                allowed = true;
+                break;
+            }
+        }
+        if !canonical.starts_with(&managed) || !allowed {
+            bail!("recording path escaped managed directory");
+        }
+        Ok((entry.clone(), canonical))
+    }
+
     pub async fn delete(&self, ids: &[String]) -> anyhow::Result<usize> {
         if let Some(active) = self.active.lock().await.as_ref() {
             if ids.iter().any(|id| id == &active.id) {
@@ -301,11 +394,20 @@ impl RecordingManager {
         }
         let mut deleted = 0;
         for id in ids {
-            if let Ok((_, path)) = self.path_for(id).await {
+            if let Ok((entry, path)) = self.path_for(id).await {
                 match tokio::fs::remove_file(path).await {
                     Ok(()) => deleted += 1,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => deleted += 1,
                     Err(error) => return Err(error.into()),
+                }
+                if entry.audio_available {
+                    if let Ok((_, audio_path)) = self.audio_path_for(id).await {
+                        match tokio::fs::remove_file(audio_path).await {
+                            Ok(()) => {}
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
                 }
             }
         }
@@ -389,6 +491,7 @@ async fn run_recording(
     config: RecordingConfig,
     codec: CodecConfig,
     mut receiver: broadcast::Receiver<Arc<PreviewFrame>>,
+    mut audio_receiver: broadcast::Receiver<Arc<AudioFrame>>,
     mut stop: oneshot::Receiver<()>,
 ) -> anyhow::Result<RecordingEntry> {
     let status = manager.status().await;
@@ -400,22 +503,72 @@ async fn run_recording(
         .file_name
         .clone()
         .ok_or_else(|| anyhow!("recording name missing"))?;
+    let audio_file_name = status
+        .audio_file_name
+        .clone()
+        .ok_or_else(|| anyhow!("recording audio name missing"))?;
     let final_path = config.directory.join(&file_name);
     let part_path = final_path.with_extension("mp4.part");
+    let audio_final_path = config.directory.join(&audio_file_name);
+    let audio_part_path = audio_final_path.with_extension("wav.part");
     let frame_duration = (90_000_u32 / codec.info.fps.max(1) as u32).max(1);
     let mut first_pts = None;
     let mut previous: Option<Arc<PreviewFrame>> = None;
     let mut writer = None;
     let mut payload_bytes = 0_u64;
+    let mut audio_buffer = VecDeque::<Arc<AudioFrame>>::new();
+    let mut wav: Option<WavWriter> = None;
+    let mut audio_open = true;
 
     loop {
-        let frame = tokio::select! {
-            _ = &mut stop => break,
+        enum Input {
+            Video(Arc<PreviewFrame>),
+            Audio(Arc<AudioFrame>),
+            Stop,
+        }
+        let input = tokio::select! {
+            _ = &mut stop => Input::Stop,
+            result = audio_receiver.recv(), if audio_open => match result {
+                Ok(frame) => Input::Audio(frame),
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => {
+                    audio_open = false;
+                    continue;
+                },
+            },
             result = receiver.recv() => match result {
-                Ok(frame) => frame,
+                Ok(frame) => Input::Video(frame),
                 Err(broadcast::error::RecvError::Lagged(count)) => bail!("recording queue lagged by {count} frames"),
-                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Closed) => Input::Stop,
             }
+        };
+        let frame = match input {
+            Input::Stop => break,
+            Input::Audio(frame) => {
+                if frame.info.generation != codec.info.generation {
+                    continue;
+                }
+                if let Some(base) = first_pts {
+                    if wav.is_none() {
+                        wav = Some(WavWriter::create(
+                            &audio_part_path,
+                            frame.info.sample_rate as u32,
+                            frame.info.channels as u16,
+                        )?);
+                    }
+                    wav.as_mut().unwrap().write_g711a(&frame, base)?;
+                    let mut status = manager.status.write().await;
+                    status.audio_available = true;
+                    status.audio_bytes = wav.as_ref().unwrap().data_bytes();
+                } else {
+                    audio_buffer.push_back(frame);
+                    while audio_buffer.len() > 128 {
+                        audio_buffer.pop_front();
+                    }
+                }
+                continue;
+            }
+            Input::Video(frame) => frame,
         };
         if frame.info.generation != codec.info.generation {
             break;
@@ -450,6 +603,21 @@ async fn run_recording(
                 }),
             })?;
             first_pts = Some(frame.pts);
+            while let Some(audio) = audio_buffer.pop_front() {
+                if wav.is_none() {
+                    wav = Some(WavWriter::create(
+                        &audio_part_path,
+                        audio.info.sample_rate as u32,
+                        audio.info.channels as u16,
+                    )?);
+                }
+                wav.as_mut().unwrap().write_g711a(&audio, frame.pts)?;
+            }
+            if let Some(wav) = wav.as_ref() {
+                let mut status = manager.status.write().await;
+                status.audio_available = true;
+                status.audio_bytes = wav.data_bytes();
+            }
             manager.status.write().await.state = RecordingState::Recording;
             manager.emit("started", json!({"id": id, "file_name": file_name}));
             writer = Some(next);
@@ -510,6 +678,21 @@ async fn run_recording(
     output.flush()?;
     output.get_ref().sync_all()?;
     drop(output);
+    let mut audio_bytes = 0;
+    let mut audio_sample_rate = 0;
+    let mut audio_channels = 0;
+    let audio_available = if let Some(mut wav) = wav {
+        let duration_ms = manager.status().await.duration_ms;
+        wav.pad_to_duration(duration_ms)?;
+        audio_sample_rate = wav.sample_rate as i32;
+        audio_channels = wav.channels as i32;
+        wav.finish()?;
+        tokio::fs::rename(&audio_part_path, &audio_final_path).await?;
+        audio_bytes = tokio::fs::metadata(&audio_final_path).await?.len();
+        true
+    } else {
+        false
+    };
     tokio::fs::rename(&part_path, &final_path).await?;
     let metadata = tokio::fs::metadata(&final_path).await?;
     let final_status = manager.status().await;
@@ -523,8 +706,121 @@ async fn run_recording(
         height: codec.info.height,
         fps: codec.info.fps,
         generation: codec.info.generation,
+        audio_file_name: audio_available.then_some(audio_file_name),
+        audio_bytes,
+        audio_sample_rate,
+        audio_channels,
+        audio_available,
         storage_directory: config.directory,
     })
+}
+
+struct WavWriter {
+    output: BufWriter<File>,
+    sample_rate: u32,
+    channels: u16,
+    samples_written: u64,
+}
+
+impl WavWriter {
+    fn create(path: &Path, sample_rate: u32, channels: u16) -> anyhow::Result<Self> {
+        let mut output = BufWriter::new(File::create(path)?);
+        output.write_all(&[0_u8; 44])?;
+        Ok(Self {
+            output,
+            sample_rate,
+            channels,
+            samples_written: 0,
+        })
+    }
+
+    fn write_g711a(&mut self, frame: &AudioFrame, base_pts: u64) -> anyhow::Result<()> {
+        let (frame_start, leading_trim) = if frame.pts >= base_pts {
+            (
+                (frame.pts - base_pts).saturating_mul(self.sample_rate as u64) / 1_000_000,
+                0,
+            )
+        } else {
+            (
+                0,
+                (base_pts - frame.pts).saturating_mul(self.sample_rate as u64) / 1_000_000,
+            )
+        };
+        if frame_start > self.samples_written {
+            self.write_silence(frame_start - self.samples_written)?;
+        }
+        let skip =
+            leading_trim.saturating_add(self.samples_written.saturating_sub(frame_start)) as usize;
+        for value in frame.data.iter().skip(skip) {
+            self.output.write_all(&decode_alaw(*value).to_le_bytes())?;
+            self.samples_written += 1;
+        }
+        Ok(())
+    }
+
+    fn write_silence(&mut self, samples: u64) -> anyhow::Result<()> {
+        const SILENCE: [u8; 2048] = [0; 2048];
+        let mut remaining = samples.saturating_mul(self.channels as u64) * 2;
+        while remaining > 0 {
+            let count = remaining.min(SILENCE.len() as u64) as usize;
+            self.output.write_all(&SILENCE[..count])?;
+            remaining -= count as u64;
+        }
+        self.samples_written += samples;
+        Ok(())
+    }
+
+    fn pad_to_duration(&mut self, duration_ms: u64) -> anyhow::Result<()> {
+        let expected = duration_ms.saturating_mul(self.sample_rate as u64) / 1000;
+        if expected > self.samples_written {
+            self.write_silence(expected - self.samples_written)?;
+        }
+        Ok(())
+    }
+
+    fn data_bytes(&self) -> u64 {
+        self.samples_written * self.channels as u64 * 2
+    }
+
+    fn finish(&mut self) -> anyhow::Result<()> {
+        let data_bytes = self.data_bytes().min(u32::MAX as u64) as u32;
+        let byte_rate = self.sample_rate * self.channels as u32 * 2;
+        self.output.seek(SeekFrom::Start(0))?;
+        self.output.write_all(b"RIFF")?;
+        self.output
+            .write_all(&(36_u32.saturating_add(data_bytes)).to_le_bytes())?;
+        self.output.write_all(b"WAVEfmt ")?;
+        self.output.write_all(&16_u32.to_le_bytes())?;
+        self.output.write_all(&1_u16.to_le_bytes())?;
+        self.output.write_all(&self.channels.to_le_bytes())?;
+        self.output.write_all(&self.sample_rate.to_le_bytes())?;
+        self.output.write_all(&byte_rate.to_le_bytes())?;
+        self.output.write_all(&(self.channels * 2).to_le_bytes())?;
+        self.output.write_all(&16_u16.to_le_bytes())?;
+        self.output.write_all(b"data")?;
+        self.output.write_all(&data_bytes.to_le_bytes())?;
+        self.output.flush()?;
+        self.output.get_ref().sync_all()?;
+        Ok(())
+    }
+}
+
+pub fn decode_alaw(value: u8) -> i16 {
+    let value = value ^ 0x55;
+    let mut sample = ((value & 0x0f) as i32) << 4;
+    let segment = ((value & 0x70) >> 4) as i32;
+    sample += 8;
+    if segment >= 1 {
+        sample += 0x100;
+    }
+    if segment > 1 {
+        sample <<= segment - 1;
+    }
+    if value & 0x80 != 0 {
+        sample as i16
+    } else {
+        (-sample) as i16
+    }
 }
 
 fn pts_to_90k(value_us: u64) -> u32 {
@@ -584,6 +880,12 @@ mod tests {
         assert_eq!(pts_to_90k(33_333), 2_999);
     }
 
+    #[test]
+    fn decodes_known_g711a_silence() {
+        assert_eq!(decode_alaw(0xd5), 8);
+        assert_eq!(decode_alaw(0x55), -8);
+    }
+
     #[tokio::test]
     async fn records_a_playable_mp4_file() {
         let temp = tempdir().unwrap();
@@ -598,6 +900,14 @@ mod tests {
             fps: 30,
         };
         hub.begin_generation(info.clone());
+        hub.begin_audio_generation(crate::preview::AudioStreamInfo {
+            generation: "test-generation".into(),
+            codec: "g711a",
+            sample_rate: 8000,
+            channels: 1,
+            bit_width: 16,
+            bitrate: 64000,
+        });
         hub.ingest(PreviewFrame {
             info: info.clone(),
             pts: 1_000_000,
@@ -618,6 +928,19 @@ mod tests {
             .await
             .unwrap();
         manager.start().await.unwrap();
+        hub.ingest_audio(AudioFrame {
+            info: crate::preview::AudioStreamInfo {
+                generation: "test-generation".into(),
+                codec: "g711a",
+                sample_rate: 8000,
+                channels: 1,
+                bit_width: 16,
+                bitrate: 64000,
+            },
+            pts: 1_000_000,
+            sequence: 1,
+            data: Bytes::from(vec![0xd5; 160]),
+        });
         hub.ingest(PreviewFrame {
             info: info.clone(),
             pts: 1_033_333,
@@ -647,5 +970,10 @@ mod tests {
         let size = file.metadata().unwrap().len();
         let reader = mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size).unwrap();
         assert_eq!(reader.tracks().len(), 1);
+        assert!(list.items[0].audio_available);
+        let (_, audio_path) = manager.audio_path_for(&list.items[0].id).await.unwrap();
+        let wav = std::fs::read(audio_path).unwrap();
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
     }
 }

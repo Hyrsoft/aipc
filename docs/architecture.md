@@ -9,11 +9,18 @@ MP4 recording, RTSP, static Web UI delivery and worker lifecycle decisions. Conf
 a cold generation switch with validation and last-good rollback. Unexpected
 worker exits use bounded restart backoff.
 
-The daemon creates an anonymous Unix socketpair for each generation, passes the
-child endpoint as file descriptor 3 and distributes received Annex-B H264 access
-units to independent preview, MP4 recording and RTSP consumers. Slow consumers
-never block media capture. MP4 files use HTTP byte ranges so browsers decode and
-seek them without board-side transcoding.
+The Web form edits the Rust desired configuration. Rust validates it, writes a
+generation-specific worker JSON, and starts C++ with that file. C++ only performs
+defensive validation and execution; it does not own daemon runtime configuration.
+
+The daemon creates two anonymous Unix socketpairs for each audio-enabled
+generation: fd 3 carries AIPV/Annex-B H264 and fd 4 carries AIPA/G711A. Rust
+distributes video to preview, MP4 recording and RTSP, and audio to WebAudio
+preview and WAV recording. Slow consumers never block hardware capture.
+
+Recordings atomically commit an MP4 and, when audio is available, a PCM16 WAV
+companion aligned to the first video PTS. HTTP byte ranges are supported for both
+media endpoints. RTSP remains video-only in this version.
 
 ## C++ media worker
 
@@ -22,8 +29,9 @@ VI → VPSS → VENC/H264. The audio path is AI → AENC/G711A. Configuration is
 injected as JSON with optional CLI overrides.
 
 stdout is reserved for JSONL lifecycle and Metrics events. stderr contains SDK
-diagnostics. Encoded video is published to the inherited IPC descriptor. Optional
-elementary-stream dumps are disabled by default and reserved for diagnostics.
+diagnostics. Encoded media is published through bounded IPC writers. Optional
+elementary-stream dumps are disabled by default and reserved for diagnostics;
+they are not preview or recording sources.
 
 ## Build and deployment
 

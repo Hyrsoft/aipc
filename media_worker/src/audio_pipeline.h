@@ -5,7 +5,9 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <memory>
 
+#include "audio_ipc_publisher.h"
 #include "config.h"
 #include "event_emitter.h"
 #include "pipeline_stats.h"
@@ -28,7 +30,7 @@ public:
     bool Start(std::string* error);
     void Stop();
     void Deinit();
-    nlohmann::json Stats() const { return stats_.Snapshot(); }
+    nlohmann::json Stats() const;
 
 private:
     void FetchLoop();
@@ -43,6 +45,8 @@ private:
     std::atomic<bool> fatal_reported_{false};
     std::atomic<bool> ready_reported_{false};
     std::thread fetch_thread_;
+    std::unique_ptr<AudioIpcPublisher> ipc_publisher_;
+    std::uint64_t ipc_sequence_ = 0;
     std::FILE* output_ = nullptr;
 
     bool ai_enabled_ = false;
@@ -55,4 +59,3 @@ private:
 };
 
 }  // namespace media_worker
-

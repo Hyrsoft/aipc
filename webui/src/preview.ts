@@ -9,6 +9,15 @@ export interface PreviewStreamInfo {
   fps: number
 }
 
+export interface PreviewAudioInfo {
+  generation: string
+  codec: string
+  sample_rate: number
+  channels: number
+  bit_width: number
+  bitrate: number
+}
+
 export interface PreviewSnapshot {
   state: 'disconnected' | 'connecting' | 'waiting' | 'live' | 'error' | 'unsupported'
   stream: PreviewStreamInfo | null
@@ -18,6 +27,13 @@ export interface PreviewSnapshot {
   droppedFrames: number
   reconnects: number
   error: string
+  audioStream: PreviewAudioInfo | null
+  audioState: 'disabled' | 'waiting' | 'live' | 'error'
+  audioPackets: number
+  audioBitrateKbps: number
+  audioError: string
+  volume: number
+  muted: boolean
 }
 
 interface SocketLike {
@@ -61,6 +77,11 @@ export class PreviewController {
   private readonly dependencies: PreviewDependencies
   private readonly onUpdate: (snapshot: PreviewSnapshot) => void
   private snapshot: PreviewSnapshot = initialPreviewSnapshot()
+  private audioContext: AudioContext | null = null
+  private audioGain: GainNode | null = null
+  private audioSources = new Set<AudioBufferSourceNode>()
+  private nextAudioTime = 0
+  private intervalAudioBytes = 0
 
   constructor(onUpdate: (snapshot: PreviewSnapshot) => void, dependencies = browserDependencies()) {
     this.onUpdate = onUpdate
@@ -85,12 +106,28 @@ export class PreviewController {
     this.socket = null
     this.destroyMuxer()
     this.stopStats()
-    this.patch({ state: 'disconnected', stream: null, receivedFps: 0, bitrateKbps: 0, error: '' })
+    this.resetAudio()
+    this.patch({ state: 'disconnected', stream: null, receivedFps: 0, bitrateKbps: 0, error: '', audioState: 'waiting' })
   }
 
   destroy() {
     this.disconnect()
     this.video = null
+    void this.audioContext?.close()
+    this.audioContext = null
+  }
+
+  setVolume(value: number) {
+    const volume = Math.max(0, Math.min(1, value))
+    this.patch({ volume })
+    if (this.audioGain) this.audioGain.gain.value = this.snapshot.muted ? 0 : volume
+    if (this.audioContext?.state === 'suspended') void this.audioContext.resume()
+  }
+
+  setMuted(muted: boolean) {
+    this.patch({ muted })
+    if (this.audioGain) this.audioGain.gain.value = muted ? 0 : this.snapshot.volume
+    if (this.audioContext?.state === 'suspended') void this.audioContext.resume()
   }
 
   private openSocket() {
@@ -120,7 +157,8 @@ export class PreviewController {
       const message = JSON.parse(event.data)
       if (message.type === 'reset') {
         this.destroyMuxer()
-        this.patch({ state: 'waiting' })
+        this.resetAudio()
+        this.patch({ state: 'waiting', audioStream: null, audioState: 'waiting' })
       } else if (message.type === 'stream') {
         const stream = message.stream as PreviewStreamInfo
         const changed = this.snapshot.stream?.generation !== stream.generation
@@ -133,11 +171,20 @@ export class PreviewController {
       } else if (message.type === 'state' && message.state === 'stopped') {
         this.destroyMuxer()
         this.patch({ state: 'waiting', stream: null })
+      } else if (message.type === 'audio_stream') {
+        const audioStream = message.stream as PreviewAudioInfo
+        this.patch({ audioStream, audioState: 'waiting', audioError: '' })
       }
       return
     }
     const buffer = event.data instanceof ArrayBuffer ? event.data : null
-    if (!buffer || buffer.byteLength === 0 || !this.snapshot.stream) return
+    if (!buffer || buffer.byteLength === 0) return
+    const bytes = new Uint8Array(buffer)
+    if (bytes.length >= 28 && bytes[0] === 0x41 && bytes[1] === 0x49 && bytes[2] === 0x50 && bytes[3] === 0x41) {
+      this.handleAudioFrame(bytes)
+      return
+    }
+    if (!this.snapshot.stream) return
     this.ensureMuxer(this.snapshot.stream.fps)
     this.muxer?.feed({
       video: new Uint8Array(buffer),
@@ -147,6 +194,61 @@ export class PreviewController {
     this.intervalFrames += 1
     this.snapshot.bytesReceived += buffer.byteLength
     this.patch({ state: 'live', bytesReceived: this.snapshot.bytesReceived })
+  }
+
+  private handleAudioFrame(frame: Uint8Array) {
+    const stream = this.snapshot.audioStream
+    if (!stream) return
+    const length = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(8)
+    if (length <= 0 || length > frame.byteLength - 28) {
+      this.patch({ audioState: 'error', audioError: '无效的 AIPA 音频帧' })
+      return
+    }
+    try {
+      this.ensureAudio()
+      if (!this.audioContext || !this.audioGain) return
+      if (this.audioContext.state === 'suspended') void this.audioContext.resume()
+      const payload = frame.subarray(28, 28 + length)
+      const audioBuffer = this.audioContext.createBuffer(1, payload.length, stream.sample_rate)
+      const channel = audioBuffer.getChannelData(0)
+      for (let index = 0; index < payload.length; index += 1) channel[index] = decodeG711A(payload[index]) / 32768
+      if (this.nextAudioTime > this.audioContext.currentTime + 0.5) this.resetScheduledAudio()
+      const source = this.audioContext.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(this.audioGain)
+      const startAt = Math.max(this.nextAudioTime, this.audioContext.currentTime + 0.04)
+      source.start(startAt)
+      this.nextAudioTime = startAt + audioBuffer.duration
+      this.audioSources.add(source)
+      source.onended = () => this.audioSources.delete(source)
+      this.intervalAudioBytes += payload.length
+      this.patch({ audioState: 'live', audioPackets: this.snapshot.audioPackets + 1, audioError: '' })
+    } catch (cause) {
+      this.patch({ audioState: 'error', audioError: String(cause) })
+    }
+  }
+
+  private ensureAudio() {
+    if (this.audioContext) return
+    const Context = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Context) throw new Error('浏览器不支持 Web Audio API')
+    this.audioContext = new Context()
+    this.audioGain = this.audioContext.createGain()
+    this.audioGain.gain.value = this.snapshot.muted ? 0 : this.snapshot.volume
+    this.audioGain.connect(this.audioContext.destination)
+  }
+
+  private resetScheduledAudio() {
+    for (const source of this.audioSources) {
+      try { source.stop() } catch { /* already stopped */ }
+    }
+    this.audioSources.clear()
+    this.nextAudioTime = this.audioContext?.currentTime || 0
+  }
+
+  private resetAudio() {
+    this.resetScheduledAudio()
+    this.intervalAudioBytes = 0
   }
 
   private ensureMuxer(fps: number) {
@@ -191,9 +293,11 @@ export class PreviewController {
       this.patch({
         receivedFps: this.intervalFrames / seconds,
         bitrateKbps: this.intervalBytes * 8 / seconds / 1000,
+        audioBitrateKbps: this.intervalAudioBytes * 8 / seconds / 1000,
       })
       this.intervalBytes = 0
       this.intervalFrames = 0
+      this.intervalAudioBytes = 0
       this.intervalStarted = now
       if (this.socket) this.statsTimer = this.dependencies.setTimer(tick, 1000)
     }
@@ -215,7 +319,19 @@ export function initialPreviewSnapshot(): PreviewSnapshot {
   return {
     state: 'disconnected', stream: null, receivedFps: 0, bitrateKbps: 0,
     bytesReceived: 0, droppedFrames: 0, reconnects: 0, error: '',
+    audioStream: null, audioState: 'waiting', audioPackets: 0, audioBitrateKbps: 0,
+    audioError: '', volume: 1, muted: false,
   }
+}
+
+export function decodeG711A(encoded: number): number {
+  const value = encoded ^ 0x55
+  let sample = (value & 0x0f) << 4
+  const segment = (value & 0x70) >> 4
+  sample += 8
+  if (segment >= 1) sample += 0x100
+  if (segment > 1) sample <<= segment - 1
+  return value & 0x80 ? sample : -sample
 }
 
 function browserDependencies(): PreviewDependencies {

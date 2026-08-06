@@ -13,6 +13,8 @@ const HEADER_SIZE: usize = 28;
 const MAGIC: &[u8; 4] = b"AIPV";
 const VERSION: u16 = 1;
 const KEYFRAME_FLAG: u16 = 1;
+const AUDIO_MAGIC: &[u8; 4] = b"AIPA";
+const AUDIO_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamInfo {
@@ -22,6 +24,30 @@ pub struct StreamInfo {
     pub width: i32,
     pub height: i32,
     pub fps: i32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioStreamInfo {
+    pub generation: String,
+    pub codec: &'static str,
+    pub sample_rate: i32,
+    pub channels: i32,
+    pub bit_width: i32,
+    pub bitrate: i32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioPreviewStatus {
+    pub available: bool,
+    pub generation: Option<String>,
+    pub packets_received: u64,
+    pub bytes_received: u64,
+    pub last_pts: Option<u64>,
+    pub last_sequence: Option<u64>,
+    pub malformed_frames: u64,
+    pub lagged_clients: u64,
+    pub stream: Option<AudioStreamInfo>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -39,6 +65,7 @@ pub struct PreviewStatus {
     pub lagged_clients: u64,
     pub stream: Option<StreamInfo>,
     pub last_error: Option<String>,
+    pub audio: AudioPreviewStatus,
 }
 
 #[derive(Clone)]
@@ -47,6 +74,14 @@ pub struct PreviewFrame {
     pub pts: u64,
     pub sequence: u64,
     pub keyframe: bool,
+    pub data: Bytes,
+}
+
+#[derive(Clone)]
+pub struct AudioFrame {
+    pub info: AudioStreamInfo,
+    pub pts: u64,
+    pub sequence: u64,
     pub data: Bytes,
 }
 
@@ -60,6 +95,7 @@ pub struct CodecConfig {
 #[derive(Clone)]
 enum PreviewEvent {
     Frame(Arc<PreviewFrame>),
+    AudioFrame(Arc<AudioFrame>),
     State,
 }
 
@@ -76,6 +112,7 @@ pub struct PreviewHub {
     state: Arc<RwLock<PreviewState>>,
     sender: broadcast::Sender<PreviewEvent>,
     frames: broadcast::Sender<Arc<PreviewFrame>>,
+    audio_frames: broadcast::Sender<Arc<AudioFrame>>,
     clients: Arc<AtomicUsize>,
     server_events: broadcast::Sender<ServerEvent>,
 }
@@ -98,6 +135,7 @@ impl PreviewHub {
     pub fn new(config: PreviewConfig, server_events: broadcast::Sender<ServerEvent>) -> Self {
         let (sender, _) = broadcast::channel(config.broadcast_capacity.max(1));
         let (frames, _) = broadcast::channel(config.broadcast_capacity.max(64));
+        let (audio_frames, _) = broadcast::channel(config.broadcast_capacity.max(64));
         let status = PreviewStatus {
             enabled: config.enabled,
             available: false,
@@ -112,6 +150,18 @@ impl PreviewHub {
             lagged_clients: 0,
             stream: None,
             last_error: None,
+            audio: AudioPreviewStatus {
+                available: false,
+                generation: None,
+                packets_received: 0,
+                bytes_received: 0,
+                last_pts: None,
+                last_sequence: None,
+                malformed_frames: 0,
+                lagged_clients: 0,
+                stream: None,
+                last_error: None,
+            },
         };
         Self {
             config,
@@ -123,6 +173,7 @@ impl PreviewHub {
             })),
             sender,
             frames,
+            audio_frames,
             clients: Arc::new(AtomicUsize::new(0)),
             server_events,
         }
@@ -136,6 +187,10 @@ impl PreviewHub {
         self.config.max_frame_bytes
     }
 
+    pub fn max_audio_frame_bytes(&self) -> usize {
+        self.config.max_audio_frame_bytes
+    }
+
     pub fn status(&self) -> PreviewStatus {
         let mut status = self.state.read().unwrap().status.clone();
         status.clients = self.clients.load(Ordering::Acquire);
@@ -144,6 +199,10 @@ impl PreviewHub {
 
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<PreviewFrame>> {
         self.frames.subscribe()
+    }
+
+    pub fn subscribe_audio(&self) -> broadcast::Receiver<Arc<AudioFrame>> {
+        self.audio_frames.subscribe()
     }
 
     pub fn codec_config(&self) -> Option<CodecConfig> {
@@ -174,6 +233,24 @@ impl PreviewHub {
         let _ = self.sender.send(PreviewEvent::State);
     }
 
+    pub fn begin_audio_generation(&self, info: AudioStreamInfo) {
+        let mut state = self.state.write().unwrap();
+        state.status.audio = AudioPreviewStatus {
+            available: false,
+            generation: Some(info.generation.clone()),
+            packets_received: 0,
+            bytes_received: 0,
+            last_pts: None,
+            last_sequence: None,
+            malformed_frames: 0,
+            lagged_clients: 0,
+            stream: Some(info),
+            last_error: None,
+        };
+        drop(state);
+        let _ = self.sender.send(PreviewEvent::State);
+    }
+
     pub fn stop_generation(&self, generation: &str) {
         let mut state = self.state.write().unwrap();
         if state.status.generation.as_deref() != Some(generation) {
@@ -182,6 +259,17 @@ impl PreviewHub {
         state.status.available = false;
         state.status.stream = None;
         state.bootstrap = None;
+        drop(state);
+        let _ = self.sender.send(PreviewEvent::State);
+    }
+
+    pub fn stop_audio_generation(&self, generation: &str) {
+        let mut state = self.state.write().unwrap();
+        if state.status.audio.generation.as_deref() != Some(generation) {
+            return;
+        }
+        state.status.audio.available = false;
+        state.status.audio.stream = None;
         drop(state);
         let _ = self.sender.send(PreviewEvent::State);
     }
@@ -221,6 +309,22 @@ impl PreviewHub {
         let _ = self.sender.send(PreviewEvent::Frame(frame));
     }
 
+    pub fn ingest_audio(&self, frame: AudioFrame) {
+        let mut state = self.state.write().unwrap();
+        if state.status.audio.generation.as_deref() != Some(&frame.info.generation) {
+            return;
+        }
+        state.status.audio.available = true;
+        state.status.audio.packets_received += 1;
+        state.status.audio.bytes_received += frame.data.len() as u64;
+        state.status.audio.last_pts = Some(frame.pts);
+        state.status.audio.last_sequence = Some(frame.sequence);
+        let frame = Arc::new(frame);
+        drop(state);
+        let _ = self.audio_frames.send(frame.clone());
+        let _ = self.sender.send(PreviewEvent::AudioFrame(frame));
+    }
+
     pub fn reader_error(&self, generation: &str, message: String) {
         let mut state = self.state.write().unwrap();
         if state.status.generation.as_deref() != Some(generation) {
@@ -233,6 +337,22 @@ impl PreviewHub {
         let _ = self.server_events.send(ServerEvent::new(
             "preview_warning",
             json!({"generation": generation, "message": message}),
+        ));
+        let _ = self.sender.send(PreviewEvent::State);
+    }
+
+    pub fn audio_reader_error(&self, generation: &str, message: String) {
+        let mut state = self.state.write().unwrap();
+        if state.status.audio.generation.as_deref() != Some(generation) {
+            return;
+        }
+        state.status.audio.available = false;
+        state.status.audio.malformed_frames += 1;
+        state.status.audio.last_error = Some(message.clone());
+        drop(state);
+        let _ = self.server_events.send(ServerEvent::new(
+            "preview_warning",
+            json!({"generation": generation, "media": "audio", "message": message}),
         ));
         let _ = self.sender.send(PreviewEvent::State);
     }
@@ -280,6 +400,9 @@ impl PreviewHub {
                         }
                         if socket.send(Message::Binary(frame.data.clone())).await.is_err() { break; }
                     }
+                    Ok(PreviewEvent::AudioFrame(frame)) => {
+                        if socket.send(Message::Binary(encode_audio_preview_frame(&frame))).await.is_err() { break; }
+                    }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
                         self.mark_lagged(skipped);
                         if send_json(&mut socket, json!({"type":"reset", "reason":"lagged", "skipped":skipped})).await.is_err()
@@ -310,6 +433,9 @@ impl PreviewHub {
         } else {
             send_json(socket, json!({"type":"state", "state":"stopped"})).await?;
         }
+        if let Some(audio) = status.audio.stream {
+            send_json(socket, json!({"type":"audio_stream", "stream":audio})).await?;
+        }
         Ok(())
     }
 
@@ -318,8 +444,22 @@ impl PreviewHub {
     }
 
     fn mark_lagged(&self, _skipped: u64) {
-        self.state.write().unwrap().status.lagged_clients += 1;
+        let mut state = self.state.write().unwrap();
+        state.status.lagged_clients += 1;
+        state.status.audio.lagged_clients += 1;
     }
+}
+
+fn encode_audio_preview_frame(frame: &AudioFrame) -> Bytes {
+    let mut output = BytesMut::with_capacity(HEADER_SIZE + frame.data.len());
+    output.extend_from_slice(AUDIO_MAGIC);
+    output.extend_from_slice(&AUDIO_VERSION.to_be_bytes());
+    output.extend_from_slice(&0_u16.to_be_bytes());
+    output.extend_from_slice(&(frame.data.len() as u32).to_be_bytes());
+    output.extend_from_slice(&frame.pts.to_be_bytes());
+    output.extend_from_slice(&frame.sequence.to_be_bytes());
+    output.extend_from_slice(&frame.data);
+    output.freeze()
 }
 
 fn strip_start_code(nal: &Bytes) -> Bytes {
@@ -383,6 +523,52 @@ pub async fn read_video_ipc<R: AsyncRead + Unpin>(
         });
     }
     hub.stop_generation(&info.generation);
+}
+
+pub async fn read_audio_ipc<R: AsyncRead + Unpin>(
+    mut reader: R,
+    hub: PreviewHub,
+    info: AudioStreamInfo,
+) {
+    let mut header = [0_u8; HEADER_SIZE];
+    loop {
+        match reader.read_exact(&mut header).await {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(error) => {
+                hub.audio_reader_error(&info.generation, format!("read audio IPC header: {error}"));
+                break;
+            }
+        }
+        if &header[0..4] != AUDIO_MAGIC
+            || u16::from_be_bytes([header[4], header[5]]) != AUDIO_VERSION
+        {
+            hub.audio_reader_error(&info.generation, "invalid audio IPC header".into());
+            break;
+        }
+        let length = u32::from_be_bytes(header[8..12].try_into().unwrap()) as usize;
+        if length == 0 || length > hub.max_audio_frame_bytes() {
+            hub.audio_reader_error(
+                &info.generation,
+                format!("invalid audio IPC payload length {length}"),
+            );
+            break;
+        }
+        let pts = u64::from_be_bytes(header[12..20].try_into().unwrap());
+        let sequence = u64::from_be_bytes(header[20..28].try_into().unwrap());
+        let mut payload = vec![0_u8; length];
+        if let Err(error) = reader.read_exact(&mut payload).await {
+            hub.audio_reader_error(&info.generation, format!("read audio IPC payload: {error}"));
+            break;
+        }
+        hub.ingest_audio(AudioFrame {
+            info: info.clone(),
+            pts,
+            sequence,
+            data: Bytes::from(payload),
+        });
+    }
+    hub.stop_audio_generation(&info.generation);
 }
 
 pub fn annex_b_nals(data: &Bytes) -> Vec<(u8, Bytes)> {
@@ -453,6 +639,29 @@ mod tests {
         output
     }
 
+    fn audio_message(payload: &[u8]) -> Vec<u8> {
+        let mut output = Vec::new();
+        output.extend_from_slice(AUDIO_MAGIC);
+        output.extend_from_slice(&AUDIO_VERSION.to_be_bytes());
+        output.extend_from_slice(&0_u16.to_be_bytes());
+        output.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        output.extend_from_slice(&42_u64.to_be_bytes());
+        output.extend_from_slice(&7_u64.to_be_bytes());
+        output.extend_from_slice(payload);
+        output
+    }
+
+    fn audio_info() -> AudioStreamInfo {
+        AudioStreamInfo {
+            generation: "g1".into(),
+            codec: "g711a",
+            sample_rate: 8000,
+            channels: 1,
+            bit_width: 16,
+            bitrate: 64000,
+        }
+    }
+
     #[tokio::test]
     async fn reads_fragmented_bootstrap_frame() {
         let hub = test_hub(4096);
@@ -510,6 +719,40 @@ mod tests {
                 .unwrap()
                 .contains("header")
         );
+    }
+
+    #[tokio::test]
+    async fn reads_fragmented_audio_frame() {
+        let hub = test_hub(4096);
+        let info = audio_info();
+        hub.begin_audio_generation(info.clone());
+        let data = audio_message(&[0xd5, 0x55, 0x00]);
+        let (mut writer, reader) = duplex(4);
+        let task = tokio::spawn(read_audio_ipc(reader, hub.clone(), info));
+        for chunk in data.chunks(2) {
+            writer.write_all(chunk).await.unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(hub.status().audio.available);
+        assert_eq!(hub.status().audio.packets_received, 1);
+        drop(writer);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_audio_frame() {
+        let mut config = PreviewConfig::default();
+        config.max_audio_frame_bytes = 2;
+        let (events, _) = broadcast::channel(8);
+        let hub = PreviewHub::new(config, events);
+        let info = audio_info();
+        hub.begin_audio_generation(info.clone());
+        let (mut writer, reader) = duplex(64);
+        let task = tokio::spawn(read_audio_ipc(reader, hub.clone(), info));
+        writer.write_all(&audio_message(&[1, 2, 3])).await.unwrap();
+        drop(writer);
+        task.await.unwrap();
+        assert_eq!(hub.status().audio.malformed_frames, 1);
     }
 
     #[tokio::test]

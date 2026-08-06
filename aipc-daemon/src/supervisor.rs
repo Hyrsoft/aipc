@@ -1,6 +1,6 @@
 use crate::config::{DaemonConfig, WorkerConfig};
 use crate::model::{DaemonStatus, LogEntry, PersistentState, ProcessState, ServerEvent, now_ms};
-use crate::preview::{PreviewHub, StreamInfo, read_video_ipc};
+use crate::preview::{AudioStreamInfo, PreviewHub, StreamInfo, read_audio_ipc, read_video_ipc};
 use crate::store::StateStore;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
@@ -461,7 +461,7 @@ impl SupervisorActor {
             .map_err(|error| error.to_string())?;
 
         let mut command = Command::new(&self.settings.worker_path);
-        let ipc_pair = if self.preview.enabled()
+        let video_ipc_pair = if self.preview.enabled()
             || self.settings.recording.enabled
             || self.settings.rtsp.enabled
         {
@@ -473,7 +473,19 @@ impl SupervisorActor {
         } else {
             None
         };
-        let ipc_child_fd = ipc_pair.as_ref().map(|(_, child)| child.as_raw_fd());
+        let audio_ipc_pair = if pending.config.audio.enabled
+            && (self.preview.enabled() || self.settings.recording.enabled)
+        {
+            let (parent, child) = StdUnixStream::pair().map_err(|error| error.to_string())?;
+            parent
+                .set_nonblocking(true)
+                .map_err(|error| error.to_string())?;
+            Some((parent, child))
+        } else {
+            None
+        };
+        let video_ipc_child_fd = video_ipc_pair.as_ref().map(|(_, child)| child.as_raw_fd());
+        let audio_ipc_child_fd = audio_ipc_pair.as_ref().map(|(_, child)| child.as_raw_fd());
         command
             .arg("--config")
             .arg(&config_path)
@@ -483,30 +495,37 @@ impl SupervisorActor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(false);
-        if ipc_child_fd.is_some() {
+        if video_ipc_child_fd.is_some() {
             command.arg("--video-ipc-fd").arg("3");
+        }
+        if audio_ipc_child_fd.is_some() {
+            command.arg("--audio-ipc-fd").arg("4");
         }
         unsafe {
             command.pre_exec(move || {
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if let Some(source_fd) = ipc_child_fd {
-                    if source_fd == 3 {
-                        let flags = libc::fcntl(3, libc::F_GETFD);
-                        if flags < 0 || libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
-                        {
+                for (source_fd, target_fd) in [(video_ipc_child_fd, 3), (audio_ipc_child_fd, 4)] {
+                    if let Some(source_fd) = source_fd {
+                        if source_fd == target_fd {
+                            let flags = libc::fcntl(target_fd, libc::F_GETFD);
+                            if flags < 0
+                                || libc::fcntl(target_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC)
+                                    < 0
+                            {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                        } else if libc::dup2(source_fd, target_fd) < 0 {
                             return Err(std::io::Error::last_os_error());
                         }
-                    } else if libc::dup2(source_fd, 3) < 0 {
-                        return Err(std::io::Error::last_os_error());
                     }
                 }
                 Ok(())
             });
         }
         let mut child = command.spawn().map_err(|error| error.to_string())?;
-        if let Some((parent, child_side)) = ipc_pair {
+        if let Some((parent, child_side)) = video_ipc_pair {
             drop(child_side);
             let info = StreamInfo {
                 generation: pending.generation.clone(),
@@ -520,6 +539,21 @@ impl SupervisorActor {
             let stream =
                 tokio::net::UnixStream::from_std(parent).map_err(|error| error.to_string())?;
             tokio::spawn(read_video_ipc(stream, self.preview.clone(), info));
+        }
+        if let Some((parent, child_side)) = audio_ipc_pair {
+            drop(child_side);
+            let info = AudioStreamInfo {
+                generation: pending.generation.clone(),
+                codec: "g711a",
+                sample_rate: pending.config.audio.sample_rate,
+                channels: pending.config.audio.channels,
+                bit_width: pending.config.audio.bit_width,
+                bitrate: pending.config.audio.bitrate,
+            };
+            self.preview.begin_audio_generation(info.clone());
+            let stream =
+                tokio::net::UnixStream::from_std(parent).map_err(|error| error.to_string())?;
+            tokio::spawn(read_audio_ipc(stream, self.preview.clone(), info));
         }
         let pid = child
             .id()

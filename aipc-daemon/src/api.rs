@@ -61,6 +61,10 @@ pub fn router(
             "/api/v1/recordings/{id}/content",
             get(recording_content).head(recording_head),
         )
+        .route(
+            "/api/v1/recordings/{id}/audio",
+            get(recording_audio).head(recording_audio_head),
+        )
         .route("/api/v1/recordings/{id}/download", get(recording_download))
         .route("/api/v1/recordings/export", post(recordings_export))
         .route("/api/v1/recordings/delete", post(recordings_delete))
@@ -139,6 +143,44 @@ async fn recording_download(
     serve_recording(&state.recording, &id, &headers, true, false).await
 }
 
+async fn recording_audio(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    serve_recording_audio(&state.recording, &id, &headers, false).await
+}
+
+async fn recording_audio_head(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    serve_recording_audio(&state.recording, &id, &headers, true).await
+}
+
+async fn serve_recording_audio(
+    manager: &RecordingManager,
+    id: &str,
+    headers: &HeaderMap,
+    head_only: bool,
+) -> Result<Response, AppError> {
+    let (entry, path) = manager.audio_path_for(id).await?;
+    serve_media_file(
+        entry.id,
+        entry.created_at_ms,
+        entry
+            .audio_file_name
+            .unwrap_or_else(|| "recording.wav".into()),
+        path,
+        headers,
+        "audio/wav",
+        "inline",
+        head_only,
+    )
+    .await
+}
+
 async fn serve_recording(
     manager: &RecordingManager,
     id: &str,
@@ -147,6 +189,29 @@ async fn serve_recording(
     head_only: bool,
 ) -> Result<Response, AppError> {
     let (entry, path) = manager.path_for(id).await?;
+    serve_media_file(
+        entry.id,
+        entry.created_at_ms,
+        entry.file_name,
+        path,
+        headers,
+        "video/mp4",
+        if download { "attachment" } else { "inline" },
+        head_only,
+    )
+    .await
+}
+
+async fn serve_media_file(
+    id: String,
+    created_at_ms: u64,
+    file_name: String,
+    path: PathBuf,
+    headers: &HeaderMap,
+    content_type: &'static str,
+    disposition: &'static str,
+    head_only: bool,
+) -> Result<Response, AppError> {
     let metadata = tokio::fs::metadata(&path).await?;
     let size = metadata.len();
     let range = headers
@@ -165,19 +230,18 @@ async fn serve_recording(
         None => (StatusCode::OK, 0, size.saturating_sub(1)),
     };
     let length = if size == 0 { 0 } else { end - start + 1 };
-    let disposition = if download { "attachment" } else { "inline" };
     let mut builder = Response::builder()
         .status(status)
-        .header(header::CONTENT_TYPE, "video/mp4")
+        .header(header::CONTENT_TYPE, content_type)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, length)
         .header(
             header::ETAG,
-            format!("\"{}-{}-{}\"", entry.id, size, entry.created_at_ms),
+            format!("\"{}-{}-{}\"", id, size, created_at_ms),
         )
         .header(
             header::CONTENT_DISPOSITION,
-            format!("{disposition}; filename=\"{}\"", entry.file_name),
+            format!("{disposition}; filename=\"{}\"", file_name),
         );
     if status == StatusCode::PARTIAL_CONTENT {
         builder = builder.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{size}"));
@@ -240,7 +304,14 @@ async fn recordings_export(
     let mut files = Vec::new();
     for id in selection.ids {
         let (entry, path) = state.recording.path_for(&id).await?;
-        files.push((entry.file_name, path));
+        files.push((entry.file_name.clone(), path));
+        if entry.audio_available {
+            if let Ok((audio_entry, audio_path)) = state.recording.audio_path_for(&id).await {
+                if let Some(name) = audio_entry.audio_file_name {
+                    files.push((name, audio_path));
+                }
+            }
+        }
     }
     let (reader, writer) = tokio::io::duplex(128 * 1024);
     tokio::spawn(async move {
@@ -454,7 +525,14 @@ impl IntoResponse for AppError {
 }
 
 async fn preview_status(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.preview.status())
+    let status = state.preview.status();
+    let mut value = serde_json::to_value(&status).unwrap_or_else(|_| json!({}));
+    if let Some(root) = value.as_object_mut() {
+        let mut video = root.clone();
+        video.remove("audio");
+        root.insert("video".into(), serde_json::Value::Object(video));
+    }
+    Json(value)
 }
 
 async fn preview_ws(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
