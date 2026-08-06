@@ -96,6 +96,11 @@ void MediaWorker::EmitMetrics(double elapsed_seconds) {
     fields["elapsed_seconds"] = elapsed_seconds;
     if (video_) {
         fields["video"] = video_->Stats();
+        const auto rates = video_metrics_sampler_.Sample(
+            fields["video"]["packets"].get<std::uint64_t>(),
+            fields["video"]["bytes"].get<std::uint64_t>(), elapsed_seconds);
+        fields["video"]["fps"] = rates.fps;
+        fields["video"]["bitrate_kbps"] = rates.bitrate_kbps;
         fields["video"]["average_fps"] =
             elapsed_seconds > 0 ? fields["video"]["packets"].get<double>() / elapsed_seconds : 0;
         fields["video"]["average_bitrate_kbps"] =
@@ -105,6 +110,10 @@ void MediaWorker::EmitMetrics(double elapsed_seconds) {
     }
     if (audio_) {
         fields["audio"] = audio_->Stats();
+        const auto rates = audio_metrics_sampler_.Sample(
+            fields["audio"]["packets"].get<std::uint64_t>(),
+            fields["audio"]["bytes"].get<std::uint64_t>(), elapsed_seconds);
+        fields["audio"]["bitrate_kbps"] = rates.bitrate_kbps;
         fields["audio"]["average_bitrate_kbps"] =
             elapsed_seconds > 0
                 ? fields["audio"]["bytes"].get<double>() * 8.0 / elapsed_seconds / 1000.0

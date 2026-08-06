@@ -60,7 +60,37 @@ export interface DaemonStatus {
   video_ready: boolean
   audio_ready: boolean
   last_error: string | null
-  metrics: Record<string, any> | null
+  metrics: WorkerMetrics | null
+}
+
+export interface MediaMetrics {
+  packets: number
+  bytes: number
+  keyframes: number
+  last_pts: number
+  timeouts: number
+  errors: number
+  bitrate_kbps?: number
+  average_bitrate_kbps?: number
+}
+
+export interface VideoMetrics extends MediaMetrics {
+  fps?: number
+  average_fps?: number
+  ipc_frames?: number
+  ipc_bytes?: number
+  ipc_drops?: number
+  ipc_errors?: number
+}
+
+export interface WorkerMetrics {
+  event?: string
+  generation?: string
+  elapsed_seconds?: number
+  monotonic_ms?: number
+  schema_version?: number
+  video?: VideoMetrics
+  audio?: MediaMetrics
 }
 
 export interface LogEntry { timestamp_ms: number; stream: string; line: string }

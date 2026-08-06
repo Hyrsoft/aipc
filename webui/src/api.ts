@@ -28,7 +28,7 @@ export interface LiveState {
 }
 
 export function reduceServerEvent(state: LiveState, event: ServerEvent): LiveState {
-  const events = [event, ...state.events].slice(0, 80)
+  const events = [...state.events, event].slice(-200)
   if (event.kind === 'status') return { ...state, status: event.payload, events }
   if (event.kind === 'log') return { ...state, logs: [...state.logs, event.payload].slice(-200), events }
   return { ...state, events }
@@ -39,7 +39,10 @@ export function connectEvents(onEvent: (event: ServerEvent) => void, onConnectio
   const kinds = ['status', 'worker_event', 'supervisor', 'log', 'lagged']
   for (const kind of kinds) {
     source.addEventListener(kind, (message) => {
-      try { onEvent(JSON.parse((message as MessageEvent).data)) } catch { /* keep stream alive */ }
+      try {
+        const parsed = JSON.parse((message as MessageEvent).data)
+        onEvent(parsed?.kind ? parsed : { kind, timestamp_ms: Date.now(), payload: parsed })
+      } catch { /* keep stream alive */ }
     })
   }
   source.onopen = () => onConnection(true)

@@ -559,6 +559,7 @@ impl SupervisorActor {
             status.started_at_ms = Some(now_ms());
             status.video_ready = false;
             status.audio_ready = false;
+            status.metrics = None;
             if clear_error {
                 status.last_error = None;
             }
@@ -683,6 +684,7 @@ impl SupervisorActor {
             status.pid = None;
             status.video_ready = false;
             status.audio_ready = false;
+            status.metrics = None;
         });
 
         if let Some(pending) = self.after_stop.take() {

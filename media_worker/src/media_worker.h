@@ -9,6 +9,7 @@
 #include "audio_pipeline.h"
 #include "config.h"
 #include "event_emitter.h"
+#include "metrics_sampler.h"
 #include "video_pipeline.h"
 
 namespace media_worker {
@@ -46,7 +47,8 @@ private:
     bool isp_initialized_ = false;
     bool isp_running_ = false;
     bool mpi_initialized_ = false;
+    MetricsSampler video_metrics_sampler_;
+    MetricsSampler audio_metrics_sampler_;
 };
 
 }  // namespace media_worker
-

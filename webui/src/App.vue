@@ -3,6 +3,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { api, connectEvents, reduceServerEvent, type LiveState } from './api'
 import type { PersistentState, WorkerConfig } from './types'
 import { PreviewController, initialPreviewSnapshot } from './preview'
+import {
+  currentBitrate, currentVideoFps, eventLevel, eventName, eventSummary, matchesEventFilter,
+  isEventViewportAtBottom,
+  type EventFilter,
+} from './telemetry'
 
 const live = reactive<LiveState>({ status: null, events: [], logs: [] })
 const configs = ref<PersistentState | null>(null)
@@ -16,10 +21,25 @@ let disconnect: (() => void) | undefined
 const previewVideo = ref<HTMLVideoElement | null>(null)
 const preview = reactive(initialPreviewSnapshot())
 const previewManuallyStopped = ref(false)
+const eventViewport = ref<HTMLDivElement | null>(null)
+const eventFilter = ref<EventFilter>('all')
+const eventFilters: EventFilter[] = ['all', 'info', 'warn', 'error']
+const eventFollow = ref(true)
 let previewController: PreviewController | undefined
 
 const status = computed(() => live.status)
-const metrics = computed(() => status.value?.metrics || {})
+const metrics = computed(() => status.value?.metrics)
+const videoMetrics = computed(() => metrics.value?.video)
+const audioMetrics = computed(() => metrics.value?.audio)
+const videoFps = computed(() => currentVideoFps(videoMetrics.value))
+const videoBitrate = computed(() => currentBitrate(videoMetrics.value))
+const audioBitrate = computed(() => currentBitrate(audioMetrics.value))
+const activeAudioEnabled = computed(() =>
+  configs.value?.active?.audio.enabled ?? configs.value?.desired?.audio.enabled ?? form.value?.audio.enabled ?? true,
+)
+const videoMetricState = computed(() => videoFps.value === null ? '等待指标' : '')
+const audioMetricState = computed(() => !activeAudioEnabled.value ? '已禁用' : audioBitrate.value === null ? '等待指标' : '')
+const filteredEvents = computed(() => live.events.filter((event) => matchesEventFilter(event, eventFilter.value)))
 const uptime = computed(() => status.value?.started_at_ms ? Math.max(0, Math.floor((Date.now() - status.value.started_at_ms) / 1000)) : 0)
 const configDiff = computed(() => {
   if (!configs.value) return []
@@ -78,6 +98,20 @@ function resetForm() { if (configs.value?.desired) form.value = structuredClone(
 function fmt(value: unknown, digits = 1) { return typeof value === 'number' ? value.toFixed(digits) : '—' }
 function short(value: string | null | undefined) { return value ? value.slice(0, 8) : '—' }
 function bytes(value: number) { return value > 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MiB` : `${(value / 1024).toFixed(1)} KiB` }
+function clearEvents() { live.events = [] }
+function resumeEventFollow() {
+  eventFollow.value = true
+  scrollEventsToBottom()
+}
+function handleEventScroll() {
+  const viewport = eventViewport.value
+  if (!viewport) return
+  eventFollow.value = isEventViewportAtBottom(viewport.scrollHeight, viewport.scrollTop, viewport.clientHeight)
+}
+async function scrollEventsToBottom() {
+  await nextTick()
+  if (eventFollow.value && eventViewport.value) eventViewport.value.scrollTop = eventViewport.value.scrollHeight
+}
 function connectPreview() {
   previewManuallyStopped.value = false
   if (previewVideo.value) previewController?.connect(previewVideo.value)
@@ -98,6 +132,7 @@ watch(() => [status.value?.state, status.value?.video_ready, status.value?.gener
     connectPreview()
   }
 })
+watch(() => [live.events.at(-1), eventFilter.value], () => scrollEventsToBottom(), { flush: 'post' })
 onBeforeUnmount(() => { disconnect?.(); previewController?.destroy() })
 </script>
 
@@ -137,8 +172,8 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy() })
     </section>
 
     <section class="metrics-grid">
-      <article class="panel metric-card"><div class="card-title"><span>VIDEO / H264</span><i :class="status?.video_ready && 'ready'"></i></div><div class="metric"><strong>{{ fmt(metrics.video?.fps) }}</strong><span>FPS</span></div><div class="mini"><span>码率 <b>{{ fmt(metrics.video?.bitrate_kbps) }} Kbps</b></span><span>包 <b>{{ metrics.video?.packets ?? '—' }}</b></span><span>关键帧 <b>{{ metrics.video?.keyframes ?? '—' }}</b></span><span>PTS <b>{{ metrics.video?.last_pts ?? '—' }}</b></span><span>超时 <b>{{ metrics.video?.timeouts ?? '—' }}</b></span><span>错误 <b>{{ metrics.video?.errors ?? '—' }}</b></span></div></article>
-      <article class="panel metric-card"><div class="card-title"><span>AUDIO / G711A</span><i :class="status?.audio_ready && 'ready'"></i></div><div class="metric"><strong>{{ fmt(metrics.audio?.bitrate_kbps) }}</strong><span>Kbps</span></div><div class="mini"><span>包 <b>{{ metrics.audio?.packets ?? '—' }}</b></span><span>字节 <b>{{ metrics.audio?.bytes ?? '—' }}</b></span><span>PTS <b>{{ metrics.audio?.last_pts ?? '—' }}</b></span><span>超时 <b>{{ metrics.audio?.timeouts ?? '—' }}</b></span><span>错误 <b>{{ metrics.audio?.errors ?? '—' }}</b></span></div></article>
+      <article class="panel metric-card"><div class="card-title"><span>VIDEO / H264</span><i :class="status?.video_ready && 'ready'"></i></div><div class="metric"><strong :class="videoFps === null && 'placeholder'">{{ videoFps === null ? videoMetricState : fmt(videoFps) }}</strong><span>{{ videoFps === null ? '' : 'FPS' }}</span></div><div class="mini"><span>码率 <b>{{ videoBitrate === null ? videoMetricState : `${fmt(videoBitrate)} Kbps` }}</b></span><span>包 <b>{{ videoMetrics?.packets ?? '等待指标' }}</b></span><span>关键帧 <b>{{ videoMetrics?.keyframes ?? '等待指标' }}</b></span><span>PTS <b>{{ videoMetrics?.last_pts ?? '等待指标' }}</b></span><span>超时 <b>{{ videoMetrics?.timeouts ?? '等待指标' }}</b></span><span>错误 <b>{{ videoMetrics?.errors ?? '等待指标' }}</b></span></div></article>
+      <article class="panel metric-card"><div class="card-title"><span>AUDIO / G711A</span><i :class="status?.audio_ready && 'ready'"></i></div><div class="metric"><strong :class="audioBitrate === null && 'placeholder'">{{ audioBitrate === null ? audioMetricState : fmt(audioBitrate) }}</strong><span>{{ audioBitrate === null ? '' : 'Kbps' }}</span></div><div class="mini"><span>包 <b>{{ audioMetrics?.packets ?? audioMetricState }}</b></span><span>字节 <b>{{ audioMetrics?.bytes ?? audioMetricState }}</b></span><span>PTS <b>{{ audioMetrics?.last_pts ?? audioMetricState }}</b></span><span>超时 <b>{{ audioMetrics?.timeouts ?? audioMetricState }}</b></span><span>错误 <b>{{ audioMetrics?.errors ?? audioMetricState }}</b></span></div></article>
     </section>
 
     <section class="panel config" v-if="form">
@@ -164,6 +199,24 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy() })
       <article class="panel terminal"><div class="section-head"><div><span class="label">WORKER STDERR</span><h2>最近日志</h2></div><span>{{ live.logs.length }}/200</span></div><div class="log-lines"><p v-for="(line, i) in live.logs.slice(-80)" :key="i"><time>{{ new Date(line.timestamp_ms).toLocaleTimeString() }}</time> {{ line.line }}</p><p v-if="!live.logs.length" class="muted">暂无 stderr 输出</p></div></article>
     </section>
 
-    <section class="panel events"><div class="section-head"><div><span class="label">EVENT STREAM</span><h2>最近事件</h2></div></div><div class="event-row" v-for="event in live.events.slice(0, 20)" :key="`${event.timestamp_ms}-${event.kind}`"><time>{{ new Date(event.timestamp_ms).toLocaleTimeString() }}</time><b>{{ event.kind }}</b><code>{{ JSON.stringify(event.payload) }}</code></div></section>
+    <section class="panel events">
+      <div class="section-head event-head">
+        <div><span class="label">EVENT STREAM</span><h2>实时事件</h2><p>最近 {{ live.events.length }}/200 条 · 新事件追加到底部</p></div>
+        <div class="event-tools">
+          <div class="event-filters" aria-label="事件等级过滤">
+            <button v-for="filter in eventFilters" :key="filter" class="secondary compact" :class="eventFilter === filter && 'selected'" @click="eventFilter = filter">{{ filter }}</button>
+          </div>
+          <button v-if="!eventFollow" class="secondary compact" @click="resumeEventFollow">继续跟随</button>
+          <button class="secondary compact" @click="clearEvents">清空显示</button>
+        </div>
+      </div>
+      <div ref="eventViewport" class="event-lines" @scroll="handleEventScroll">
+        <details v-for="(event, index) in filteredEvents" :key="`${event.timestamp_ms}-${event.kind}-${index}`" :class="['event-row', `event-${eventLevel(event)}`]">
+          <summary><time>{{ new Date(event.timestamp_ms).toLocaleTimeString() }}</time><span class="event-level">{{ eventLevel(event) }}</span><b>{{ eventName(event) }}</b><span class="event-summary">{{ eventSummary(event) }}</span></summary>
+          <pre>{{ JSON.stringify(event.payload, null, 2) }}</pre>
+        </details>
+        <p v-if="!filteredEvents.length" class="event-empty">当前过滤条件下暂无事件</p>
+      </div>
+    </section>
   </main>
 </template>
