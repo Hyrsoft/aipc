@@ -1,21 +1,3 @@
-cmake_minimum_required(VERSION 3.20)
-
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(media_worker VERSION 0.1.0 LANGUAGES C CXX)
-    set(CMAKE_CXX_STANDARD 17)
-    set(CMAKE_CXX_STANDARD_REQUIRED ON)
-    set(CMAKE_CXX_EXTENSIONS OFF)
-    option(MEDIA_WORKER_BUILD_RUNTIME "Build the RV1106 media worker" OFF)
-    option(MEDIA_WORKER_BUILD_TESTS "Build host tests" ON)
-    set(AIPC_ENABLE_RV1106 ${MEDIA_WORKER_BUILD_RUNTIME})
-    set(AIPC_NATIVE_BUILD_TESTS ${MEDIA_WORKER_BUILD_TESTS})
-    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../native/cmake")
-    include(AipcDependencies)
-    include(AipcOptions)
-    aipc_setup_dependencies()
-    aipc_create_build_options()
-endif()
-
 find_package(Threads REQUIRED)
 
 add_library(media_worker_config STATIC
@@ -48,7 +30,7 @@ target_link_libraries(media_worker_control PUBLIC
     Aipc::NativeCommon
     nlohmann_json::nlohmann_json)
 
-if(MEDIA_WORKER_BUILD_RUNTIME)
+if(AIPC_ENABLE_RV1106)
     if(NOT TARGET Rockchip::MediaRuntime)
         message(FATAL_ERROR "Rockchip::MediaRuntime is required for media_worker")
     endif()
@@ -80,14 +62,9 @@ if(MEDIA_WORKER_BUILD_RUNTIME)
         INSTALL_RPATH "$ORIGIN/../lib;/oem/usr/lib;/oem/lib")
     install(TARGETS media_worker RUNTIME DESTINATION bin)
     install(FILES config/media_worker.example.json DESTINATION config)
-    install(PROGRAMS
-        scripts/run_on_board.sh
-        scripts/board_restart_test.sh
-        scripts/board_negative_test.sh
-        DESTINATION bin)
 endif()
 
-if(MEDIA_WORKER_BUILD_TESTS)
+if(AIPC_NATIVE_BUILD_TESTS)
     enable_testing()
     function(aipc_media_test name source library)
         add_executable(${name} ${source})

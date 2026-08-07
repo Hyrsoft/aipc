@@ -15,7 +15,6 @@
 namespace media_worker {
 
 constexpr std::size_t kAiFrameIpcHeaderSize = aipc::native::kAipfHeaderSize;
-constexpr std::uint16_t kAiFrameIpcVersion = aipc::native::kAipfVersion;
 constexpr std::size_t kAiFrameIpcMaxPayload = aipc::native::kAipfMaxPayload;
 using AiFitMode = aipc::native::AiFitMode;
 using AiFrameTransform = aipc::native::AiFrameTransform;

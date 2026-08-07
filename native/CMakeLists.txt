@@ -32,11 +32,6 @@ target_link_libraries(aipc_native_common PUBLIC
     Aipc::NativeOptions
     nlohmann_json::nlohmann_json)
 
-set(MEDIA_WORKER_BUILD_RUNTIME ${AIPC_ENABLE_RV1106} CACHE BOOL "" FORCE)
-set(MEDIA_WORKER_BUILD_TESTS ${AIPC_NATIVE_BUILD_TESTS} CACHE BOOL "" FORCE)
-set(AI_WORKER_ENABLE_VISIONG ${AIPC_ENABLE_RV1106} CACHE BOOL "" FORCE)
-set(AI_WORKER_BUILD_TESTS ${AIPC_NATIVE_BUILD_TESTS} CACHE BOOL "" FORCE)
-
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../media_worker"
                  "${CMAKE_CURRENT_BINARY_DIR}/media_worker")
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ai_worker"

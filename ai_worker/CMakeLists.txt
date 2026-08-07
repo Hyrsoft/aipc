@@ -1,23 +1,3 @@
-cmake_minimum_required(VERSION 3.20)
-
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(ai_worker VERSION 0.1.0 LANGUAGES C CXX)
-    set(CMAKE_CXX_STANDARD 17)
-    set(CMAKE_CXX_STANDARD_REQUIRED ON)
-    set(CMAKE_CXX_EXTENSIONS OFF)
-    option(AI_WORKER_ENABLE_VISIONG "Build VisionG backend" OFF)
-    option(AI_WORKER_BUILD_TESTS "Build ai_worker tests" ON)
-    set(AIPC_ENABLE_RV1106 ${AI_WORKER_ENABLE_VISIONG})
-    set(AIPC_NATIVE_BUILD_TESTS ${AI_WORKER_BUILD_TESTS})
-    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../native/cmake")
-    include(AipcDependencies)
-    include(AipcOptions)
-    aipc_setup_dependencies()
-    aipc_create_build_options()
-endif()
-
-option(AI_WORKER_ENABLE_VISIONG "Build VisionG backend" OFF)
-option(AI_WORKER_BUILD_TESTS "Build ai_worker tests" ON)
 find_package(Threads REQUIRED)
 
 add_executable(ai_worker
@@ -38,7 +18,7 @@ target_link_libraries(ai_worker PRIVATE
     m
 )
 
-if(AI_WORKER_ENABLE_VISIONG)
+if(AIPC_ENABLE_RV1106)
     if(NOT TARGET VisionG::visiong OR NOT TARGET Rockchip::VisionGRuntime)
         message(FATAL_ERROR "VisionG and Rockchip runtime targets are required")
     endif()
@@ -57,7 +37,7 @@ install(FILES
     examples/yolov5/main.lua
     DESTINATION seed/ai/projects/yolov5-coco80)
 
-if(AI_WORKER_BUILD_TESTS)
+if(AIPC_NATIVE_BUILD_TESTS)
     enable_testing()
     add_test(
         NAME ai_worker_lua_validation

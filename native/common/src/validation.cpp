@@ -15,9 +15,4 @@ bool IsSafeFileName(const std::string& value, std::size_t max_length) {
     return true;
 }
 
-std::string ErrorMessage(const std::string& component, const std::string& operation,
-                         const std::string& detail) {
-    return component + ": " + operation + ": " + detail;
-}
-
 }  // namespace aipc::native
