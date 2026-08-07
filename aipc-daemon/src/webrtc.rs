@@ -1,14 +1,16 @@
+use crate::ai_manager::{AiManager, AiMetadata};
 use crate::config::WebRtcConfig;
 use crate::model::ServerEvent;
 use crate::preview::{AudioFrame, PreviewFrame, VideoHub};
 use bytes::BytesMut;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use str0m::change::SdpOffer;
+use str0m::channel::ChannelId;
 use str0m::format::Codec;
 use str0m::media::{Frequency, MediaKind, MediaTime, Mid};
 use str0m::net::{Protocol, Receive};
@@ -55,6 +57,8 @@ pub struct WebRtcStatus {
     pub audio_codec: &'static str,
     pub video_frames: u64,
     pub audio_packets: u64,
+    pub ai_messages: u64,
+    pub ai_channels: usize,
     pub dropped_frames: u64,
     pub errors: u64,
     pub last_error: Option<String>,
@@ -79,6 +83,7 @@ impl WebRtcServer {
         config: WebRtcConfig,
         hub: VideoHub,
         events: broadcast::Sender<ServerEvent>,
+        ai: Option<AiManager>,
     ) -> anyhow::Result<Self> {
         let status = Arc::new(RwLock::new(WebRtcStatus {
             enabled: config.enabled,
@@ -96,6 +101,8 @@ impl WebRtcServer {
             audio_codec: "pcma",
             video_frames: 0,
             audio_packets: 0,
+            ai_messages: 0,
+            ai_channels: 0,
             dropped_frames: 0,
             errors: 0,
             last_error: None,
@@ -121,6 +128,7 @@ impl WebRtcServer {
             sessions: HashMap::new(),
             status: status.clone(),
             events,
+            metadata_rx: ai.map(|manager| manager.subscribe_metadata()),
         };
         status.write().unwrap().listening = true;
         tokio::spawn(actor.run());
@@ -236,6 +244,8 @@ struct Peer {
     last_activity: Instant,
     timeout: Instant,
     alive: bool,
+    ai_channel: Option<ChannelId>,
+    ai_enabled: bool,
 }
 
 struct WebRtcActor {
@@ -248,6 +258,7 @@ struct WebRtcActor {
     sessions: HashMap<String, Peer>,
     status: Arc<RwLock<WebRtcStatus>>,
     events: broadcast::Sender<ServerEvent>,
+    metadata_rx: Option<broadcast::Receiver<Arc<AiMetadata>>>,
 }
 
 impl WebRtcActor {
@@ -287,6 +298,7 @@ impl WebRtcActor {
                 }
                 result = self.video_rx.recv() => self.handle_video(result).await,
                 result = self.audio_rx.recv() => self.handle_audio(result).await,
+                result = receive_metadata(&mut self.metadata_rx) => self.handle_metadata(result).await,
                 _ = tokio::time::sleep_until(deadline.into()) => self.handle_timeouts().await,
             }
             self.remove_dead();
@@ -354,6 +366,8 @@ impl WebRtcActor {
             last_activity: now,
             timeout: now,
             alive: true,
+            ai_channel: None,
+            ai_enabled: true,
         };
         drain_peer(&self.socket, &mut peer).await?;
         if peer.video_mid.is_none() {
@@ -531,6 +545,61 @@ impl WebRtcActor {
         }
     }
 
+    async fn handle_metadata(
+        &mut self,
+        result: Result<Arc<AiMetadata>, broadcast::error::RecvError>,
+    ) {
+        let metadata = match result {
+            Ok(value) => value,
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                self.status.write().unwrap().dropped_frames += skipped;
+                return;
+            }
+            Err(broadcast::error::RecvError::Closed) => {
+                self.metadata_rx = None;
+                return;
+            }
+        };
+        let Ok(payload) = serde_json::to_vec(&*metadata) else {
+            return;
+        };
+        let mut failures = Vec::new();
+        for (id, peer) in &mut self.sessions {
+            let Some(channel_id) = peer.ai_channel else {
+                continue;
+            };
+            if !peer.connected || !peer.ai_enabled {
+                continue;
+            }
+            let result = peer
+                .rtc
+                .channel(channel_id)
+                .ok_or_else(|| WebRtcError::Operation("AI data channel disappeared".into()))
+                .and_then(|mut channel| {
+                    channel
+                        .write(false, &payload)
+                        .map_err(|error| WebRtcError::Operation(error.to_string()))
+                });
+            match result {
+                Ok(true) => {
+                    if let Err(error) = drain_peer(&self.socket, peer).await {
+                        failures.push((id.clone(), error));
+                    } else {
+                        self.status.write().unwrap().ai_messages += 1;
+                    }
+                }
+                Ok(false) => self.status.write().unwrap().dropped_frames += 1,
+                Err(error) => failures.push((id.clone(), error)),
+            }
+        }
+        for (id, error) in failures {
+            if let Some(peer) = self.sessions.get_mut(&id) {
+                peer.alive = false;
+            }
+            self.record_error(error.to_string());
+        }
+    }
+
     async fn handle_timeouts(&mut self) {
         let now = Instant::now();
         let connect_timeout = Duration::from_millis(self.config.connect_timeout_ms);
@@ -572,6 +641,11 @@ impl WebRtcActor {
         status.generation = preview.generation;
         status.video_available = preview.available;
         status.audio_available = preview.audio.available;
+        status.ai_channels = self
+            .sessions
+            .values()
+            .filter(|peer| peer.ai_channel.is_some())
+            .count();
         let profile_ids = self.hub.codec_config().and_then(|codec| {
             let raw = h264_sps_profile_level_id(&codec.sps)?;
             Some((normalize_h264_profile_level_id(raw), raw))
@@ -724,9 +798,29 @@ async fn drain_peer(socket: &UdpSocket, peer: &mut Peer) -> Result<(), WebRtcErr
                     MediaKind::Audio => peer.audio_mid = Some(media.mid),
                 },
                 Event::KeyframeRequest(_) => peer.waiting_keyframe = true,
+                Event::ChannelOpen(id, label) if label == "aipc-ai" => {
+                    peer.ai_channel = Some(id);
+                    peer.ai_enabled = true;
+                }
+                Event::ChannelData(data) if peer.ai_channel == Some(data.id) => {
+                    if let Ok(value) = serde_json::from_slice::<Value>(&data.data)
+                        && let Some(enabled) = value.get("enabled").and_then(Value::as_bool)
+                    {
+                        peer.ai_enabled = enabled;
+                    }
+                }
                 _ => {}
             },
         }
+    }
+}
+
+async fn receive_metadata(
+    receiver: &mut Option<broadcast::Receiver<Arc<AiMetadata>>>,
+) -> Result<Arc<AiMetadata>, broadcast::error::RecvError> {
+    match receiver {
+        Some(receiver) => receiver.recv().await,
+        None => std::future::pending().await,
     }
 }
 
@@ -822,6 +916,7 @@ mod tests {
             },
             hub,
             events,
+            None,
         )
         .await
         .unwrap();

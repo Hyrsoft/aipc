@@ -8,6 +8,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../media_worker/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../media_worker/src");
     println!("cargo:rerun-if-changed=../media_worker/config");
+    println!("cargo:rerun-if-changed=../ai_worker/CMakeLists.txt");
+    println!("cargo:rerun-if-changed=../ai_worker/src");
     println!("cargo:rerun-if-changed=../3rdparty/nlohmann_json/include");
     println!("cargo:rerun-if-changed=csrc/auxval_stub.c");
 
@@ -101,6 +103,38 @@ fn build_media_worker(target: &str) {
     println!(
         "cargo:warning=media_worker artifact: {}",
         destination.display()
+    );
+
+    let ai_deps = env::var_os("AIPC_AI_DEPS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root.join("target/ai-deps"));
+    let ai_out = workspace_root
+        .join("target/cpp-ai")
+        .join(target)
+        .join(profile.to_ascii_lowercase());
+    let ai_installed = cmake::Config::new(workspace_root.join("ai_worker"))
+        .generator("Ninja")
+        .profile(profile)
+        .out_dir(&ai_out)
+        .define("CMAKE_TOOLCHAIN_FILE", &toolchain_file)
+        .define("AI_WORKER_DEPS_DIR", &ai_deps)
+        .define("AI_WORKER_SDK_ROOT", &sdk_root)
+        .define(
+            "AI_WORKER_MPI_ROOT",
+            workspace_root.join("3rdparty/luckfox_pico_rkmpi_example"),
+        )
+        .define("AI_WORKER_JSON_INCLUDE_DIR", &json_include)
+        .define("AI_WORKER_ENABLE_VISIONG", "ON")
+        .build();
+    let ai_source = ai_installed.join("bin/ai_worker");
+    if !ai_source.is_file() {
+        panic!("CMake did not install {}", ai_source.display());
+    }
+    let ai_destination = destination_dir.join("ai_worker");
+    fs::copy(&ai_source, &ai_destination).expect("copy ai_worker beside daemon");
+    println!(
+        "cargo:warning=ai_worker artifact: {}",
+        ai_destination.display()
     );
 }
 

@@ -115,6 +115,7 @@ export class AdaptivePreviewController {
 
 class WebRtcPreviewController {
   private pc: RTCPeerConnection | null = null
+  private aiChannel: RTCDataChannel | null = null
   private video: HTMLVideoElement | null = null
   private sessionId: string | null = null
   private desired = false
@@ -122,6 +123,7 @@ class WebRtcPreviewController {
   private firstVideoTimer: number | null = null
   private snapshot = initialPreviewSnapshot()
   private previousStats = new Map<string, { bytes: number; frames: number; at: number }>()
+  private readonly aiToggleHandler = () => this.sendAiEnabled()
 
   constructor(
     private readonly onUpdate: (snapshot: PreviewSnapshot) => void,
@@ -146,6 +148,18 @@ class WebRtcPreviewController {
       const pc = this.dependencies.peerFactory()
       this.pc = pc
       const stream = this.dependencies.mediaStreamFactory()
+      if (typeof pc.createDataChannel === 'function') {
+        const aiChannel = pc.createDataChannel('aipc-ai', { ordered: false, maxRetransmits: 0 })
+        this.aiChannel = aiChannel
+        if (typeof window !== 'undefined') window.addEventListener('aipc-ai-toggle', this.aiToggleHandler)
+        aiChannel.onopen = () => this.sendAiEnabled()
+        aiChannel.onmessage = (event) => {
+          if (typeof event.data !== 'string' || typeof window === 'undefined') return
+          try {
+            window.dispatchEvent(new CustomEvent('aipc-ai-metadata', { detail: JSON.parse(event.data) }))
+          } catch { /* malformed metadata is ignored */ }
+        }
+      }
       pc.addTransceiver('video', { direction: 'recvonly' })
       if (webrtc.audio_available) pc.addTransceiver('audio', { direction: 'recvonly' })
       pc.ontrack = (event) => {
@@ -197,6 +211,8 @@ class WebRtcPreviewController {
     if (id) void this.dependencies.deleteSession(id).catch(() => undefined)
     this.pc?.close()
     this.pc = null
+    this.aiChannel = null
+    if (typeof window !== 'undefined') window.removeEventListener('aipc-ai-toggle', this.aiToggleHandler)
     this.previousStats.clear()
     if (this.video) this.video.srcObject = null
     this.patch({ state: 'disconnected', stream: null, audioState: 'waiting' })
@@ -214,6 +230,12 @@ class WebRtcPreviewController {
       if (!muted) void this.video.play().catch(() => undefined)
     }
     this.patch({ muted })
+  }
+
+  private sendAiEnabled() {
+    if (this.aiChannel?.readyState !== 'open') return
+    const enabled = typeof window === 'undefined' || window.localStorage.getItem('aipc-ai-overlay') !== 'off'
+    this.aiChannel.send(JSON.stringify({ enabled }))
   }
 
   private fail(message: string) {

@@ -1,0 +1,23 @@
+{
+  "id": "yolov5-coco80",
+  "name": "YOLOv5 COCO80",
+  "entry": "main.lua",
+  "algorithm": "yolov5",
+  "model": "yolov5n_coco80_640.rknn",
+  "labels": "coco_80_labels_list.txt",
+  "input": {
+    "enabled": true,
+    "channel_id": 1,
+    "width": 640,
+    "height": 640,
+    "fps": 10,
+    "pixel_format": "nv12",
+    "fit_mode": "contain",
+    "buffer_count": 2,
+    "depth": 1
+  },
+  "threshold": 0.25,
+  "nms_threshold": 0.45,
+  "max_detections": 32,
+  "class_filter": []
+}

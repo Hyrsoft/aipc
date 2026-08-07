@@ -13,6 +13,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 "${SCRIPT_DIR}/build-rv1106.sh"
+"${SCRIPT_DIR}/fetch-ai-models.sh"
 npm --prefix "${PROJECT_ROOT}/webui" run build
 
 rm -rf "${PACKAGE_DIR}"
@@ -22,6 +23,28 @@ install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/aipc-daemon" \
     "${PACKAGE_DIR}/bin/aipc-daemon"
 install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/media_worker" \
     "${PACKAGE_DIR}/bin/media_worker"
+install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/ai_worker" \
+    "${PACKAGE_DIR}/bin/ai_worker"
+install -m 0755 "${PROJECT_ROOT}/target/ai-deps/visiong/lib/libvisiong.so" \
+    "${PACKAGE_DIR}/lib/libvisiong.so"
+mkdir -p "${PACKAGE_DIR}/licenses/visiong" "${PACKAGE_DIR}/licenses/lua" \
+    "${PACKAGE_DIR}/seed/ai/projects/yolov5-coco80" "${PACKAGE_DIR}/seed/ai/models"
+cp -a "${PROJECT_ROOT}/target/ai-deps/visiong/LICENSE" \
+    "${PROJECT_ROOT}/target/ai-deps/visiong/THIRD_PARTY_NOTICES.md" \
+    "${PROJECT_ROOT}/target/ai-deps/visiong/licenses/." \
+    "${PACKAGE_DIR}/licenses/visiong/"
+install -m 0644 "${PROJECT_ROOT}/target/ai-deps/lua/doc/readme.html" \
+    "${PACKAGE_DIR}/licenses/lua/readme.html"
+install -m 0644 "${PROJECT_ROOT}/ai_worker/THIRD_PARTY.md" \
+    "${PACKAGE_DIR}/licenses/AI_WORKER_THIRD_PARTY.md"
+install -m 0644 "${PROJECT_ROOT}/ai_worker/examples/yolov5/manifest.json" \
+    "${PACKAGE_DIR}/seed/ai/projects/yolov5-coco80/manifest.json"
+install -m 0644 "${PROJECT_ROOT}/ai_worker/examples/yolov5/main.lua" \
+    "${PACKAGE_DIR}/seed/ai/projects/yolov5-coco80/main.lua"
+install -m 0644 "${PROJECT_ROOT}/target/ai-models/yolov5n_coco80_640.rknn" \
+    "${PACKAGE_DIR}/seed/ai/models/yolov5n_coco80_640.rknn"
+install -m 0644 "${PROJECT_ROOT}/target/ai-models/coco_80_labels_list.txt" \
+    "${PACKAGE_DIR}/seed/ai/models/coco_80_labels_list.txt"
 install -m 0644 "${PROJECT_ROOT}/config/aipc-daemon.example.json" \
     "${PACKAGE_DIR}/config/aipc-daemon.json"
 jq '.video.output_path = "" | .audio.output_path = ""' \

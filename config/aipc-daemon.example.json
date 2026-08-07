@@ -42,5 +42,12 @@
     "mtu": 1200,
     "connect_timeout_ms": 10000,
     "idle_timeout_ms": 30000
+  },
+  "ai": {
+    "enabled": true,
+    "worker_path": "ai_worker",
+    "startup_timeout_ms": 30000,
+    "max_model_bytes": 134217728,
+    "result_ttl_ms": 500
   }
 }

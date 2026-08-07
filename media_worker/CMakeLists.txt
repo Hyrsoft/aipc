@@ -33,6 +33,8 @@ add_library(media_worker_config STATIC
 )
 add_library(media_worker_video_ipc STATIC src/video_ipc_publisher.cpp)
 add_library(media_worker_audio_ipc STATIC src/audio_ipc_publisher.cpp)
+add_library(media_worker_ai_ipc STATIC src/ai_frame_ipc_publisher.cpp)
+add_library(media_worker_control STATIC src/media_control.cpp)
 add_library(media_worker_metrics STATIC src/metrics_sampler.cpp)
 target_include_directories(media_worker_metrics PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(media_worker_metrics PRIVATE -Wall -Wextra -Wpedantic)
@@ -42,6 +44,15 @@ target_link_libraries(media_worker_video_ipc PUBLIC pthread)
 target_include_directories(media_worker_audio_ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(media_worker_audio_ipc PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(media_worker_audio_ipc PUBLIC pthread)
+target_include_directories(media_worker_ai_ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(media_worker_ai_ipc PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(media_worker_ai_ipc PUBLIC pthread)
+target_include_directories(media_worker_control PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${MEDIA_WORKER_JSON_INCLUDE_DIR}
+)
+target_compile_options(media_worker_control PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(media_worker_control PUBLIC pthread)
 target_include_directories(media_worker_config
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -66,6 +77,7 @@ if(MEDIA_WORKER_BUILD_RUNTIME)
         src/main.cpp
         src/media_worker.cpp
         src/video_pipeline.cpp
+        src/rgn_manager.cpp
         src/audio_pipeline.cpp
     )
     target_include_directories(media_worker PRIVATE
@@ -101,6 +113,8 @@ if(MEDIA_WORKER_BUILD_RUNTIME)
         media_worker_metrics
         media_worker_video_ipc
         media_worker_audio_ipc
+        media_worker_ai_ipc
+        media_worker_control
         sample_comm
         rockit
         rockchip_mpp
@@ -144,4 +158,8 @@ if(MEDIA_WORKER_BUILD_TESTS)
     target_link_libraries(media_worker_metrics_tests PRIVATE media_worker_metrics)
     target_compile_options(media_worker_metrics_tests PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME media_worker_metrics_tests COMMAND media_worker_metrics_tests)
+    add_executable(media_worker_ai_ipc_tests tests/ai_frame_ipc_publisher_test.cpp)
+    target_link_libraries(media_worker_ai_ipc_tests PRIVATE media_worker_ai_ipc)
+    target_compile_options(media_worker_ai_ipc_tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME media_worker_ai_ipc_tests COMMAND media_worker_ai_ipc_tests)
 endif()

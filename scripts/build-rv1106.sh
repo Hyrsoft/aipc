@@ -20,6 +20,8 @@ for tool in "${CROSS_GCC}" "${CROSS_GXX}" "${CROSS_AR}"; do
     fi
 done
 
+"${SCRIPT_DIR}/fetch-ai-deps.sh"
+
 if [ ! -f "${OPENSSL_DIR}/include/openssl/ssl.h" ] || [ ! -e "${OPENSSL_DIR}/lib/libssl.so" ]; then
     echo "missing target OpenSSL 1.1.1 sysroot at ${OPENSSL_DIR}; set AIPC_OPENSSL_DIR" >&2
     exit 1

@@ -21,6 +21,17 @@
     "group_id": 0,
     "channel_id": 0
   },
+  "ai_input": {
+    "enabled": false,
+    "channel_id": 1,
+    "width": 640,
+    "height": 360,
+    "fps": 10,
+    "pixel_format": "nv12",
+    "fit_mode": "contain",
+    "buffer_count": 2,
+    "depth": 1
+  },
   "video": {
     "enabled": true,
     "width": 1920,

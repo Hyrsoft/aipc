@@ -12,6 +12,17 @@ export interface WorkerConfig {
   isp: { iq_dir: string; camera_id: number }
   vi: { device_id: number; pipe_id: number; channel_id: number; buffer_count: number }
   vpss: { group_id: number; channel_id: number }
+  ai_input: {
+    enabled: boolean
+    channel_id: number
+    width: number
+    height: number
+    fps: number
+    pixel_format: 'nv12'
+    fit_mode: 'stretch' | 'contain' | 'cover'
+    buffer_count: number
+    depth: number
+  }
   video: {
     enabled: boolean
     width: number
@@ -141,3 +152,83 @@ export interface RecordingEntry {
 
 export interface RecordingList { items: RecordingEntry[]; total: number; offset: number; limit: number }
 export interface RtspStatus { enabled: boolean; listening: boolean; bind: string; path: string; clients: number; max_clients: number; last_error: string | null }
+
+export type AiOsdMode = 'off' | 'metadata' | 'embedded_rgn'
+export interface AiProjectManifest {
+  id: string
+  name: string
+  entry: string
+  algorithm: 'yolov5'
+  model: string
+  labels: string
+  input: WorkerConfig['ai_input']
+  threshold: number
+  nms_threshold: number
+  max_detections: number
+  class_filter: number[]
+}
+export interface AiProjectDocument { manifest: AiProjectManifest; script: string }
+export interface AiProjectSummary {
+  id: string
+  name: string
+  algorithm: string
+  model: string
+  input: WorkerConfig['ai_input']
+  active: boolean
+  last_good: boolean
+}
+export interface AiModelInfo { name: string; bytes: number; sha256: string; active: boolean }
+export interface AiInputStatus {
+  generation: string | null
+  available: boolean
+  frames_received: number
+  bytes_received: number
+  malformed_frames: number
+  last_sequence: number | null
+  last_pts: number | null
+  last_frame_at_ms: number | null
+  width: number | null
+  height: number | null
+  y_stride: number | null
+  last_error: string | null
+  config: WorkerConfig['ai_input'] | null
+  control_available: boolean
+}
+export interface AiStatus {
+  enabled: boolean
+  state: string
+  pid: number | null
+  generation: string | null
+  active_project: string | null
+  last_good_project: string | null
+  worker_ready: boolean
+  first_inference: boolean
+  input: AiInputStatus
+  results: number
+  inference_fps: number
+  average_inference_ms: number
+  last_result_at_ms: number | null
+  last_error: string | null
+  osd_mode: AiOsdMode
+  rgn_capability: { line: boolean; cover: boolean; backend: string; max_boxes: number; implemented: boolean } | null
+}
+export interface AiDetection {
+  track_id: number
+  class_id: number
+  label: string
+  confidence: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+export interface AiMetadata {
+  version: number
+  generation: string
+  sequence: number
+  pts: number
+  main_width: number
+  main_height: number
+  inference_us: number
+  detections: AiDetection[]
+}

@@ -72,6 +72,36 @@ pub struct VpssConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
+pub struct AiInputConfig {
+    pub enabled: bool,
+    pub channel_id: i32,
+    pub width: i32,
+    pub height: i32,
+    pub fps: i32,
+    pub pixel_format: String,
+    pub fit_mode: String,
+    pub buffer_count: i32,
+    pub depth: i32,
+}
+
+impl Default for AiInputConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            channel_id: 1,
+            width: 640,
+            height: 360,
+            fps: 10,
+            pixel_format: "nv12".into(),
+            fit_mode: "contain".into(),
+            buffer_count: 2,
+            depth: 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct VideoConfig {
     pub enabled: bool,
     pub width: i32,
@@ -147,6 +177,7 @@ pub struct WorkerConfig {
     pub isp: IspConfig,
     pub vi: ViConfig,
     pub vpss: VpssConfig,
+    pub ai_input: AiInputConfig,
     pub video: VideoConfig,
     pub audio: AudioConfig,
 }
@@ -179,6 +210,53 @@ impl WorkerConfig {
             1,
             16,
         );
+        if self.ai_input.enabled {
+            range(
+                &mut errors,
+                "ai_input.channel_id",
+                self.ai_input.channel_id,
+                0,
+                3,
+            );
+            range(&mut errors, "ai_input.width", self.ai_input.width, 2, 4096);
+            range(
+                &mut errors,
+                "ai_input.height",
+                self.ai_input.height,
+                2,
+                4096,
+            );
+            range(
+                &mut errors,
+                "ai_input.fps",
+                self.ai_input.fps,
+                1,
+                self.video.fps,
+            );
+            range(
+                &mut errors,
+                "ai_input.buffer_count",
+                self.ai_input.buffer_count,
+                1,
+                8,
+            );
+            range(&mut errors, "ai_input.depth", self.ai_input.depth, 0, 8);
+            if self.ai_input.width % 2 != 0 || self.ai_input.height % 2 != 0 {
+                errors.push("ai_input width and height must be even for NV12".into());
+            }
+            if self.ai_input.channel_id == self.vpss.channel_id {
+                errors.push("ai_input.channel_id must differ from vpss.channel_id".into());
+            }
+            if self.ai_input.pixel_format != "nv12" {
+                errors.push("ai_input.pixel_format must be nv12".into());
+            }
+            if !matches!(
+                self.ai_input.fit_mode.as_str(),
+                "stretch" | "contain" | "cover"
+            ) {
+                errors.push("ai_input.fit_mode must be stretch, contain, or cover".into());
+            }
+        }
         if self.runtime.warning_timeout_count >= self.runtime.stalled_timeout_count
             || self.runtime.stalled_timeout_count >= self.runtime.fatal_timeout_count
         {
@@ -271,6 +349,29 @@ pub struct DaemonConfig {
     pub recording: RecordingConfig,
     pub rtsp: RtspConfig,
     pub webrtc: WebRtcConfig,
+    pub ai: AiDaemonConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AiDaemonConfig {
+    pub enabled: bool,
+    pub worker_path: PathBuf,
+    pub startup_timeout_ms: u64,
+    pub max_model_bytes: u64,
+    pub result_ttl_ms: u64,
+}
+
+impl Default for AiDaemonConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            worker_path: "ai_worker".into(),
+            startup_timeout_ms: 30_000,
+            max_model_bytes: 128 * 1024 * 1024,
+            result_ttl_ms: 500,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -423,6 +524,7 @@ impl Default for DaemonConfig {
             recording: RecordingConfig::default(),
             rtsp: RtspConfig::default(),
             webrtc: WebRtcConfig::default(),
+            ai: AiDaemonConfig::default(),
         }
     }
 }
@@ -440,6 +542,7 @@ impl DaemonConfig {
         config.data_dir = resolve(executable_dir, &config.data_dir);
         config.runtime_dir = resolve(executable_dir, &config.runtime_dir);
         config.seed_config = resolve(executable_dir, &config.seed_config);
+        config.ai.worker_path = resolve(executable_dir, &config.ai.worker_path);
         config.recording.directory = resolve(executable_dir, &config.recording.directory);
         config.recording.allowed_roots = config
             .recording

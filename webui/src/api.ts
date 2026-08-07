@@ -1,4 +1,4 @@
-import type { DaemonStatus, LogEntry, PersistentState, RecordingList, RecordingSettings, RecordingStatus, RtspStatus, ServerEvent, WorkerConfig } from './types'
+import type { AiModelInfo, AiOsdMode, AiProjectDocument, AiProjectSummary, AiStatus, DaemonStatus, LogEntry, PersistentState, RecordingList, RecordingSettings, RecordingStatus, RtspStatus, ServerEvent, WorkerConfig } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -37,6 +37,34 @@ export const api = {
     return response.blob()
   },
   rtspStatus: () => request<RtspStatus>('/api/v1/rtsp/status'),
+  aiStatus: () => request<AiStatus>('/api/v1/ai/status'),
+  aiProjects: () => request<AiProjectSummary[]>('/api/v1/ai/projects'),
+  aiProject: (id: string) => request<AiProjectDocument>(`/api/v1/ai/projects/${encodeURIComponent(id)}`),
+  saveAiProject: (document: AiProjectDocument) => request<AiProjectDocument>(
+    `/api/v1/ai/projects/${encodeURIComponent(document.manifest.id)}`,
+    { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(document) },
+  ),
+  createAiProject: (document: AiProjectDocument) => request<AiProjectDocument>(
+    '/api/v1/ai/projects',
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(document) },
+  ),
+  deleteAiProject: (id: string) => request<void>(`/api/v1/ai/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  validateAiProject: (id: string) => request<{ valid: boolean; project: string }>(
+    `/api/v1/ai/projects/${encodeURIComponent(id)}/validate`, { method: 'POST' },
+  ),
+  deployAiProject: (id: string) => request<AiStatus>(
+    `/api/v1/ai/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' },
+  ),
+  aiModels: () => request<AiModelInfo[]>('/api/v1/ai/models'),
+  uploadAiModel: (file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return request<AiModelInfo>('/api/v1/ai/models', { method: 'POST', body })
+  },
+  deleteAiModel: (name: string) => request<void>(`/api/v1/ai/models/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  setAiOsd: (mode: AiOsdMode) => request<{ mode: AiOsdMode }>('/api/v1/ai/osd', {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode }),
+  }),
 }
 
 export interface LiveState {

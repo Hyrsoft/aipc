@@ -10,6 +10,7 @@
 #include "config.h"
 #include "event_emitter.h"
 #include "metrics_sampler.h"
+#include "media_control.h"
 #include "video_pipeline.h"
 
 namespace media_worker {
@@ -35,12 +36,14 @@ private:
     void RequestFatalStop(const std::string& message);
     std::string RuntimeError() const;
     void EmitMetrics(double elapsed_seconds);
+    nlohmann::json HandleControl(const nlohmann::json& request);
     void Shutdown();
 
     WorkerConfig config_;
     EventEmitter events_;
     std::unique_ptr<VideoPipeline> video_;
     std::unique_ptr<AudioPipeline> audio_;
+    std::unique_ptr<MediaControl> control_;
     std::atomic<bool> stop_requested_{false};
     mutable std::mutex error_mutex_;
     std::string runtime_error_;

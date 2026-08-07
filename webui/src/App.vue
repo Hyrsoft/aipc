@@ -4,6 +4,8 @@ import { api, connectEvents, reduceServerEvent, type LiveState } from './api'
 import type { PersistentState, WorkerConfig } from './types'
 import { initialPreviewSnapshot } from './preview'
 import { AdaptivePreviewController } from './webrtcPreview'
+import { AiOverlayController } from './aiOverlay'
+import AiView from './AiView.vue'
 import RecordingsView from './RecordingsView.vue'
 import {
   currentBitrate, currentVideoFps, eventLevel, eventName, eventSummary, matchesEventFilter,
@@ -21,16 +23,19 @@ const error = ref('')
 const trackingGeneration = ref<string | null>(null)
 let disconnect: (() => void) | undefined
 const previewVideo = ref<HTMLVideoElement | null>(null)
+const aiCanvas = ref<HTMLCanvasElement | null>(null)
+const aiOverlayEnabled = ref(window.localStorage.getItem('aipc-ai-overlay') !== 'off')
 const preview = reactive(initialPreviewSnapshot())
 const previewManuallyStopped = ref(false)
 const eventViewport = ref<HTMLDivElement | null>(null)
 const eventFilter = ref<EventFilter>('all')
 const eventFilters: EventFilter[] = ['all', 'info', 'warn', 'error']
 const eventFollow = ref(true)
-const activeView = ref<'overview' | 'recordings' | 'settings' | 'diagnostics'>('overview')
+const activeView = ref<'overview' | 'recordings' | 'ai' | 'settings' | 'diagnostics'>('overview')
 const clockMs = ref(Date.now())
 const statusReceivedAtMs = ref(Date.now())
 let previewController: AdaptivePreviewController | undefined
+let aiOverlay: AiOverlayController | undefined
 let clockTimer: number | undefined
 
 const status = computed(() => live.status)
@@ -131,10 +136,20 @@ function disconnectPreview() {
 }
 function setPreviewVolume(value: number) { previewController?.setVolume(value) }
 function togglePreviewMute() { previewController?.setMuted(!preview.muted) }
+function toggleAiOverlay() {
+  aiOverlayEnabled.value = !aiOverlayEnabled.value
+  aiOverlay?.setEnabled(aiOverlayEnabled.value)
+}
+function attachAiOverlay() {
+  aiOverlay?.destroy()
+  aiOverlay = previewVideo.value && aiCanvas.value ? new AiOverlayController(previewVideo.value, aiCanvas.value) : undefined
+  aiOverlay?.setEnabled(aiOverlayEnabled.value)
+}
 
 onMounted(() => {
   clockTimer = window.setInterval(() => { clockMs.value = Date.now() }, 1000)
   previewController = new AdaptivePreviewController((snapshot) => Object.assign(preview, snapshot))
+  attachAiOverlay()
   load()
   disconnect = connectEvents((event) => assignLive(reduceServerEvent({ ...live }, event)), (up) => connected.value = up)
 })
@@ -149,14 +164,18 @@ watch(() => [live.events.at(-1), eventFilter.value], () => scrollEventsToBottom(
 watch(activeView, async (view) => {
   if (view !== 'overview') {
     previewController?.disconnect()
+    aiOverlay?.destroy()
+    aiOverlay = undefined
     return
   }
+  await nextTick()
+  attachAiOverlay()
   if (status.value?.state === 'running' && status.value.video_ready && !previewManuallyStopped.value) {
     await nextTick()
     connectPreview()
   }
 })
-onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); if (clockTimer) window.clearInterval(clockTimer) })
+onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); aiOverlay?.destroy(); if (clockTimer) window.clearInterval(clockTimer) })
 </script>
 
 <template>
@@ -166,8 +185,9 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); if (clockT
       <nav class="nav-tabs" aria-label="主导航">
         <button :class="activeView === 'overview' && 'active'" @click="activeView = 'overview'"><span>01</span>运行概览</button>
         <button :class="activeView === 'recordings' && 'active'" @click="activeView = 'recordings'"><span>02</span>录像管理</button>
-        <button :class="activeView === 'settings' && 'active'" @click="activeView = 'settings'"><span>03</span>媒体配置</button>
-        <button :class="activeView === 'diagnostics' && 'active'" @click="activeView = 'diagnostics'"><span>04</span>日志诊断<i v-if="live.events.some(event => eventLevel(event) === 'error')"></i></button>
+        <button :class="activeView === 'ai' && 'active'" @click="activeView = 'ai'"><span>03</span>AI 与 Lua</button>
+        <button :class="activeView === 'settings' && 'active'" @click="activeView = 'settings'"><span>04</span>媒体配置</button>
+        <button :class="activeView === 'diagnostics' && 'active'" @click="activeView = 'diagnostics'"><span>05</span>日志诊断<i v-if="live.events.some(event => eventLevel(event) === 'error')"></i></button>
       </nav>
       <div class="sidebar-meta">
         <div class="connection"><span :class="['dot', connected && 'online']"></span><div><b>{{ connected ? '服务已连接' : '正在重连' }}</b><small>SSE EVENT STREAM</small></div></div>
@@ -177,7 +197,7 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); if (clockT
 
     <main>
       <header class="topbar">
-        <div><p class="eyebrow">{{ activeView === 'overview' ? 'OVERVIEW' : activeView === 'recordings' ? 'RECORDINGS' : activeView === 'settings' ? 'CONFIGURATION' : 'DIAGNOSTICS' }}</p><h2>{{ activeView === 'overview' ? '运行概览' : activeView === 'recordings' ? '录像管理' : activeView === 'settings' ? '媒体配置' : '日志诊断' }}</h2></div>
+        <div><p class="eyebrow">{{ activeView === 'overview' ? 'OVERVIEW' : activeView === 'recordings' ? 'RECORDINGS' : activeView === 'ai' ? 'AI WORKER' : activeView === 'settings' ? 'CONFIGURATION' : 'DIAGNOSTICS' }}</p><h2>{{ activeView === 'overview' ? '运行概览' : activeView === 'recordings' ? '录像管理' : activeView === 'ai' ? 'AI 与 Lua 管理' : activeView === 'settings' ? '媒体配置' : '日志诊断' }}</h2></div>
         <div class="header-status"><span :class="['status-pill', status?.state]">{{ status?.state || 'offline' }}</span><span>运行 {{ uptime }}</span></div>
       </header>
 
@@ -198,8 +218,8 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); if (clockT
 
         <section class="overview-grid">
           <article class="panel preview-panel">
-            <div class="section-head preview-head"><div><span class="label">LIVE PREVIEW</span><h3>实时画面</h3></div><div class="preview-actions"><span :class="['preview-state', preview.state]">{{ preview.state }}</span><button v-if="preview.state === 'disconnected' || preview.state === 'error'" class="accent compact" @click="connectPreview">连接</button><button v-else class="secondary compact" @click="disconnectPreview">断开</button></div></div>
-            <div class="preview-stage"><video ref="previewVideo" autoplay :muted="preview.muted" playsinline></video><div v-if="preview.state !== 'live'" class="preview-overlay"><span class="loader"></span><strong>{{ preview.state === 'unsupported' ? '浏览器不支持实时预览' : preview.state === 'error' ? '预览连接异常' : '等待视频流' }}</strong><span>{{ preview.error || '优先连接 WebRTC，失败时回退 WebSocket' }}</span></div></div>
+            <div class="section-head preview-head"><div><span class="label">LIVE PREVIEW</span><h3>实时画面</h3></div><div class="preview-actions"><button class="secondary compact" :class="aiOverlayEnabled && 'selected'" @click="toggleAiOverlay">AI 框 {{ aiOverlayEnabled ? '开' : '关' }}</button><span :class="['preview-state', preview.state]">{{ preview.state }}</span><button v-if="preview.state === 'disconnected' || preview.state === 'error'" class="accent compact" @click="connectPreview">连接</button><button v-else class="secondary compact" @click="disconnectPreview">断开</button></div></div>
+            <div class="preview-stage"><video ref="previewVideo" autoplay :muted="preview.muted" playsinline></video><canvas ref="aiCanvas" class="ai-overlay-canvas"></canvas><div v-if="preview.state !== 'live'" class="preview-overlay"><span class="loader"></span><strong>{{ preview.state === 'unsupported' ? '浏览器不支持实时预览' : preview.state === 'error' ? '预览连接异常' : '等待视频流' }}</strong><span>{{ preview.error || '优先连接 WebRTC，失败时回退 WebSocket' }}</span></div></div>
             <div class="preview-stats"><span>分辨率 <b>{{ preview.stream ? `${preview.stream.width} × ${preview.stream.height}` : '—' }}</b></span><span>接收帧率 <b>{{ fmt(preview.receivedFps) }} FPS</b></span><span>实时码率 <b>{{ fmt(preview.bitrateKbps) }} Kbps</b></span><span>丢帧 / 重连 <b>{{ preview.droppedFrames }} / {{ preview.reconnects }}</b></span></div>
             <div class="audio-preview-controls"><span :class="['preview-state', preview.audioState]">音频 {{ preview.audioState }}</span><span>{{ fmt(preview.audioBitrateKbps) }} Kbps · {{ preview.audioPackets }} 包</span><button class="secondary compact" @click="togglePreviewMute">{{ preview.muted ? '取消静音' : '静音' }}</button><input aria-label="预览音量" type="range" min="0" max="1" step="0.05" :value="preview.volume" @input="setPreviewVolume(Number(($event.target as HTMLInputElement).value))"><span v-if="preview.audioError" class="audio-error">{{ preview.audioError }}</span></div>
           </article>
@@ -212,6 +232,8 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); if (clockT
       </template>
 
       <RecordingsView v-else-if="activeView === 'recordings'" />
+
+      <AiView v-else-if="activeView === 'ai'" />
 
       <template v-else-if="activeView === 'settings'">
         <section class="panel config" v-if="form">

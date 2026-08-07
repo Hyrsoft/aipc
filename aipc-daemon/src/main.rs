@@ -1,3 +1,5 @@
+mod ai;
+mod ai_manager;
 mod api;
 mod config;
 mod model;
@@ -64,11 +66,33 @@ async fn main() -> anyhow::Result<()> {
         .max(settings.recording.queue_capacity);
 
     let store = StateStore::new(&settings.data_dir);
-    let initial = match store.load().await? {
+    let mut initial = match store.load().await? {
         Some(state) => state,
         None => PersistentState::new(load_seed(&settings.seed_config).await?),
     };
+    // The active Lua manifest is the sole authority for the AI VPSS channel.
+    // Always boot the media worker with the side channel disabled; AiManager
+    // restores a persisted project online after FD 6 becomes ready.
+    for config in [
+        initial.desired.as_mut(),
+        initial.active.as_mut(),
+        initial.pending.as_mut(),
+        initial.last_good.as_mut(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        config.ai_input.enabled = false;
+    }
     let supervisor = spawn_supervisor(settings.clone(), initial).await;
+    let ai = ai_manager::AiManager::new(
+        settings.ai.clone(),
+        &settings.data_dir,
+        supervisor.ai.clone(),
+        supervisor.events.clone(),
+    )
+    .await?;
+    ai.start_persisted();
     let recording = recording::RecordingManager::new(
         settings.recording.clone(),
         &settings.data_dir,
@@ -86,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
         settings.webrtc.clone(),
         supervisor.preview.clone(),
         supervisor.events.clone(),
+        Some(ai.clone()),
     )
     .await?;
     let app = api::router(
@@ -93,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
         recording.clone(),
         rtsp.clone(),
         webrtc.clone(),
+        ai.clone(),
         &settings.web_dir,
     );
     let listener = TcpListener::bind(&settings.bind)
@@ -110,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
     recording.shutdown().await;
     rtsp.shutdown().await;
     webrtc.shutdown().await;
+    ai.shutdown().await;
     supervisor.shutdown().await;
     Ok(())
 }
