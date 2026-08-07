@@ -10,43 +10,16 @@
 #include <thread>
 #include <vector>
 
+#include "aipc/native/aipf.h"
+
 namespace media_worker {
 
-constexpr std::size_t kAiFrameIpcHeaderSize = 88;
-constexpr std::uint16_t kAiFrameIpcVersion = 1;
-constexpr std::size_t kAiFrameIpcMaxPayload = 8 * 1024 * 1024;
-
-enum class AiFitMode : std::uint16_t {
-    kStretch = 0,
-    kContain = 1,
-    kCover = 2,
-};
-
-struct AiFrameTransform {
-    std::int32_t crop_x = 0;
-    std::int32_t crop_y = 0;
-    std::int32_t crop_width = 0;
-    std::int32_t crop_height = 0;
-    std::int32_t pad_left = 0;
-    std::int32_t pad_top = 0;
-    std::int32_t pad_right = 0;
-    std::int32_t pad_bottom = 0;
-};
-
-struct RawAiFrame {
-    std::vector<std::uint8_t> data;
-    std::uint64_t pts = 0;
-    std::uint64_t sequence = 0;
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
-    std::uint32_t y_stride = 0;
-    std::uint32_t uv_stride = 0;
-    std::uint32_t height_stride = 0;
-    std::uint32_t main_width = 0;
-    std::uint32_t main_height = 0;
-    AiFitMode fit_mode = AiFitMode::kStretch;
-    AiFrameTransform transform;
-};
+constexpr std::size_t kAiFrameIpcHeaderSize = aipc::native::kAipfHeaderSize;
+constexpr std::uint16_t kAiFrameIpcVersion = aipc::native::kAipfVersion;
+constexpr std::size_t kAiFrameIpcMaxPayload = aipc::native::kAipfMaxPayload;
+using AiFitMode = aipc::native::AiFitMode;
+using AiFrameTransform = aipc::native::AiFrameTransform;
+using RawAiFrame = aipc::native::AiFrame;
 
 std::vector<std::uint8_t> EncodeAiFrameIpcFrame(const RawAiFrame& frame);
 

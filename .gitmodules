@@ -1,6 +1,0 @@
-[submodule "3rdparty/luckfox_pico_rkmpi_example"]
-	path = 3rdparty/luckfox_pico_rkmpi_example
-	url = https://github.com/LuckfoxTECH/luckfox_pico_rkmpi_example.git
-[submodule "3rdparty/nlohmann_json"]
-	path = 3rdparty/nlohmann_json
-	url = https://github.com/nlohmann/json.git

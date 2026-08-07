@@ -7,58 +7,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "aipc/native/io.h"
+
 namespace media_worker {
-namespace {
-
-void AppendU16(std::vector<std::uint8_t>* output, std::uint16_t value) {
-    output->push_back(static_cast<std::uint8_t>(value >> 8));
-    output->push_back(static_cast<std::uint8_t>(value));
-}
-
-void AppendU32(std::vector<std::uint8_t>* output, std::uint32_t value) {
-    for (int shift = 24; shift >= 0; shift -= 8) {
-        output->push_back(static_cast<std::uint8_t>(value >> shift));
-    }
-}
-
-void AppendI32(std::vector<std::uint8_t>* output, std::int32_t value) {
-    AppendU32(output, static_cast<std::uint32_t>(value));
-}
-
-void AppendU64(std::vector<std::uint8_t>* output, std::uint64_t value) {
-    for (int shift = 56; shift >= 0; shift -= 8) {
-        output->push_back(static_cast<std::uint8_t>(value >> shift));
-    }
-}
-
-}  // namespace
-
 std::vector<std::uint8_t> EncodeAiFrameIpcFrame(const RawAiFrame& frame) {
-    std::vector<std::uint8_t> output;
-    output.reserve(kAiFrameIpcHeaderSize + frame.data.size());
-    output.insert(output.end(), {'A', 'I', 'P', 'F'});
-    AppendU16(&output, kAiFrameIpcVersion);
-    AppendU16(&output, static_cast<std::uint16_t>(frame.fit_mode));
-    AppendU32(&output, static_cast<std::uint32_t>(frame.data.size()));
-    AppendU64(&output, frame.pts);
-    AppendU64(&output, frame.sequence);
-    AppendU32(&output, frame.width);
-    AppendU32(&output, frame.height);
-    AppendU32(&output, frame.y_stride);
-    AppendU32(&output, frame.uv_stride);
-    AppendU32(&output, frame.height_stride);
-    AppendU32(&output, frame.main_width);
-    AppendU32(&output, frame.main_height);
-    AppendI32(&output, frame.transform.crop_x);
-    AppendI32(&output, frame.transform.crop_y);
-    AppendI32(&output, frame.transform.crop_width);
-    AppendI32(&output, frame.transform.crop_height);
-    AppendI32(&output, frame.transform.pad_left);
-    AppendI32(&output, frame.transform.pad_top);
-    AppendI32(&output, frame.transform.pad_right);
-    AppendI32(&output, frame.transform.pad_bottom);
-    output.insert(output.end(), frame.data.begin(), frame.data.end());
-    return output;
+    return aipc::native::EncodeAipfFrame(frame);
 }
 
 AiFrameIpcPublisher::AiFrameIpcPublisher(int fd, ErrorCallback error_callback)
@@ -134,18 +87,12 @@ void AiFrameIpcPublisher::WriteLoop() {
 }
 
 bool AiFrameIpcPublisher::WriteAll(const std::vector<std::uint8_t>& message) {
-    std::size_t written = 0;
-    while (running_.load() && written < message.size()) {
-        const ssize_t result = write(fd_, message.data() + written, message.size() - written);
-        if (result > 0) {
-            written += static_cast<std::size_t>(result);
-            continue;
-        }
-        if (result < 0 && errno == EINTR) continue;
+    if (!running_.load() ||
+        !aipc::native::WriteAll(fd_, message.data(), message.size())) {
         ReportError(std::string("AI frame IPC write failed: ") + std::strerror(errno));
         return false;
     }
-    return written == message.size();
+    return true;
 }
 
 void AiFrameIpcPublisher::ReportError(const std::string& message) {

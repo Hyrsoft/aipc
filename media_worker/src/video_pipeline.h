@@ -1,17 +1,15 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdio>
 #include <functional>
 #include <string>
-#include <thread>
 #include <vector>
 #include <memory>
-#include <mutex>
+#include <thread>
 
+#include "ai_input_channel.h"
 #include "config.h"
-#include "ai_frame_ipc_publisher.h"
 #include "event_emitter.h"
 #include "pipeline_stats.h"
 #include "rgn_manager.h"
@@ -47,13 +45,9 @@ public:
 private:
     bool InitVi(std::string* error);
     bool InitVpss(std::string* error);
-    bool ConfigureAiVpss(const AiInputConfig& config, std::string* error);
-    void DisableAiVpss();
     bool InitVenc(std::string* error);
     bool Bind(std::string* error);
     void FetchLoop();
-    void AiFetchLoop();
-    AiFrameTransform ComputeAiTransform(const AiInputConfig& config) const;
     void ReportTimeout(std::uint64_t consecutive_timeouts);
     void ReportFatal(const std::string& message);
 
@@ -65,21 +59,9 @@ private:
     std::atomic<bool> fatal_reported_{false};
     std::atomic<bool> ready_reported_{false};
     std::thread fetch_thread_;
-    std::thread ai_fetch_thread_;
     std::unique_ptr<VideoIpcPublisher> ipc_publisher_;
-    std::unique_ptr<AiFrameIpcPublisher> ai_ipc_publisher_;
+    std::unique_ptr<AiInputChannel> ai_input_;
     std::unique_ptr<RgnManager> rgn_manager_;
-    std::atomic<bool> ai_capture_running_{false};
-    std::atomic<bool> ai_paused_{false};
-    std::atomic<bool> ai_ready_reported_{false};
-    std::atomic<std::uint64_t> ai_frames_{0};
-    std::atomic<std::uint64_t> ai_timeouts_{0};
-    std::atomic<std::uint64_t> ai_errors_{0};
-    std::uint64_t ai_sequence_ = 0;
-    mutable std::mutex ai_config_mutex_;
-    std::mutex ai_capture_mutex_;
-    std::condition_variable ai_capture_cv_;
-    bool ai_capture_active_ = false;
     std::uint64_t ipc_sequence_ = 0;
     std::FILE* output_ = nullptr;
 
@@ -87,7 +69,6 @@ private:
     bool vi_channel_enabled_ = false;
     bool vpss_group_created_ = false;
     bool vpss_channel_enabled_ = false;
-    bool ai_vpss_channel_enabled_ = false;
     bool vpss_started_ = false;
     bool venc_created_ = false;
     bool venc_receiving_ = false;

@@ -3,25 +3,26 @@ use crate::config::{DaemonConfig, WorkerConfig};
 use crate::model::{DaemonStatus, LogEntry, PersistentState, ProcessState, ServerEvent, now_ms};
 use crate::preview::{AudioStreamInfo, PreviewHub, StreamInfo, read_audio_ipc, read_video_ipc};
 use crate::store::StateStore;
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
+use nix::sys::signal::Signal;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream as StdUnixStream;
-use std::os::unix::process::ExitStatusExt;
-use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 use tracing::{error, info, warn};
-use uuid::Uuid;
+
+mod process_io;
+use process_io::{
+    new_generation, signal_process, spawn_stderr_reader, spawn_stdout_reader, spawn_waiter,
+    write_worker_config,
+};
 
 const LOG_CAPACITY: usize = 200;
 
@@ -1040,89 +1041,6 @@ impl SupervisorActor {
         let state = self.persistent.read().await.clone();
         self.store.save(&state).await
     }
-}
-
-async fn write_worker_config(path: &Path, config: &WorkerConfig) -> anyhow::Result<()> {
-    let data = serde_json::to_vec_pretty(config)?;
-    tokio::fs::write(path, data).await?;
-    Ok(())
-}
-
-fn spawn_stdout_reader(
-    stdout: tokio::process::ChildStdout,
-    generation: String,
-    sender: mpsc::Sender<ProcessMessage>,
-) {
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let message = match serde_json::from_str(&line) {
-                Ok(value) => ProcessMessage::Event {
-                    generation: generation.clone(),
-                    value,
-                },
-                Err(_) => ProcessMessage::InvalidEvent {
-                    generation: generation.clone(),
-                    line,
-                },
-            };
-            if sender.send(message).await.is_err() {
-                break;
-            }
-        }
-    });
-}
-
-fn spawn_stderr_reader(
-    stderr: tokio::process::ChildStderr,
-    generation: String,
-    sender: mpsc::Sender<ProcessMessage>,
-) {
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if sender
-                .send(ProcessMessage::Stderr {
-                    generation: generation.clone(),
-                    line,
-                })
-                .await
-                .is_err()
-            {
-                break;
-            }
-        }
-    });
-}
-
-fn spawn_waiter(
-    mut child: tokio::process::Child,
-    generation: String,
-    sender: mpsc::Sender<ProcessMessage>,
-) {
-    tokio::spawn(async move {
-        match child.wait().await {
-            Ok(status) => {
-                let _ = sender
-                    .send(ProcessMessage::Exited {
-                        generation,
-                        code: status.code(),
-                        signal: status.signal(),
-                    })
-                    .await;
-            }
-            Err(error) => warn!(%error, "failed waiting for worker process"),
-        }
-    });
-}
-
-fn signal_process(pid: u32, signal: Signal) -> Result<(), SupervisorError> {
-    kill(Pid::from_raw(pid as i32), signal)
-        .map_err(|error| SupervisorError::Operation(error.to_string()))
-}
-
-fn new_generation() -> String {
-    Uuid::new_v4().to_string()
 }
 
 #[cfg(test)]

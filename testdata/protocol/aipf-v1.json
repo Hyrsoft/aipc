@@ -1,0 +1,25 @@
+{
+  "description": "AIPF v1 NV12 frame shared by Rust and C++ protocol tests",
+  "pts": 72623859790382856,
+  "sequence": 9,
+  "width": 2,
+  "height": 2,
+  "y_stride": 2,
+  "uv_stride": 2,
+  "height_stride": 2,
+  "main_width": 1920,
+  "main_height": 1080,
+  "fit_mode": "contain",
+  "transform": {
+    "crop_x": 10,
+    "crop_y": 20,
+    "crop_width": 1900,
+    "crop_height": 1040,
+    "pad_left": 4,
+    "pad_top": 6,
+    "pad_right": 8,
+    "pad_bottom": 10
+  },
+  "payload_hex": "010203040506",
+  "encoded_hex": "41495046000100010000000601020304050607080000000000000009000000020000000200000002000000020000000200000780000004380000000a000000140000076c000004100000000400000006000000080000000a010203040506"
+}

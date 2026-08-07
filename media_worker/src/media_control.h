@@ -21,8 +21,6 @@ public:
 
 private:
     void Run();
-    bool ReadAll(void* data, std::size_t size);
-    bool WriteAll(const void* data, std::size_t size);
     bool WriteMessage(const nlohmann::json& message);
 
     int fd_;

@@ -2,8 +2,6 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <chrono>
-#include <cmath>
 #include <cstring>
 
 #include <iostream>
@@ -45,6 +43,8 @@ bool VideoPipeline::Init(std::string* error) {
             return false;
         }
     }
+    ai_input_ = std::make_unique<AiInputChannel>(config_.vpss, config_.video,
+                                                 config_.ai_input, events_);
     if (!InitVi(error) || !InitVpss(error) || !InitVenc(error) || !Bind(error)) {
         return false;
     }
@@ -52,14 +52,6 @@ bool VideoPipeline::Init(std::string* error) {
         ipc_publisher_ = std::make_unique<VideoIpcPublisher>(
             config_.video.ipc_fd, 8, [this](const std::string& message) {
                 events_->Emit("Warning", {{"media", "video"}, {"reason", "ipc_disabled"},
-                                           {"message", message}});
-            });
-    }
-    if (config_.ai_input.ipc_fd >= 0) {
-        ai_ipc_publisher_ = std::make_unique<AiFrameIpcPublisher>(
-            config_.ai_input.ipc_fd, [this](const std::string& message) {
-                events_->Emit("Warning", {{"media", "ai_input"},
-                                           {"reason", "ipc_disabled"},
                                            {"message", message}});
             });
     }
@@ -162,7 +154,7 @@ bool VideoPipeline::InitVpss(std::string* error) {
         return false;
     }
     vpss_channel_enabled_ = true;
-    if (config_.ai_input.enabled && !ConfigureAiVpss(config_.ai_input, error)) {
+    if (!ai_input_->ConfigureInitial(error)) {
         return false;
     }
     result = RK_MPI_VPSS_StartGrp(config_.vpss.group_id);
@@ -173,74 +165,6 @@ bool VideoPipeline::InitVpss(std::string* error) {
     vpss_started_ = true;
     events_->Emit("BootProgress", {{"stage", "vpss_ready"}});
     return true;
-}
-
-bool VideoPipeline::ConfigureAiVpss(const AiInputConfig& config, std::string* error) {
-    const auto transform = ComputeAiTransform(config);
-    VPSS_CHN_ATTR_S attr{};
-    attr.enChnMode = VPSS_CHN_MODE_USER;
-    attr.enDynamicRange = DYNAMIC_RANGE_SDR8;
-    attr.enPixelFormat = RK_FMT_YUV420SP;
-    attr.stFrameRate.s32SrcFrameRate = config_.video.fps;
-    attr.stFrameRate.s32DstFrameRate = config.fps;
-    attr.u32Width = static_cast<RK_U32>(
-        config.fit_mode == "contain"
-            ? config.width - transform.pad_left - transform.pad_right
-            : config.width);
-    attr.u32Height = static_cast<RK_U32>(
-        config.fit_mode == "contain"
-            ? config.height - transform.pad_top - transform.pad_bottom
-            : config.height);
-    attr.u32Depth = static_cast<RK_U32>(config.depth);
-    attr.u32FrameBufCnt = static_cast<RK_U32>(config.buffer_count);
-    attr.enCompressMode = COMPRESS_MODE_NONE;
-    // RV1106's VPSS ASPECT_RATIO_AUTO path enters the RGA kernel helper and can
-    // dereference a null source buffer on this BSP. Keep hardware scaling in
-    // full-frame mode and assemble contain/letterbox padding in the isolated AI
-    // capture thread after the RKMPI frame has been copied.
-    attr.stAspectRatio.enMode = ASPECT_RATIO_NONE;
-    attr.stAspectRatio.u32BgColor = 0;
-    RK_S32 result = RK_MPI_VPSS_SetChnAttr(config_.vpss.group_id, config.channel_id,
-                                           &attr);
-    if (result != RK_SUCCESS) {
-        *error = MpiError("RK_MPI_VPSS_SetChnAttr(ai)", result);
-        return false;
-    }
-    VPSS_CROP_INFO_S crop{};
-    if (config.fit_mode == "cover") {
-        crop.bEnable = RK_TRUE;
-        crop.enCropCoordinate = VPSS_CROP_ABS_COOR;
-        crop.stCropRect.s32X = transform.crop_x;
-        crop.stCropRect.s32Y = transform.crop_y;
-        crop.stCropRect.u32Width = static_cast<RK_U32>(transform.crop_width);
-        crop.stCropRect.u32Height = static_cast<RK_U32>(transform.crop_height);
-    } else {
-        crop.bEnable = RK_FALSE;
-    }
-    result = RK_MPI_VPSS_SetChnCrop(config_.vpss.group_id, config.channel_id, &crop);
-    if (result != RK_SUCCESS) {
-        *error = MpiError("RK_MPI_VPSS_SetChnCrop(ai)", result);
-        return false;
-    }
-    result = RK_MPI_VPSS_EnableChn(config_.vpss.group_id, config.channel_id);
-    if (result != RK_SUCCESS) {
-        *error = MpiError("RK_MPI_VPSS_EnableChn(ai)", result);
-        return false;
-    }
-    ai_vpss_channel_enabled_ = true;
-    events_->Emit("BootProgress", {{"stage", "ai_vpss_ready"},
-                                    {"channel_id", config.channel_id},
-                                    {"width", config.width},
-                                    {"height", config.height},
-                                    {"fps", config.fps},
-                                    {"fit_mode", config.fit_mode}});
-    return true;
-}
-
-void VideoPipeline::DisableAiVpss() {
-    if (!ai_vpss_channel_enabled_) return;
-    RK_MPI_VPSS_DisableChn(config_.vpss.group_id, config_.ai_input.channel_id);
-    ai_vpss_channel_enabled_ = false;
 }
 
 bool VideoPipeline::InitVenc(std::string* error) {
@@ -314,237 +238,26 @@ bool VideoPipeline::Start(std::string* error) {
     if (ipc_publisher_ && !ipc_publisher_->Start()) {
         events_->Emit("Warning", {{"media", "video"}, {"reason", "ipc_start_failed"}});
     }
-    if (ai_ipc_publisher_ && !ai_ipc_publisher_->Start()) {
-        events_->Emit("Warning",
-                      {{"media", "ai_input"}, {"reason", "ipc_start_failed"}});
-    }
     try {
         fetch_thread_ = std::thread(&VideoPipeline::FetchLoop, this);
-        if (ai_ipc_publisher_) {
-            ai_capture_running_.store(true);
-            ai_paused_.store(!config_.ai_input.enabled);
-            ai_fetch_thread_ = std::thread(&VideoPipeline::AiFetchLoop, this);
-        }
     } catch (const std::exception& exception) {
         running_.store(false);
-        ai_capture_running_.store(false);
         *error = std::string("cannot start video fetch thread: ") + exception.what();
         return false;
     }
-    return true;
-}
-
-AiFrameTransform VideoPipeline::ComputeAiTransform(const AiInputConfig& config) const {
-    AiFrameTransform transform;
-    transform.crop_width = config_.video.width;
-    transform.crop_height = config_.video.height;
-    if (config.fit_mode == "contain") {
-        const double scale =
-            std::min(static_cast<double>(config.width) / config_.video.width,
-                     static_cast<double>(config.height) / config_.video.height);
-        int content_width = std::max(4, static_cast<int>(std::floor(config_.video.width * scale)) & ~3);
-        int content_height = std::max(4, static_cast<int>(std::floor(config_.video.height * scale)) & ~3);
-        transform.pad_left = ((config.width - content_width) / 2) & ~1;
-        transform.pad_top = ((config.height - content_height) / 2) & ~1;
-        transform.pad_right = config.width - content_width - transform.pad_left;
-        transform.pad_bottom = config.height - content_height - transform.pad_top;
-    } else if (config.fit_mode == "cover") {
-        const double source_ratio =
-            static_cast<double>(config_.video.width) / config_.video.height;
-        const double target_ratio = static_cast<double>(config.width) / config.height;
-        if (source_ratio > target_ratio) {
-            transform.crop_width =
-                static_cast<int>(config_.video.height * target_ratio) & ~1;
-            transform.crop_x = (config_.video.width - transform.crop_width) / 2;
-        } else if (source_ratio < target_ratio) {
-            transform.crop_height =
-                static_cast<int>(config_.video.width / target_ratio) & ~1;
-            transform.crop_y = (config_.video.height - transform.crop_height) / 2;
-        }
-    }
-    return transform;
-}
-
-void VideoPipeline::AiFetchLoop() {
-    while (ai_capture_running_.load()) {
-        if (ai_paused_.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            continue;
-        }
-        AiInputConfig input;
-        {
-            std::lock_guard<std::mutex> lock(ai_config_mutex_);
-            input = config_.ai_input;
-        }
-        {
-            std::lock_guard<std::mutex> lock(ai_capture_mutex_);
-            if (ai_paused_.load()) continue;
-            ai_capture_active_ = true;
-        }
-        VIDEO_FRAME_INFO_S frame{};
-        RK_S32 result = RK_MPI_VPSS_GetChnFrame(config_.vpss.group_id, input.channel_id,
-                                                &frame, 200);
-        if (result != RK_SUCCESS) {
-            {
-                std::lock_guard<std::mutex> lock(ai_capture_mutex_);
-                ai_capture_active_ = false;
-            }
-            ai_capture_cv_.notify_all();
-            if (ai_capture_running_.load() && !ai_paused_.load()) {
-                ai_timeouts_.fetch_add(1);
-            }
-            continue;
-        }
-        const auto width = frame.stVFrame.u32Width;
-        const auto height = frame.stVFrame.u32Height;
-        const auto y_stride =
-            frame.stVFrame.u32VirWidth == 0 ? width : frame.stVFrame.u32VirWidth;
-        const auto vir_height =
-            frame.stVFrame.u32VirHeight == 0 ? height : frame.stVFrame.u32VirHeight;
-        const std::size_t expected =
-            static_cast<std::size_t>(y_stride) * vir_height * 3 / 2;
-        const std::size_t available =
-            static_cast<std::size_t>(RK_MPI_MB_GetSize(frame.stVFrame.pMbBlk));
-        void* address = RK_MPI_MB_Handle2VirAddr(frame.stVFrame.pMbBlk);
-        RawAiFrame output;
-        if (address != nullptr && expected > 0 && available >= expected) {
-            const auto* bytes = static_cast<const std::uint8_t*>(address);
-            const auto transform = ComputeAiTransform(input);
-            if (input.fit_mode == "contain") {
-                const std::size_t output_y =
-                    static_cast<std::size_t>(input.width) * input.height;
-                output.data.assign(output_y + output_y / 2, 128);
-                std::fill(output.data.begin(), output.data.begin() + output_y, 16);
-                const int content_width =
-                    input.width - transform.pad_left - transform.pad_right;
-                const int content_height =
-                    input.height - transform.pad_top - transform.pad_bottom;
-                const auto* source_y = bytes;
-                const auto* source_uv = bytes + static_cast<std::size_t>(y_stride) * vir_height;
-                auto* target_y = output.data.data() +
-                                 static_cast<std::size_t>(transform.pad_top) * input.width +
-                                 transform.pad_left;
-                auto* target_uv = output.data.data() + output_y +
-                                  static_cast<std::size_t>(transform.pad_top / 2) * input.width +
-                                  transform.pad_left;
-                for (int row = 0; row < content_height; ++row) {
-                    std::memcpy(target_y + static_cast<std::size_t>(row) * input.width,
-                                source_y + static_cast<std::size_t>(row) * y_stride,
-                                content_width);
-                }
-                for (int row = 0; row < content_height / 2; ++row) {
-                    std::memcpy(target_uv + static_cast<std::size_t>(row) * input.width,
-                                source_uv + static_cast<std::size_t>(row) * y_stride,
-                                content_width);
-                }
-                output.width = input.width;
-                output.height = input.height;
-                output.y_stride = input.width;
-                output.uv_stride = input.width;
-                output.height_stride = input.height;
-            } else {
-                output.data.assign(bytes, bytes + expected);
-                output.width = width;
-                output.height = height;
-                output.y_stride = y_stride;
-                output.uv_stride = y_stride;
-                output.height_stride = vir_height;
-            }
-            output.pts = frame.stVFrame.u64PTS;
-            output.sequence = ++ai_sequence_;
-            output.main_width = config_.video.width;
-            output.main_height = config_.video.height;
-            output.fit_mode = ParseAiFitMode(input.fit_mode);
-            output.transform = transform;
-        } else {
-            ai_errors_.fetch_add(1);
-        }
-        result = RK_MPI_VPSS_ReleaseChnFrame(config_.vpss.group_id, input.channel_id,
-                                             &frame);
-        {
-            std::lock_guard<std::mutex> lock(ai_capture_mutex_);
-            ai_capture_active_ = false;
-        }
-        ai_capture_cv_.notify_all();
-        if (result != RK_SUCCESS) {
-            ai_errors_.fetch_add(1);
-            events_->Emit("Warning", {{"media", "ai_input"},
-                                       {"reason", "release_failed"},
-                                       {"code", result}});
-        }
-        if (!output.data.empty() && ai_ipc_publisher_) {
-            const auto output_width = output.width;
-            const auto output_height = output.height;
-            ai_ipc_publisher_->Enqueue(std::move(output));
-            ai_frames_.fetch_add(1);
-            if (!ai_ready_reported_.exchange(true)) {
-                ai_capture_cv_.notify_all();
-                events_->Emit("AiInputReady", {{"channel_id", input.channel_id},
-                                                {"width", output_width},
-                                                {"height", output_height},
-                                                {"fps", input.fps},
-                                                {"format", "nv12"}});
-            }
-        }
-    }
+    return ai_input_->Start(error);
 }
 
 bool VideoPipeline::PauseAiFrames(std::string* error) {
-    ai_paused_.store(true);
-    std::unique_lock<std::mutex> lock(ai_capture_mutex_);
-    if (!ai_capture_cv_.wait_for(lock, std::chrono::milliseconds(500),
-                                 [this] { return !ai_capture_active_; })) {
-        *error = "timed out waiting for AI VPSS frame release";
-        return false;
-    }
-    return true;
+    return ai_input_->Pause(error);
 }
 
 bool VideoPipeline::ResumeAiFrames(std::string* error) {
-    if (!config_.ai_input.enabled || !ai_vpss_channel_enabled_) {
-        *error = "AI VPSS channel is not enabled";
-        return false;
-    }
-    ai_ready_reported_.store(false);
-    ai_paused_.store(false);
-    std::unique_lock<std::mutex> lock(ai_capture_mutex_);
-    if (!ai_capture_cv_.wait_for(lock, std::chrono::milliseconds(1500),
-                                 [this] { return ai_ready_reported_.load(); })) {
-        ai_paused_.store(true);
-        *error = "timed out waiting for the reconfigured AI input frame";
-        return false;
-    }
-    return true;
+    return ai_input_->Resume(error);
 }
 
 bool VideoPipeline::ReconfigureAiInput(const AiInputConfig& next, std::string* error) {
-    const AiInputConfig previous = config_.ai_input;
-    if (!PauseAiFrames(error)) return false;
-    DisableAiVpss();
-    {
-        std::lock_guard<std::mutex> lock(ai_config_mutex_);
-        config_.ai_input = next;
-    }
-    if (!next.enabled || ConfigureAiVpss(next, error)) {
-        ai_ready_reported_.store(false);
-        ai_paused_.store(true);
-        return true;
-    }
-    const std::string candidate_error = *error;
-    {
-        std::lock_guard<std::mutex> lock(ai_config_mutex_);
-        config_.ai_input = previous;
-    }
-    if (previous.enabled) {
-        std::string rollback_error;
-        if (!ConfigureAiVpss(previous, &rollback_error)) {
-            *error = candidate_error + "; rollback failed: " + rollback_error;
-            return false;
-        }
-        ai_paused_.store(true);
-    }
-    *error = candidate_error;
-    return false;
+    return ai_input_->Reconfigure(next, error);
 }
 
 nlohmann::json VideoPipeline::ProbeRegionCapability(std::string* error) {
@@ -666,12 +379,9 @@ void VideoPipeline::ReportFatal(const std::string& message) {
 
 void VideoPipeline::Stop() {
     running_.store(false);
-    ai_capture_running_.store(false);
-    ai_paused_.store(false);
     if (fetch_thread_.joinable()) fetch_thread_.join();
-    if (ai_fetch_thread_.joinable()) ai_fetch_thread_.join();
     if (ipc_publisher_) ipc_publisher_->Stop();
-    if (ai_ipc_publisher_) ai_ipc_publisher_->Stop();
+    if (ai_input_) ai_input_->Stop();
     if (output_ != nullptr) std::fflush(output_);
 }
 
@@ -681,17 +391,7 @@ nlohmann::json VideoPipeline::Stats() const {
     stats["ipc_bytes"] = ipc_publisher_ ? ipc_publisher_->Bytes() : 0;
     stats["ipc_drops"] = ipc_publisher_ ? ipc_publisher_->Drops() : 0;
     stats["ipc_errors"] = ipc_publisher_ ? ipc_publisher_->Errors() : 0;
-    stats["ai_input"] = {{"frames", ai_frames_.load()},
-                         {"timeouts", ai_timeouts_.load()},
-                         {"errors", ai_errors_.load()},
-                         {"ipc_frames",
-                          ai_ipc_publisher_ ? ai_ipc_publisher_->Frames() : 0},
-                         {"ipc_bytes",
-                          ai_ipc_publisher_ ? ai_ipc_publisher_->Bytes() : 0},
-                         {"ipc_drops",
-                          ai_ipc_publisher_ ? ai_ipc_publisher_->Drops() : 0},
-                         {"ipc_errors",
-                          ai_ipc_publisher_ ? ai_ipc_publisher_->Errors() : 0}};
+    stats["ai_input"] = ai_input_ ? ai_input_->Stats() : nlohmann::json::object();
     return stats;
 }
 
@@ -721,7 +421,10 @@ void VideoPipeline::Deinit() {
         RK_MPI_VPSS_StopGrp(config_.vpss.group_id);
         vpss_started_ = false;
     }
-    DisableAiVpss();
+    if (ai_input_) {
+        ai_input_->Deinit();
+        ai_input_.reset();
+    }
     if (vpss_channel_enabled_) {
         RK_MPI_VPSS_DisableChn(config_.vpss.group_id, config_.vpss.channel_id);
         vpss_channel_enabled_ = false;

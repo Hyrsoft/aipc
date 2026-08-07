@@ -29,7 +29,6 @@ str0m = { version = "=0.21.0", default-features = false, features = ["openssl"] 
 
 [build-dependencies]
 cc = "1"
-cmake = "0.1"
 
 [dev-dependencies]
 http-body-util = "0.1"

@@ -427,6 +427,7 @@ fn u64_at(data: &[u8], offset: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
     use tokio::io::{AsyncWriteExt, duplex};
 
     fn message(payload: &[u8]) -> Vec<u8> {
@@ -445,6 +446,73 @@ mod tests {
         }
         data.extend_from_slice(payload);
         data
+    }
+
+    #[derive(Deserialize)]
+    struct FixtureTransform {
+        crop_x: i32,
+        crop_y: i32,
+        crop_width: i32,
+        crop_height: i32,
+        pad_left: i32,
+        pad_top: i32,
+        pad_right: i32,
+        pad_bottom: i32,
+    }
+
+    #[derive(Deserialize)]
+    struct Fixture {
+        pts: u64,
+        sequence: u64,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+        height_stride: u32,
+        main_width: u32,
+        main_height: u32,
+        transform: FixtureTransform,
+        payload_hex: String,
+        encoded_hex: String,
+    }
+
+    fn decode_hex(value: &str) -> Vec<u8> {
+        value
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn matches_cpp_aipf_golden_fixture() {
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../../testdata/protocol/aipf-v1.json")).unwrap();
+        let frame = AiFrame {
+            generation: "fixture".into(),
+            pts: fixture.pts,
+            sequence: fixture.sequence,
+            width: fixture.width,
+            height: fixture.height,
+            y_stride: fixture.y_stride,
+            uv_stride: fixture.uv_stride,
+            height_stride: fixture.height_stride,
+            main_width: fixture.main_width,
+            main_height: fixture.main_height,
+            fit_mode: AiFitMode::Contain,
+            transform: AiFrameTransform {
+                crop_x: fixture.transform.crop_x,
+                crop_y: fixture.transform.crop_y,
+                crop_width: fixture.transform.crop_width,
+                crop_height: fixture.transform.crop_height,
+                pad_left: fixture.transform.pad_left,
+                pad_top: fixture.transform.pad_top,
+                pad_right: fixture.transform.pad_right,
+                pad_bottom: fixture.transform.pad_bottom,
+            },
+            data: Bytes::from(decode_hex(&fixture.payload_hex)),
+        };
+        assert_eq!(encode_ai_frame(&frame), decode_hex(&fixture.encoded_hex));
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 <div align="center">
   <h1>AIPC</h1>
-  <p>Rust 业务主进程 + 最小化原生音视频采集服务的嵌入式实验性项目</p>
+  <p>Rust 控制面 + C++ 媒体/AI worker 的嵌入式音视频与视觉实验项目</p>
 
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="Apache-2.0 License"></a>
   <img src="https://img.shields.io/badge/Status-Experimental-orange.svg" alt="Experimental project">
@@ -41,19 +41,19 @@ flowchart LR
     R --> M[MP4 录像与文件管理]
     R --> T[RTSP 服务]
     R --> L[Lua 规则与业务编排]
-    W -. 旁路帧 .-> K[RKNN 视觉模型能力]
-    K --> R
+    W -. AIPF 旁路帧 .-> K[C++ ai_worker<br/>VisionG · RKNN · Lua]
+    K -- AIPR 检测结果 --> R
 ```
 
 职责边界如下：
 
 - `media_worker`：只拥有硬件媒体资源和底层编码生命周期，不负责 HTTP、RTSP、Web UI、录像业务或网络客户端管理。
 - `aipc-daemon`：负责 worker 监督、配置冷重启/回滚、编码流分发、HTTP API、Web UI、WebSocket 预览、MP4 录像和 RTSP。
-- Lua/RKNN：作为后续业务编排和视觉模型扩展，目标是让模型故障或重启不阻塞主音视频链路。
+- `ai_worker`：独立承载 VisionG/RKNN 和受限 Lua 项目；AI 帧拥塞时丢帧，进程重启不重建主视频链路。
 
 ## 当前能力
 
-- Rust/Tokio/Axum daemon 与 C++17/RKMPI media worker 双进程架构。
+- Rust/Tokio/Axum daemon、C++17/RKMPI media worker 与 C++17/VisionG ai worker 三进程架构。
 - worker generation、启动状态、关键帧、流就绪、指标、异常退出和有界重启回退。
 - H.264 Annex-B 编码帧 IPC，包含 PTS、sequence 和关键帧标志。
 - WebRTC H.264/PCMA 浏览器预览，失败时自动回退 WebSocket/MSE，慢客户端不会阻塞采集。
@@ -62,6 +62,7 @@ flowchart LR
 - Rust 内置 RTSP 服务：`rtsp://<device>:8554/live`，支持 TCP interleaved 和 UDP RTP/RTCP。
 - HTTP Range 文件读取，浏览器可在不下载完整文件的情况下拖动 MP4 进度。
 - ADB + 以太网联合部署验证流程，当前已在 RV1106 真机上验证 HTTP、MP4、Range、ZIP 和 RTSP TCP/UDP。
+- 动态 AI VPSS 通道、Lua 项目部署/回滚、YOLOv5、metadata OSD 与硬件 RGN OSD。
 
 ## 功能实现矩阵
 
@@ -80,9 +81,9 @@ flowchart LR
 | 浏览器 MP4 播放 | 🧪 | ✅ | 🚧 | 🚧 | 依赖浏览器 H.264 解码能力和 HTTP Range |
 | Rust 内置 RTSP | 🧪 | ✅ | 🚧 | 🚧 | TCP interleaved、UDP RTP/RTCP、H.264 RTP 分包 |
 | 录像文件管理与批量导出 | 🧪 | ✅ | 🚧 | 🚧 | 列表、下载、ZIP 导出、批量删除 |
-| Lua 规则/业务编排 | ⬜ | ⬜ | ⬜ | ⬜ | 计划用于事件规则、任务编排和用户扩展 |
-| RKNN 视觉模型推理 | ⬜ | ⬜ | ⬜ | ⬜ | 计划从 media worker 旁路帧或独立 AI worker 接入 |
-| AI worker 故障隔离 | ⬜ | ⬜ | ⬜ | ⬜ | 目标是模型重启不影响主音视频和网络客户端 |
+| Lua AI 项目编排 | 🧪 | ✅ | 🚧 | 🚧 | 受限 Lua 5.4.8 运行时、项目校验、部署和 last-good 回滚 |
+| RKNN 视觉模型推理 | 🧪 | ✅ | 🚧 | 🚧 | VisionG v1.2.1、YOLOv5、动态 640×360/640×640 AI VPSS |
+| AI worker 故障隔离 | 🧪 | ✅ | 🚧 | 🚧 | AI 独立重启，主 VPSS/VENC generation 保持不变 |
 | RK3576 适配 | ⬜ | — | 🚧 | — | 待建立统一 SoC 媒体能力和构建抽象 |
 | RV1126B 适配 | ⬜ | — | — | 🚧 | 待验证 SDK、ISP、编码器和板端部署差异 |
 
@@ -97,12 +98,13 @@ cargo test --workspace
 npm --prefix webui test
 npm --prefix webui run build
 
-cmake --preset HostDebug -S media_worker
-cmake --build media_worker/build/HostDebug
-ctest --test-dir media_worker/build/HostDebug --output-on-failure
+cd native
+cmake --preset HostDebug
+cmake --build --preset HostDebug
+ctest --preset HostDebug
 ```
 
-主机 Cargo 构建会跳过硬件 worker；C++ HostDebug preset 只构建与硬件无关的配置、IPC 和指标测试。
+Cargo 不再隐式构建 C++。`native` 总工程统一构建两个 worker、公共协议库和 host CTest。
 
 ### RV1106 交叉编译与打包
 
@@ -116,7 +118,7 @@ ctest --test-dir media_worker/build/HostDebug --output-on-failure
 打包目录为 `target/package/aipc-rust`，包含：
 
 ```text
-bin/       Rust daemon 与 C++ media worker
+bin/       aipc-daemon、media_worker、ai_worker
 config/    daemon / worker 配置
 scripts/   启停、部署和板端脚本
 www/       Vue 生产构建产物

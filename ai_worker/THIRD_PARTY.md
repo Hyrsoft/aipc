@@ -18,5 +18,9 @@ The RV1106 deployment package contains the following pinned components:
 - COCO80 label list
   - SHA-256: `d7654b26101572841ed1cd80aa03aa60e35f1b8acb4aea6906c4066886f16e07`
 
-`scripts/fetch-ai-deps.sh` and `scripts/fetch-ai-models.sh` verify these hashes
-before the files are accepted into a build or deployment package.
+CMake FetchContent verifies native dependency hashes before configuration. For
+offline builds, set `FETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON`,
+`FETCHCONTENT_SOURCE_DIR_LUA`, `FETCHCONTENT_SOURCE_DIR_VISIONG`, and
+`FETCHCONTENT_SOURCE_DIR_LUCKFOX_RKMPI`, then enable
+`AIPC_FETCHCONTENT_OFFLINE`. `scripts/fetch-ai-models.sh` independently verifies
+the runtime model and label hashes.

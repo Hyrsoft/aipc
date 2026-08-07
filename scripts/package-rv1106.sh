@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TARGET="armv7-unknown-linux-uclibceabihf"
 PACKAGE_DIR="${AIPC_PACKAGE_DIR:-${PROJECT_ROOT}/target/package/aipc-rust}"
+NATIVE_INSTALL="${PROJECT_ROOT}/target/native/RV1106Release/install"
 
 if ! command -v jq >/dev/null 2>&1; then
     echo "jq is required to generate the daemon-managed worker config" >&2
@@ -25,15 +26,13 @@ install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/media_worker" \
     "${PACKAGE_DIR}/bin/media_worker"
 install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/ai_worker" \
     "${PACKAGE_DIR}/bin/ai_worker"
-install -m 0755 "${PROJECT_ROOT}/target/ai-deps/visiong/lib/libvisiong.so" \
+install -m 0755 "${NATIVE_INSTALL}/lib/libvisiong.so" \
     "${PACKAGE_DIR}/lib/libvisiong.so"
 mkdir -p "${PACKAGE_DIR}/licenses/visiong" "${PACKAGE_DIR}/licenses/lua" \
     "${PACKAGE_DIR}/seed/ai/projects/yolov5-coco80" "${PACKAGE_DIR}/seed/ai/models"
-cp -a "${PROJECT_ROOT}/target/ai-deps/visiong/LICENSE" \
-    "${PROJECT_ROOT}/target/ai-deps/visiong/THIRD_PARTY_NOTICES.md" \
-    "${PROJECT_ROOT}/target/ai-deps/visiong/licenses/." \
+cp -a "${NATIVE_INSTALL}/licenses/visiong/." \
     "${PACKAGE_DIR}/licenses/visiong/"
-install -m 0644 "${PROJECT_ROOT}/target/ai-deps/lua/doc/readme.html" \
+install -m 0644 "${NATIVE_INSTALL}/licenses/lua/readme.html" \
     "${PACKAGE_DIR}/licenses/lua/readme.html"
 install -m 0644 "${PROJECT_ROOT}/ai_worker/THIRD_PARTY.md" \
     "${PACKAGE_DIR}/licenses/AI_WORKER_THIRD_PARTY.md"
