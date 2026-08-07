@@ -14,6 +14,10 @@ public:
     virtual const char* Name() const = 0;
 };
 
+DetectionResult DetectionFromXywh(int x, int y, int width, int height,
+                                  float score, int class_id,
+                                  std::string label);
+
 std::unique_ptr<Backend> CreateMockBackend();
 std::unique_ptr<Backend> CreateBackend(const Options& options,
                                        const Manifest& manifest);

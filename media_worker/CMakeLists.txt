@@ -15,13 +15,15 @@ add_library(media_worker_audio_ipc STATIC src/audio_ipc_publisher.cpp)
 add_library(media_worker_ai_ipc STATIC src/ai_frame_ipc_publisher.cpp)
 add_library(media_worker_control STATIC src/media_control.cpp)
 add_library(media_worker_metrics STATIC src/metrics_sampler.cpp)
+add_library(media_worker_rgn_coordinates STATIC src/rgn_coordinates.cpp)
 
 foreach(target
         media_worker_video_ipc
         media_worker_audio_ipc
         media_worker_ai_ipc
         media_worker_control
-        media_worker_metrics)
+        media_worker_metrics
+        media_worker_rgn_coordinates)
     target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(${target} PUBLIC Aipc::NativeOptions Threads::Threads)
 endforeach()
@@ -53,6 +55,7 @@ if(AIPC_ENABLE_RV1106)
         media_worker_audio_ipc
         media_worker_ai_ipc
         media_worker_control
+        media_worker_rgn_coordinates
         Rockchip::MediaRuntime
         Threads::Threads
         dl
@@ -76,4 +79,5 @@ if(AIPC_NATIVE_BUILD_TESTS)
     aipc_media_test(media_worker_audio_ipc_tests tests/audio_ipc_publisher_test.cpp media_worker_audio_ipc)
     aipc_media_test(media_worker_metrics_tests tests/metrics_sampler_test.cpp media_worker_metrics)
     aipc_media_test(media_worker_ai_ipc_tests tests/ai_frame_ipc_publisher_test.cpp media_worker_ai_ipc)
+    aipc_media_test(media_worker_rgn_coordinates_tests tests/rgn_coordinates_test.cpp media_worker_rgn_coordinates)
 endif()

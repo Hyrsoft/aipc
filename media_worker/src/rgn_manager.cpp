@@ -6,6 +6,7 @@
 
 #include "rk_defines.h"
 #include "rk_mpi_rgn.h"
+#include "rk_mpi_vi.h"
 
 namespace media_worker {
 namespace {
@@ -41,7 +42,9 @@ RgnManager::RgnManager(int venc_channel, int vpss_group, int vpss_channel,
       vpss_channel_(vpss_channel),
       vi_device_(vi_device),
       frame_width_(frame_width),
-      frame_height_(frame_height) {}
+      frame_height_(frame_height),
+      target_width_(frame_width),
+      target_height_(frame_height) {}
 
 RgnManager::~RgnManager() { Deinit(); }
 
@@ -52,6 +55,8 @@ nlohmann::json RgnManager::Probe(std::string* error) {
             {"cover", available && backend_ == Backend::kCover},
             {"backend", available ? BackendName() : "none"},
             {"target", available ? TargetName() : "none"},
+            {"coordinate_width", available ? target_width_ : 0},
+            {"coordinate_height", available ? target_height_ : 0},
             {"max_boxes", max_boxes_},
             {"implemented", available}};
 }
@@ -132,6 +137,23 @@ bool RgnManager::TryInitialize(Backend backend, AttachTarget target,
     backend_ = backend;
     target_ = target;
     channel_ = ChannelForTarget(target);
+    target_width_ = frame_width_;
+    target_height_ = frame_height_;
+    if (target == AttachTarget::kVi) {
+        VI_DEV_STATUS_S status{};
+        const RK_S32 result = RK_MPI_VI_QueryDevStatus(vi_device_, &status);
+        if (result != RK_SUCCESS || status.stSize.u32Width == 0 ||
+            status.stSize.u32Height == 0) {
+            backend_ = Backend::kNone;
+            target_ = AttachTarget::kNone;
+            *error = result == RK_SUCCESS
+                         ? "VI device reported an empty RGN coordinate size"
+                         : MpiError("RK_MPI_VI_QueryDevStatus", result);
+            return false;
+        }
+        target_width_ = static_cast<int>(status.stSize.u32Width);
+        target_height_ = static_cast<int>(status.stSize.u32Height);
+    }
     for (std::size_t index = 0; index < kRequestedBoxes * kEdgesPerBox; ++index) {
         const RGN_HANDLE handle = kFirstHandle + static_cast<RGN_HANDLE>(index);
         std::string create_error;
@@ -232,11 +254,15 @@ bool RgnManager::SetHandleLocked(std::size_t index, const OsdRegion& input,
     RGN_CHN_ATTR_S display{};
     display.bShow = show ? RK_TRUE : RK_FALSE;
     display.enType = backend_ == Backend::kLine ? LINE_RGN : COVER_RGN;
+    const OsdRegion scaled = ScaleOsdRegion(
+        input, frame_width_, frame_height_, target_width_, target_height_);
     const int minimum = backend_ == Backend::kCover ? kCoverThickness : 2;
-    const int x = ClampEven(input.x, 0, std::max(0, frame_width_ - minimum));
-    const int y = ClampEven(input.y, 0, std::max(0, frame_height_ - minimum));
-    const int right = ClampEven(input.x + input.width, x + minimum, frame_width_);
-    const int bottom = ClampEven(input.y + input.height, y + minimum, frame_height_);
+    const int x = ClampEven(scaled.x, 0, std::max(0, target_width_ - minimum));
+    const int y = ClampEven(scaled.y, 0, std::max(0, target_height_ - minimum));
+    const int right = ClampEven(scaled.x + scaled.width, x + minimum,
+                                target_width_);
+    const int bottom = ClampEven(scaled.y + scaled.height, y + minimum,
+                                 target_height_);
     if (backend_ == Backend::kLine) {
         auto& line = display.unChnAttr.stLineChn;
         line.u32Thick = kLineThickness;
@@ -249,10 +275,10 @@ bool RgnManager::SetHandleLocked(std::size_t index, const OsdRegion& input,
         auto& cover = display.unChnAttr.stCoverChn;
         const int width = std::max(
             kCoverThickness,
-            AlignDown(std::min(right - x, frame_width_ - x), kCoverThickness));
+            AlignDown(std::min(right - x, target_width_ - x), kCoverThickness));
         const int height = std::max(
             kCoverThickness,
-            AlignDown(std::min(bottom - y, frame_height_ - y), kCoverThickness));
+            AlignDown(std::min(bottom - y, target_height_ - y), kCoverThickness));
         cover.u32Color = kColor;
         cover.u32Layer = static_cast<RK_U32>(index);
         cover.enCoordinate = RGN_ABS_COOR;
@@ -332,6 +358,8 @@ void RgnManager::Deinit() {
     max_boxes_ = 0;
     backend_ = Backend::kNone;
     target_ = AttachTarget::kNone;
+    target_width_ = frame_width_;
+    target_height_ = frame_height_;
     initialized_ = false;
 }
 

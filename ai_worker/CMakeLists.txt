@@ -39,6 +39,21 @@ install(FILES
 
 if(AIPC_NATIVE_BUILD_TESTS)
     enable_testing()
+    add_executable(ai_worker_backend_tests
+        tests/backend_test.cpp
+        src/backend.cpp
+    )
+    target_include_directories(ai_worker_backend_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(ai_worker_backend_tests PRIVATE
+        Aipc::NativeOptions
+        Aipc::NativeCommon
+        nlohmann_json::nlohmann_json
+    )
+    target_compile_definitions(ai_worker_backend_tests PRIVATE
+        AIPC_ENABLE_VISIONG=0)
+    add_test(NAME ai_worker_backend_tests COMMAND ai_worker_backend_tests)
+
     add_test(
         NAME ai_worker_lua_validation
         COMMAND ai_worker
