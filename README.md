@@ -64,7 +64,8 @@ flowchart LR
 - AI VPSS 通道号、宽高、FPS、NV12、depth/buffer 和 fit mode 全部由激活项目 manifest 注入，已验证 `640×360/stretch` 与 `640×640/contain` 在线切换。
 - Lua 项目 CRUD、语法/manifest 校验、不可变候选部署、首次推理验收和 last-good 自动回滚；模型支持原子上传和活动引用保护。
 - VisionG v1.2.1 + YOLOv5n COCO80 RKNN 已在 RV1106 真机持续运行，640×640 推理约 75 ms、结果约 10 FPS。
-- OSD 三态：`off`、默认 `metadata`、`embedded_rgn`。metadata 通过 WebRTC DataChannel/SSE 平滑叠加；embedded 在 RV1106 使用 `COVER_RGN@VI`，可进入 WebRTC、RTSP 和 MP4，且不使用同步 RGA 合成。
+- VisionG 的 `(x, y, width, height)` 检测结果会转换为统一角点坐标，再依据 stretch/contain/cover 变换映射到主路归一化坐标，避免模型输入、letterbox 与输出画面尺寸不同造成框偏移。
+- OSD 三态：`off`、默认 `metadata`、`embedded_rgn`。metadata 通过 WebRTC DataChannel/SSE 平滑叠加；embedded 在 RV1106 使用 `COVER_RGN@VI`，运行时探测 VI 原始坐标尺寸并从主路坐标域缩放，可进入 WebRTC、RTSP 和 MP4，且不使用同步 RGA 合成。
 - ADB + 以太网/Wi-Fi 联合部署验证流程；已验证 HTTP、WebRTC、MP4/Range、ZIP、RTSP TCP/UDP、AI 崩溃恢复和 10 分钟持续运行。
 
 ## 功能实现矩阵
@@ -88,7 +89,7 @@ flowchart LR
 | RKNN 视觉模型推理 | 🧪 | ✅ | 🚧 | 🚧 | VisionG v1.2.1、YOLOv5、动态 640×360/640×640 AI VPSS |
 | AI worker 故障隔离 | 🧪 | ✅ | 🚧 | 🚧 | AI 独立重启，主 VPSS/VENC generation 保持不变 |
 | 浏览器 metadata OSD | 🧪 | ✅ | 🚧 | 🚧 | WebRTC DataChannel + SSE fallback、归一化坐标、插值/外推和过期淡出 |
-| 编码流硬件 RGN OSD | 🧪 | ✅ | 🚧 | 🚧 | RV1106 使用 COVER_RGN@VI；RTSP、WebRTC 和 MP4 均可带框 |
+| 编码流硬件 RGN OSD | 🧪 | ✅ | 🚧 | 🚧 | RV1106 使用 COVER_RGN@VI，动态探测并映射 VI 坐标域；RTSP、WebRTC 和 MP4 均可带框 |
 | RK3576 适配 | ⬜ | — | 🚧 | — | 待建立统一 SoC 媒体能力和构建抽象 |
 | RV1126B 适配 | ⬜ | — | — | 🚧 | 待验证 SDK、ISP、编码器和板端部署差异 |
 
@@ -183,7 +184,13 @@ daemon 当前未启用身份认证，只应暴露在可信局域网中。
 项目 manifest 是 AI 输入参数的唯一权威来源。切换输入尺寸时只在线重配 AI VPSS
 通道；失败会恢复 last-good 项目，不会重启主 VPSS、VENC 或 media worker。metadata
 只影响浏览器叠加，RTSP/MP4 保持原始画面；embedded 是全局硬件叠加，所有编码输出
-都会带矩形框。接口和协议细节见
+都会带矩形框。
+
+检测结果在进程间统一使用主路归一化坐标。AI worker 会将 VisionG 返回的 `xywh`
+转换为角点并反解模型输入的缩放、裁剪或 letterbox；media worker 则在启用硬件 RGN
+时查询 VI 的实际坐标尺寸（RV1106 实测为传感器原始坐标域），再按归一化边界完成
+缩放。这样浏览器 metadata、WebRTC、RTSP 和录像中的 embedded 框使用同一目标位置，
+且坐标转换不会进入 VENC 的同步关键路径。接口和协议细节见
 [`docs/ai_worker_lua_architecture.md`](./docs/ai_worker_lua_architecture.md)。
 
 ## 路线图

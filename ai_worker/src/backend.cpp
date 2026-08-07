@@ -1,7 +1,9 @@
 #include "backend.h"
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
+#include <utility>
 
 #if AIPC_ENABLE_VISIONG
 #include <visiong/core/ImageBuffer.h>
@@ -10,6 +12,13 @@
 
 namespace ai_worker {
 namespace {
+
+int SaturatingAdd(int value, int delta) {
+    const auto result = static_cast<long long>(value) +
+                        static_cast<long long>(std::max(0, delta));
+    return static_cast<int>(std::min(
+        result, static_cast<long long>(std::numeric_limits<int>::max())));
+}
 
 class MockBackend final : public Backend {
 public:
@@ -44,9 +53,12 @@ public:
         std::vector<DetectionResult> output;
         output.reserve(detections.size());
         for (const auto& detection : detections) {
-            const auto [x1, y1, x2, y2] = detection.box;
-            output.push_back({x1, y1, x2, y2, detection.score,
-                              detection.class_id, detection.label});
+            // VisionG exposes Detection.box as (x, y, width, height), while
+            // AIPR deliberately uses explicit corner coordinates.
+            const auto [x, y, width, height] = detection.box;
+            output.push_back(DetectionFromXywh(
+                x, y, width, height, detection.score, detection.class_id,
+                detection.label));
         }
         return output;
     }
@@ -59,6 +71,13 @@ private:
 #endif
 
 }  // namespace
+
+DetectionResult DetectionFromXywh(int x, int y, int width, int height,
+                                  float score, int class_id,
+                                  std::string label) {
+    return {x, y, SaturatingAdd(x, width), SaturatingAdd(y, height),
+            score, class_id, std::move(label)};
+}
 
 std::unique_ptr<Backend> CreateMockBackend() {
     return std::make_unique<MockBackend>();

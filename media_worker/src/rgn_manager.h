@@ -10,17 +10,12 @@
 
 #include <nlohmann/json.hpp>
 
+#include "rgn_coordinates.h"
+
 #include "rk_common.h"
 #include "rk_comm_rgn.h"
 
 namespace media_worker {
-
-struct OsdRegion {
-    int x = 0;
-    int y = 0;
-    int width = 0;
-    int height = 0;
-};
 
 class RgnManager {
 public:
@@ -56,6 +51,8 @@ private:
     int vi_device_;
     int frame_width_;
     int frame_height_;
+    int target_width_;
+    int target_height_;
     MPP_CHN_S channel_{};
     Backend backend_ = Backend::kNone;
     AttachTarget target_ = AttachTarget::kNone;
