@@ -1,26 +1,34 @@
+use crate::ai_manager::{AiManager, AiProjectDocument, OsdMode};
 use crate::config::WorkerConfig;
 use crate::preview::PreviewHub;
 use crate::recording::{RecordingManager, RecordingSettingsUpdate};
 use crate::rtsp::RtspServer;
 use crate::supervisor::{ActionAccepted, SupervisorError, SupervisorHandle};
+use crate::webrtc::{WebRtcError, WebRtcServer};
 use axum::Json;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Path as AxumPath, Query, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Multipart, Path as AxumPath, Query, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use futures_util::stream;
 use serde::Deserialize;
 use serde_json::json;
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, SeekFrom};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio_util::io::ReaderStream;
 use tower_http::services::{ServeDir, ServeFile};
+
+mod ai;
+mod zip64;
+use ai::*;
+use zip64::write_zip64;
 
 #[derive(Clone)]
 struct AppState {
@@ -28,12 +36,16 @@ struct AppState {
     preview: PreviewHub,
     recording: RecordingManager,
     rtsp: RtspServer,
+    webrtc: WebRtcServer,
+    ai: AiManager,
 }
 
 pub fn router(
     supervisor: SupervisorHandle,
     recording: RecordingManager,
     rtsp: RtspServer,
+    webrtc: WebRtcServer,
+    ai: AiManager,
     web_dir: &Path,
 ) -> Router {
     let index = web_dir.join("index.html");
@@ -41,6 +53,26 @@ pub fn router(
     Router::new()
         .route("/healthz", get(healthz))
         .route("/api/v1/status", get(status))
+        .route("/api/v1/ai/status", get(ai_status))
+        .route(
+            "/api/v1/ai/projects",
+            get(ai_projects).post(ai_project_create),
+        )
+        .route(
+            "/api/v1/ai/projects/{id}",
+            get(ai_project_get)
+                .put(ai_project_put)
+                .delete(ai_project_delete),
+        )
+        .route(
+            "/api/v1/ai/projects/{id}/validate",
+            post(ai_project_validate),
+        )
+        .route("/api/v1/ai/projects/{id}/deploy", post(ai_project_deploy))
+        .route("/api/v1/ai/models", get(ai_models).post(ai_model_upload))
+        .route("/api/v1/ai/models/{name}", delete(ai_model_delete))
+        .route("/api/v1/ai/osd", get(ai_osd).put(ai_osd_update))
+        .route("/api/v1/ai/events", get(ai_events))
         .route("/api/v1/config", get(config).put(apply_config))
         .route("/api/v1/worker/start", post(start))
         .route("/api/v1/worker/stop", post(stop))
@@ -69,13 +101,53 @@ pub fn router(
         .route("/api/v1/recordings/export", post(recordings_export))
         .route("/api/v1/recordings/delete", post(recordings_delete))
         .route("/api/v1/rtsp/status", get(rtsp_status))
+        .route("/api/v1/webrtc/status", get(webrtc_status))
+        .route("/api/v1/webrtc/sessions", post(webrtc_create))
+        .route(
+            "/api/v1/webrtc/sessions/{id}",
+            axum::routing::delete(webrtc_delete),
+        )
         .fallback_service(static_service)
         .with_state(AppState {
             preview: supervisor.preview.clone(),
             recording,
             rtsp,
+            webrtc,
+            ai,
             supervisor,
         })
+}
+
+#[derive(Deserialize)]
+struct WebRtcOffer {
+    r#type: String,
+    sdp: String,
+}
+
+async fn webrtc_status(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.webrtc.status())
+}
+
+async fn webrtc_create(
+    State(state): State<AppState>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    Json(offer): Json<WebRtcOffer>,
+) -> Result<impl IntoResponse, WebRtcApiError> {
+    if offer.r#type != "offer" || offer.sdp.trim().is_empty() {
+        return Err(WebRtcApiError(WebRtcError::InvalidOffer(
+            "body must contain type=offer and a non-empty SDP".into(),
+        )));
+    }
+    let answer = state.webrtc.create_session(offer.sdp, remote).await?;
+    Ok((StatusCode::CREATED, Json(answer)))
+}
+
+async fn webrtc_delete(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, WebRtcApiError> {
+    state.webrtc.delete_session(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn recording_settings(State(state): State<AppState>) -> impl IntoResponse {
@@ -328,148 +400,6 @@ async fn recordings_export(
         .body(Body::from_stream(ReaderStream::new(reader)))?)
 }
 
-struct ZipEntry {
-    name: Vec<u8>,
-    crc: u32,
-    size: u64,
-    offset: u64,
-}
-
-async fn write_zip64<W: AsyncWrite + Unpin>(
-    mut writer: W,
-    files: Vec<(String, PathBuf)>,
-) -> anyhow::Result<()> {
-    let mut entries = Vec::new();
-    let mut offset = 0_u64;
-    for (name, path) in files {
-        let safe_name: Vec<u8> = name
-            .bytes()
-            .map(|byte| {
-                if matches!(byte, b'/' | b'\\') {
-                    b'_'
-                } else {
-                    byte
-                }
-            })
-            .collect();
-        let local_offset = offset;
-        let mut header = Vec::new();
-        push_u32(&mut header, 0x04034b50);
-        push_u16(&mut header, 45);
-        push_u16(&mut header, 0x0008);
-        push_u16(&mut header, 0);
-        push_u16(&mut header, 0);
-        push_u16(&mut header, 0);
-        push_u32(&mut header, 0);
-        push_u32(&mut header, u32::MAX);
-        push_u32(&mut header, u32::MAX);
-        push_u16(&mut header, safe_name.len() as u16);
-        push_u16(&mut header, 20);
-        header.extend_from_slice(&safe_name);
-        push_u16(&mut header, 0x0001);
-        push_u16(&mut header, 16);
-        push_u64(&mut header, 0);
-        push_u64(&mut header, 0);
-        writer.write_all(&header).await?;
-        offset += header.len() as u64;
-        let mut file = tokio::fs::File::open(path).await?;
-        let mut buffer = vec![0_u8; 64 * 1024];
-        let mut hasher = crc32fast::Hasher::new();
-        let mut size = 0_u64;
-        loop {
-            let count = file.read(&mut buffer).await?;
-            if count == 0 {
-                break;
-            }
-            hasher.update(&buffer[..count]);
-            writer.write_all(&buffer[..count]).await?;
-            size += count as u64;
-            offset += count as u64;
-        }
-        let crc = hasher.finalize();
-        let mut descriptor = Vec::new();
-        push_u32(&mut descriptor, 0x08074b50);
-        push_u32(&mut descriptor, crc);
-        push_u64(&mut descriptor, size);
-        push_u64(&mut descriptor, size);
-        writer.write_all(&descriptor).await?;
-        offset += descriptor.len() as u64;
-        entries.push(ZipEntry {
-            name: safe_name,
-            crc,
-            size,
-            offset: local_offset,
-        });
-    }
-    let central_offset = offset;
-    for entry in &entries {
-        let mut header = Vec::new();
-        push_u32(&mut header, 0x02014b50);
-        push_u16(&mut header, 45);
-        push_u16(&mut header, 45);
-        push_u16(&mut header, 0x0008);
-        push_u16(&mut header, 0);
-        push_u16(&mut header, 0);
-        push_u16(&mut header, 0);
-        push_u32(&mut header, entry.crc);
-        push_u32(&mut header, u32::MAX);
-        push_u32(&mut header, u32::MAX);
-        push_u16(&mut header, entry.name.len() as u16);
-        push_u16(&mut header, 28);
-        push_u16(&mut header, 0);
-        push_u16(&mut header, 0);
-        push_u16(&mut header, 0);
-        push_u32(&mut header, 0);
-        push_u32(&mut header, u32::MAX);
-        header.extend_from_slice(&entry.name);
-        push_u16(&mut header, 0x0001);
-        push_u16(&mut header, 24);
-        push_u64(&mut header, entry.size);
-        push_u64(&mut header, entry.size);
-        push_u64(&mut header, entry.offset);
-        writer.write_all(&header).await?;
-        offset += header.len() as u64;
-    }
-    let central_size = offset - central_offset;
-    let zip64_offset = offset;
-    let mut ending = Vec::new();
-    push_u32(&mut ending, 0x06064b50);
-    push_u64(&mut ending, 44);
-    push_u16(&mut ending, 45);
-    push_u16(&mut ending, 45);
-    push_u32(&mut ending, 0);
-    push_u32(&mut ending, 0);
-    push_u64(&mut ending, entries.len() as u64);
-    push_u64(&mut ending, entries.len() as u64);
-    push_u64(&mut ending, central_size);
-    push_u64(&mut ending, central_offset);
-    push_u32(&mut ending, 0x07064b50);
-    push_u32(&mut ending, 0);
-    push_u64(&mut ending, zip64_offset);
-    push_u32(&mut ending, 1);
-    push_u32(&mut ending, 0x06054b50);
-    push_u16(&mut ending, 0);
-    push_u16(&mut ending, 0);
-    push_u16(&mut ending, u16::MAX);
-    push_u16(&mut ending, u16::MAX);
-    push_u32(&mut ending, u32::MAX);
-    push_u32(&mut ending, u32::MAX);
-    push_u16(&mut ending, 0);
-    writer.write_all(&ending).await?;
-    writer.shutdown().await?;
-    Ok(())
-}
-
-fn push_u16(output: &mut Vec<u8>, value: u16) {
-    output.extend_from_slice(&value.to_le_bytes());
-}
-fn push_u32(output: &mut Vec<u8>, value: u32) {
-    output.extend_from_slice(&value.to_le_bytes());
-}
-fn push_u64(output: &mut Vec<u8>, value: u64) {
-    output.extend_from_slice(&value.to_le_bytes());
-}
-
 async fn rtsp_status(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.rtsp.status())
 }
@@ -640,6 +570,33 @@ async fn logs(State(state): State<AppState>, Query(query): Query<LogsQuery>) -> 
 
 struct ApiError(SupervisorError);
 
+struct WebRtcApiError(WebRtcError);
+
+impl From<WebRtcError> for WebRtcApiError {
+    fn from(value: WebRtcError) -> Self {
+        Self(value)
+    }
+}
+
+impl IntoResponse for WebRtcApiError {
+    fn into_response(self) -> Response {
+        let (status, code) = match self.0 {
+            WebRtcError::Disabled => (StatusCode::SERVICE_UNAVAILABLE, "webrtc_disabled"),
+            WebRtcError::NotReady => (StatusCode::SERVICE_UNAVAILABLE, "webrtc_not_ready"),
+            WebRtcError::ClientLimit => (StatusCode::TOO_MANY_REQUESTS, "webrtc_client_limit"),
+            WebRtcError::InvalidOffer(_) => (StatusCode::BAD_REQUEST, "webrtc_invalid_offer"),
+            WebRtcError::Codec(_) => (StatusCode::BAD_REQUEST, "webrtc_codec"),
+            WebRtcError::NotFound => (StatusCode::NOT_FOUND, "webrtc_session_not_found"),
+            WebRtcError::Operation(_) => (StatusCode::INTERNAL_SERVER_ERROR, "webrtc_operation"),
+        };
+        (
+            status,
+            Json(json!({"error": {"code": code, "message": self.0.to_string()}})),
+        )
+            .into_response()
+    }
+}
+
 impl From<SupervisorError> for ApiError {
     fn from(value: SupervisorError) -> Self {
         Self(value)
@@ -671,7 +628,7 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DaemonConfig, RtspConfig};
+    use crate::config::{AiDaemonConfig, DaemonConfig, RtspConfig, WebRtcConfig};
     use crate::model::PersistentState;
     use crate::supervisor::spawn_supervisor;
     use axum::body::Body;
@@ -739,7 +696,29 @@ mod tests {
         )
         .await
         .unwrap();
-        let app = router(handle.clone(), recording, rtsp, temp.path());
+        let webrtc = WebRtcServer::start(
+            WebRtcConfig {
+                enabled: false,
+                ..WebRtcConfig::default()
+            },
+            handle.preview.clone(),
+            handle.events.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        let ai = AiManager::new(
+            AiDaemonConfig {
+                enabled: false,
+                ..AiDaemonConfig::default()
+            },
+            &settings.data_dir,
+            handle.ai.clone(),
+            handle.events.clone(),
+        )
+        .await
+        .unwrap();
+        let app = router(handle.clone(), recording, rtsp, webrtc, ai, temp.path());
         let response = app
             .clone()
             .oneshot(

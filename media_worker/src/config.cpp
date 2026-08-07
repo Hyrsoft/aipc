@@ -132,6 +132,16 @@ bool ParseCli(int argc, char* argv[], CliOptions* options, std::string* error) {
                             error)) {
                 return false;
             }
+        } else if (arg == "--ai-ipc-fd") {
+            if (!RequireInt(argc, argv, &i, "--ai-ipc-fd", &options->ai_ipc_fd,
+                            error)) {
+                return false;
+            }
+        } else if (arg == "--control-fd") {
+            if (!RequireInt(argc, argv, &i, "--control-fd", &options->control_fd,
+                            error)) {
+                return false;
+            }
         } else if (arg == "--no-audio") {
             options->no_audio = true;
         } else if (arg == "--validate-only") {
@@ -190,6 +200,17 @@ bool LoadConfigFile(const std::string& path, WorkerConfig* config, std::string* 
             ReadIfPresent(*it, "group_id", &config->vpss.group_id);
             ReadIfPresent(*it, "channel_id", &config->vpss.channel_id);
         }
+        if (auto it = root.find("ai_input"); it != root.end()) {
+            ReadIfPresent(*it, "enabled", &config->ai_input.enabled);
+            ReadIfPresent(*it, "channel_id", &config->ai_input.channel_id);
+            ReadIfPresent(*it, "width", &config->ai_input.width);
+            ReadIfPresent(*it, "height", &config->ai_input.height);
+            ReadIfPresent(*it, "fps", &config->ai_input.fps);
+            ReadIfPresent(*it, "pixel_format", &config->ai_input.pixel_format);
+            ReadIfPresent(*it, "fit_mode", &config->ai_input.fit_mode);
+            ReadIfPresent(*it, "buffer_count", &config->ai_input.buffer_count);
+            ReadIfPresent(*it, "depth", &config->ai_input.depth);
+        }
         if (auto it = root.find("video"); it != root.end()) {
             ReadIfPresent(*it, "enabled", &config->video.enabled);
             ReadIfPresent(*it, "width", &config->video.width);
@@ -237,6 +258,8 @@ void ApplyCliOverrides(const CliOptions& options, WorkerConfig* config) {
     if (options.iq_dir) config->isp.iq_dir = *options.iq_dir;
     if (options.video_ipc_fd) config->video.ipc_fd = *options.video_ipc_fd;
     if (options.audio_ipc_fd) config->audio.ipc_fd = *options.audio_ipc_fd;
+    if (options.ai_ipc_fd) config->ai_input.ipc_fd = *options.ai_ipc_fd;
+    if (options.control_fd) config->ai_input.control_fd = *options.control_fd;
     if (options.no_audio) config->audio.enabled = false;
 }
 
@@ -272,9 +295,39 @@ std::vector<std::string> ValidateConfig(const WorkerConfig& config) {
     require_range("video.gop", config.video.gop, 1, 300);
     require_range("vi.buffer_count", config.vi.buffer_count, 1, 16);
     require_range("video.stream_buffer_count", config.video.stream_buffer_count, 1, 16);
+    if (config.ai_input.enabled) {
+        require_range("ai_input.channel_id", config.ai_input.channel_id, 0, 3);
+        require_range("ai_input.width", config.ai_input.width, 2, 4096);
+        require_range("ai_input.height", config.ai_input.height, 2, 4096);
+        require_range("ai_input.fps", config.ai_input.fps, 1, config.video.fps);
+        require_range("ai_input.buffer_count", config.ai_input.buffer_count, 1, 8);
+        require_range("ai_input.depth", config.ai_input.depth, 0, 8);
+        if (config.ai_input.width % 2 != 0 || config.ai_input.height % 2 != 0) {
+            errors.push_back("ai_input width and height must be even for NV12");
+        }
+        if (config.ai_input.channel_id == config.vpss.channel_id) {
+            errors.push_back("ai_input.channel_id must differ from vpss.channel_id");
+        }
+        if (config.ai_input.pixel_format != "nv12") {
+            errors.push_back("ai_input.pixel_format must be nv12");
+        }
+        if (config.ai_input.fit_mode != "stretch" &&
+            config.ai_input.fit_mode != "contain" &&
+            config.ai_input.fit_mode != "cover") {
+            errors.push_back("ai_input.fit_mode must be stretch, contain, or cover");
+        }
+    }
     if (config.video.ipc_fd != -1 &&
         (config.video.ipc_fd < 3 || config.video.ipc_fd > 1024)) {
         errors.push_back("video IPC fd must be -1 or in [3, 1024]");
+    }
+    if (config.ai_input.ipc_fd != -1 &&
+        (config.ai_input.ipc_fd < 3 || config.ai_input.ipc_fd > 1024)) {
+        errors.push_back("AI IPC fd must be -1 or in [3, 1024]");
+    }
+    if (config.ai_input.control_fd != -1 &&
+        (config.ai_input.control_fd < 3 || config.ai_input.control_fd > 1024)) {
+        errors.push_back("control fd must be -1 or in [3, 1024]");
     }
 
     const int channel_values[] = {config.isp.camera_id, config.vi.device_id,
@@ -333,6 +386,8 @@ std::string Usage(const char* program_name) {
            << "  --iq-dir <path>          Override ISP IQ directory\n"
            << "  --video-ipc-fd <fd>      Publish framed H264 to inherited descriptor\n"
            << "  --audio-ipc-fd <fd>      Publish framed G711A to inherited descriptor\n"
+           << "  --ai-ipc-fd <fd>         Publish framed NV12 AI input to descriptor\n"
+           << "  --control-fd <fd>        Daemon media-control descriptor\n"
            << "  --no-audio               Disable AI/AENC pipeline\n"
            << "  --validate-only          Validate config without accessing hardware\n"
            << "  --help                   Show this help\n";

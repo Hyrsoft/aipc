@@ -11,9 +11,6 @@
 
 #include <unistd.h>
 
-#include "rk_mpi_sys.h"
-#include "sample_comm.h"
-
 namespace media_worker {
 
 MediaWorker::MediaWorker(WorkerConfig config)
@@ -38,45 +35,6 @@ bool MediaWorker::PreflightOutputs(std::string* error) {
     if (config_.audio.enabled && !config_.audio.output_path.empty() &&
         !check("audio", config_.audio.output_path)) return false;
     return true;
-}
-
-bool MediaWorker::InitSharedRuntime(std::string* error) {
-    events_.Emit("BootProgress", {{"stage", "isp_initializing"}});
-    RK_S32 result = SAMPLE_COMM_ISP_Init(config_.isp.camera_id, RK_AIQ_WORKING_MODE_NORMAL,
-                                         RK_FALSE, config_.isp.iq_dir.c_str());
-    if (result != RK_SUCCESS) {
-        *error = "SAMPLE_COMM_ISP_Init failed: " + std::to_string(result);
-        return false;
-    }
-    isp_initialized_ = true;
-    result = SAMPLE_COMM_ISP_Run(config_.isp.camera_id);
-    if (result != RK_SUCCESS) {
-        *error = "SAMPLE_COMM_ISP_Run failed: " + std::to_string(result);
-        return false;
-    }
-    isp_running_ = true;
-    events_.Emit("BootProgress", {{"stage", "isp_ready"}});
-
-    result = RK_MPI_SYS_Init();
-    if (result != RK_SUCCESS) {
-        *error = "RK_MPI_SYS_Init failed: " + std::to_string(result);
-        return false;
-    }
-    mpi_initialized_ = true;
-    events_.Emit("BootProgress", {{"stage", "mpi_ready"}});
-    return true;
-}
-
-void MediaWorker::DeinitSharedRuntime() {
-    if (mpi_initialized_) {
-        RK_MPI_SYS_Exit();
-        mpi_initialized_ = false;
-    }
-    if (isp_running_ || isp_initialized_) {
-        SAMPLE_COMM_ISP_Stop(config_.isp.camera_id);
-        isp_running_ = false;
-        isp_initialized_ = false;
-    }
 }
 
 void MediaWorker::RequestFatalStop(const std::string& message) {
@@ -145,7 +103,8 @@ int MediaWorker::Run(const std::function<bool()>& external_stop_requested) {
                                   {"exit_code", static_cast<int>(ExitCode::kInitializationError)}});
         return static_cast<int>(ExitCode::kInitializationError);
     }
-    if (!InitSharedRuntime(&error)) {
+    runtime_ = std::make_unique<MediaRuntime>(config_.isp, &events_);
+    if (!runtime_->Init(&error)) {
         events_.Emit("FatalError", {{"stage", "shared_runtime"}, {"message", error}});
         Shutdown();
         events_.Emit("Stopped", {{"reason", "initialization_error"},
@@ -173,6 +132,16 @@ int MediaWorker::Run(const std::function<bool()>& external_stop_requested) {
                 {{"reason", "initialization_error"},
                  {"exit_code", static_cast<int>(ExitCode::kInitializationError)}});
             return static_cast<int>(ExitCode::kInitializationError);
+        }
+    }
+
+    if (config_.ai_input.control_fd >= 0) {
+        control_service_ = std::make_unique<MediaControlService>(&config_, video_.get());
+        control_ = std::make_unique<MediaControl>(config_.ai_input.control_fd,
+            [this](const nlohmann::json& request) { return control_service_->Handle(request); });
+        if (!control_->Start()) {
+            events_.Emit("Warning", {{"media", "control"},
+                                      {"reason", "control_start_failed"}});
         }
     }
 
@@ -221,6 +190,11 @@ int MediaWorker::Run(const std::function<bool()>& external_stop_requested) {
 }
 
 void MediaWorker::Shutdown() {
+    if (control_) {
+        control_->Stop();
+        control_.reset();
+    }
+    control_service_.reset();
     if (audio_) audio_->Stop();
     if (video_) video_->Stop();
     if (audio_) {
@@ -231,7 +205,10 @@ void MediaWorker::Shutdown() {
         video_->Deinit();
         video_.reset();
     }
-    DeinitSharedRuntime();
+    if (runtime_) {
+        runtime_->Deinit();
+        runtime_.reset();
+    }
 }
 
 }  // namespace media_worker

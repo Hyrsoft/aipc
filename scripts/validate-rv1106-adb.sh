@@ -71,6 +71,8 @@ wait_running "${generation}"
 capture_preview 5
 curl -fsS "${BASE_URL}/api/v1/preview/status" | jq -e \
     '.available == true and .audio.available == true and .audio.stream.codec == "g711a"' >/dev/null
+curl -fsS "${BASE_URL}/api/v1/webrtc/status" | jq -e \
+    '.enabled == true and .listening == true and .video_available == true and .audio_available == true and .bind == "0.0.0.0:10000"' >/dev/null
 
 curl -fsS -X POST "${BASE_URL}/api/v1/recording/start" >"${WORK_DIR}/recording-start.json"
 sleep 5

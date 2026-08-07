@@ -1,0 +1,46 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../target/native/${presetName}/build",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "HostDebug",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/../target/native/HostDebug/install",
+        "AIPC_ENABLE_RV1106": "OFF",
+        "AIPC_NATIVE_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "RV1106Release",
+      "inherits": "base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/luckfox-rv1106.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/../target/native/RV1106Release/install",
+        "AIPC_ENABLE_RV1106": "ON",
+        "AIPC_NATIVE_BUILD_TESTS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "HostDebug", "configurePreset": "HostDebug" },
+    { "name": "RV1106Release", "configurePreset": "RV1106Release" }
+  ],
+  "testPresets": [
+    {
+      "name": "HostDebug",
+      "configurePreset": "HostDebug",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

@@ -43,6 +43,8 @@ bool VideoPipeline::Init(std::string* error) {
             return false;
         }
     }
+    ai_input_ = std::make_unique<AiInputChannel>(config_.vpss, config_.video,
+                                                 config_.ai_input, events_);
     if (!InitVi(error) || !InitVpss(error) || !InitVenc(error) || !Bind(error)) {
         return false;
     }
@@ -152,6 +154,9 @@ bool VideoPipeline::InitVpss(std::string* error) {
         return false;
     }
     vpss_channel_enabled_ = true;
+    if (!ai_input_->ConfigureInitial(error)) {
+        return false;
+    }
     result = RK_MPI_VPSS_StartGrp(config_.vpss.group_id);
     if (result != RK_SUCCESS) {
         *error = MpiError("RK_MPI_VPSS_StartGrp", result);
@@ -187,6 +192,10 @@ bool VideoPipeline::InitVenc(std::string* error) {
         return false;
     }
     venc_created_ = true;
+    rgn_manager_ = std::make_unique<RgnManager>(
+        config_.video.venc_channel_id, config_.vpss.group_id,
+        config_.vpss.channel_id, config_.vi.device_id, config_.video.width,
+        config_.video.height);
     VENC_RECV_PIC_PARAM_S receive{};
     receive.s32RecvPicNum = -1;
     result = RK_MPI_VENC_StartRecvFrame(config_.video.venc_channel_id, &receive);
@@ -236,7 +245,44 @@ bool VideoPipeline::Start(std::string* error) {
         *error = std::string("cannot start video fetch thread: ") + exception.what();
         return false;
     }
-    return true;
+    return ai_input_->Start(error);
+}
+
+bool VideoPipeline::PauseAiFrames(std::string* error) {
+    return ai_input_->Pause(error);
+}
+
+bool VideoPipeline::ResumeAiFrames(std::string* error) {
+    return ai_input_->Resume(error);
+}
+
+bool VideoPipeline::ReconfigureAiInput(const AiInputConfig& next, std::string* error) {
+    return ai_input_->Reconfigure(next, error);
+}
+
+nlohmann::json VideoPipeline::ProbeRegionCapability(std::string* error) {
+    if (!rgn_manager_) {
+        *error = "VENC RGN manager is unavailable";
+        return {{"line", false}, {"cover", false}, {"implemented", false}};
+    }
+    return rgn_manager_->Probe(error);
+}
+
+bool VideoPipeline::SetOsdMode(const std::string& mode, std::string* error) {
+    if (!rgn_manager_) {
+        *error = "VENC RGN manager is unavailable";
+        return false;
+    }
+    return rgn_manager_->SetMode(mode, error);
+}
+
+bool VideoPipeline::UpdateRegions(const std::vector<OsdRegion>& regions, int ttl_ms,
+                                  std::string* error) {
+    if (!rgn_manager_) {
+        *error = "VENC RGN manager is unavailable";
+        return false;
+    }
+    return rgn_manager_->Update(regions, ttl_ms, error);
 }
 
 void VideoPipeline::FetchLoop() {
@@ -335,6 +381,7 @@ void VideoPipeline::Stop() {
     running_.store(false);
     if (fetch_thread_.joinable()) fetch_thread_.join();
     if (ipc_publisher_) ipc_publisher_->Stop();
+    if (ai_input_) ai_input_->Stop();
     if (output_ != nullptr) std::fflush(output_);
 }
 
@@ -344,11 +391,16 @@ nlohmann::json VideoPipeline::Stats() const {
     stats["ipc_bytes"] = ipc_publisher_ ? ipc_publisher_->Bytes() : 0;
     stats["ipc_drops"] = ipc_publisher_ ? ipc_publisher_->Drops() : 0;
     stats["ipc_errors"] = ipc_publisher_ ? ipc_publisher_->Errors() : 0;
+    stats["ai_input"] = ai_input_ ? ai_input_->Stats() : nlohmann::json::object();
     return stats;
 }
 
 void VideoPipeline::Deinit() {
     Stop();
+    if (rgn_manager_) {
+        rgn_manager_->Deinit();
+        rgn_manager_.reset();
+    }
     if (vpss_venc_bound_) {
         RK_MPI_SYS_UnBind(&vpss_channel_, &venc_channel_);
         vpss_venc_bound_ = false;
@@ -368,6 +420,10 @@ void VideoPipeline::Deinit() {
     if (vpss_started_) {
         RK_MPI_VPSS_StopGrp(config_.vpss.group_id);
         vpss_started_ = false;
+    }
+    if (ai_input_) {
+        ai_input_->Deinit();
+        ai_input_.reset();
     }
     if (vpss_channel_enabled_) {
         RK_MPI_VPSS_DisableChn(config_.vpss.group_id, config_.vpss.channel_id);

@@ -21,6 +21,8 @@ void TestDefaults() {
     media_worker::WorkerConfig config;
     Expect(config.video.width == 1920, "default width");
     Expect(config.audio.enabled, "audio enabled by default");
+    Expect(!config.ai_input.enabled, "AI input disabled until a manifest is active");
+    Expect(config.ai_input.channel_id == 1, "AI channel defaults to one");
     Expect(media_worker::ValidateConfig(config).empty(), "default config validates");
 }
 
@@ -67,6 +69,19 @@ void TestInvalidCli() {
     media_worker::CliOptions options;
     std::string error;
     Expect(!media_worker::ParseCli(3, argv, &options, &error), "invalid integer rejected");
+}
+
+void TestAiInputValidation() {
+    media_worker::WorkerConfig config;
+    config.ai_input.enabled = true;
+    config.ai_input.width = 640;
+    config.ai_input.height = 640;
+    Expect(media_worker::ValidateConfig(config).empty(), "640x640 AI input validates");
+    config.ai_input.channel_id = config.vpss.channel_id;
+    Expect(!media_worker::ValidateConfig(config).empty(), "AI/main VPSS collision rejected");
+    config.ai_input.channel_id = 1;
+    config.ai_input.fit_mode = "invalid";
+    Expect(!media_worker::ValidateConfig(config).empty(), "invalid fit mode rejected");
 }
 
 void TestValidateOnlyCli() {
@@ -125,6 +140,7 @@ int main() {
     TestCliOverrides();
     TestJsonAndValidation();
     TestInvalidCli();
+    TestAiInputValidation();
     TestValidateOnlyCli();
     TestVideoIpcFdCli();
     TestAudioIpcFdCli();

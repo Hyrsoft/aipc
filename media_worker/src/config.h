@@ -33,6 +33,20 @@ struct VpssConfig {
     int channel_id = 0;
 };
 
+struct AiInputConfig {
+    bool enabled = false;
+    int channel_id = 1;
+    int width = 640;
+    int height = 360;
+    int fps = 10;
+    std::string pixel_format = "nv12";
+    std::string fit_mode = "contain";
+    int buffer_count = 2;
+    int depth = 1;
+    int ipc_fd = -1;
+    int control_fd = -1;
+};
+
 struct VideoConfig {
     bool enabled = true;
     int width = 1920;
@@ -69,6 +83,7 @@ struct WorkerConfig {
     IspConfig isp;
     ViConfig vi;
     VpssConfig vpss;
+    AiInputConfig ai_input;
     VideoConfig video;
     AudioConfig audio;
 };
@@ -87,6 +102,8 @@ struct CliOptions {
     std::optional<std::string> iq_dir;
     std::optional<int> video_ipc_fd;
     std::optional<int> audio_ipc_fd;
+    std::optional<int> ai_ipc_fd;
+    std::optional<int> control_fd;
     bool no_audio = false;
     bool validate_only = false;
     bool help = false;

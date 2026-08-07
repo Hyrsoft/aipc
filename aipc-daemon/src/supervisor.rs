@@ -1,26 +1,28 @@
+use crate::ai::{AiHub, MediaControlClient, read_ai_frame_ipc};
 use crate::config::{DaemonConfig, WorkerConfig};
 use crate::model::{DaemonStatus, LogEntry, PersistentState, ProcessState, ServerEvent, now_ms};
 use crate::preview::{AudioStreamInfo, PreviewHub, StreamInfo, read_audio_ipc, read_video_ipc};
 use crate::store::StateStore;
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
+use nix::sys::signal::Signal;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream as StdUnixStream;
-use std::os::unix::process::ExitStatusExt;
-use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 use tracing::{error, info, warn};
-use uuid::Uuid;
+
+mod process_io;
+use process_io::{
+    new_generation, signal_process, spawn_stderr_reader, spawn_stdout_reader, spawn_waiter,
+    write_worker_config,
+};
 
 const LOG_CAPACITY: usize = 200;
 
@@ -52,6 +54,7 @@ pub struct SupervisorHandle {
     pub persistent: Arc<RwLock<PersistentState>>,
     pub logs: Arc<Mutex<VecDeque<LogEntry>>>,
     pub preview: PreviewHub,
+    pub ai: AiHub,
 }
 
 impl SupervisorHandle {
@@ -122,6 +125,7 @@ pub async fn spawn_supervisor(
     let persistent = Arc::new(RwLock::new(initial));
     let logs = Arc::new(Mutex::new(VecDeque::with_capacity(LOG_CAPACITY)));
     let preview = PreviewHub::new(settings.preview.clone(), events.clone());
+    let ai = AiHub::new(8 * 1024 * 1024, events.clone());
     let handle = SupervisorHandle {
         commands: command_tx,
         status: status_rx,
@@ -129,6 +133,7 @@ pub async fn spawn_supervisor(
         persistent: persistent.clone(),
         logs: logs.clone(),
         preview: preview.clone(),
+        ai: ai.clone(),
     };
     let mut actor = SupervisorActor {
         store: StateStore::new(&settings.data_dir),
@@ -141,6 +146,7 @@ pub async fn spawn_supervisor(
         persistent,
         logs,
         preview,
+        ai,
         running: None,
         after_stop: None,
         restart_times: VecDeque::new(),
@@ -222,6 +228,7 @@ struct SupervisorActor {
     persistent: Arc<RwLock<PersistentState>>,
     logs: Arc<Mutex<VecDeque<LogEntry>>>,
     preview: PreviewHub,
+    ai: AiHub,
     running: Option<RunningProcess>,
     after_stop: Option<PendingStart>,
     restart_times: VecDeque<Instant>,
@@ -464,6 +471,7 @@ impl SupervisorActor {
         let video_ipc_pair = if self.preview.enabled()
             || self.settings.recording.enabled
             || self.settings.rtsp.enabled
+            || self.settings.webrtc.enabled
         {
             let (parent, child) = StdUnixStream::pair().map_err(|error| error.to_string())?;
             parent
@@ -474,8 +482,32 @@ impl SupervisorActor {
             None
         };
         let audio_ipc_pair = if pending.config.audio.enabled
-            && (self.preview.enabled() || self.settings.recording.enabled)
+            && (self.preview.enabled()
+                || self.settings.recording.enabled
+                || self.settings.webrtc.enabled)
         {
+            let (parent, child) = StdUnixStream::pair().map_err(|error| error.to_string())?;
+            parent
+                .set_nonblocking(true)
+                .map_err(|error| error.to_string())?;
+            Some((parent, child))
+        } else {
+            None
+        };
+        // FD 5/6 are daemon-level contracts, not a reflection of whether the
+        // current media-worker boot configuration has an active AI channel.
+        // The worker must be able to boot with AI disabled and later accept the
+        // active Lua manifest through the control channel without a restart.
+        let ai_ipc_pair = if self.settings.ai.enabled {
+            let (parent, child) = StdUnixStream::pair().map_err(|error| error.to_string())?;
+            parent
+                .set_nonblocking(true)
+                .map_err(|error| error.to_string())?;
+            Some((parent, child))
+        } else {
+            None
+        };
+        let control_pair = if self.settings.ai.enabled {
             let (parent, child) = StdUnixStream::pair().map_err(|error| error.to_string())?;
             parent
                 .set_nonblocking(true)
@@ -486,6 +518,8 @@ impl SupervisorActor {
         };
         let video_ipc_child_fd = video_ipc_pair.as_ref().map(|(_, child)| child.as_raw_fd());
         let audio_ipc_child_fd = audio_ipc_pair.as_ref().map(|(_, child)| child.as_raw_fd());
+        let ai_ipc_child_fd = ai_ipc_pair.as_ref().map(|(_, child)| child.as_raw_fd());
+        let control_child_fd = control_pair.as_ref().map(|(_, child)| child.as_raw_fd());
         command
             .arg("--config")
             .arg(&config_path)
@@ -501,25 +535,41 @@ impl SupervisorActor {
         if audio_ipc_child_fd.is_some() {
             command.arg("--audio-ipc-fd").arg("4");
         }
+        if ai_ipc_child_fd.is_some() {
+            command.arg("--ai-ipc-fd").arg("5");
+        }
+        if control_child_fd.is_some() {
+            command.arg("--control-fd").arg("6");
+        }
         unsafe {
             command.pre_exec(move || {
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                for (source_fd, target_fd) in [(video_ipc_child_fd, 3), (audio_ipc_child_fd, 4)] {
+                let mappings = [
+                    (video_ipc_child_fd, 3),
+                    (audio_ipc_child_fd, 4),
+                    (ai_ipc_child_fd, 5),
+                    (control_child_fd, 6),
+                ];
+                let mut temporary = [-1_i32; 4];
+                for (index, (source_fd, _)) in mappings.iter().enumerate() {
                     if let Some(source_fd) = source_fd {
-                        if source_fd == target_fd {
-                            let flags = libc::fcntl(target_fd, libc::F_GETFD);
-                            if flags < 0
-                                || libc::fcntl(target_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC)
-                                    < 0
-                            {
-                                return Err(std::io::Error::last_os_error());
-                            }
-                        } else if libc::dup2(source_fd, target_fd) < 0 {
+                        temporary[index] =
+                            libc::fcntl(*source_fd, libc::F_DUPFD_CLOEXEC, 10 + index as i32);
+                        if temporary[index] < 0 {
                             return Err(std::io::Error::last_os_error());
                         }
                     }
+                }
+                for (index, (_, target_fd)) in mappings.iter().enumerate() {
+                    if temporary[index] < 0 {
+                        continue;
+                    }
+                    if libc::dup2(temporary[index], *target_fd) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    libc::close(temporary[index]);
                 }
                 Ok(())
             });
@@ -554,6 +604,25 @@ impl SupervisorActor {
             let stream =
                 tokio::net::UnixStream::from_std(parent).map_err(|error| error.to_string())?;
             tokio::spawn(read_audio_ipc(stream, self.preview.clone(), info));
+        }
+        if let Some((parent, child_side)) = ai_ipc_pair {
+            drop(child_side);
+            self.ai
+                .begin_generation(pending.generation.clone(), pending.config.ai_input.clone());
+            let stream =
+                tokio::net::UnixStream::from_std(parent).map_err(|error| error.to_string())?;
+            tokio::spawn(read_ai_frame_ipc(
+                stream,
+                self.ai.clone(),
+                pending.generation.clone(),
+            ));
+        }
+        if let Some((parent, child_side)) = control_pair {
+            drop(child_side);
+            let stream =
+                tokio::net::UnixStream::from_std(parent).map_err(|error| error.to_string())?;
+            self.ai
+                .set_control(MediaControlClient::new(pending.generation.clone(), stream));
         }
         let pid = child
             .id()
@@ -974,89 +1043,6 @@ impl SupervisorActor {
     }
 }
 
-async fn write_worker_config(path: &Path, config: &WorkerConfig) -> anyhow::Result<()> {
-    let data = serde_json::to_vec_pretty(config)?;
-    tokio::fs::write(path, data).await?;
-    Ok(())
-}
-
-fn spawn_stdout_reader(
-    stdout: tokio::process::ChildStdout,
-    generation: String,
-    sender: mpsc::Sender<ProcessMessage>,
-) {
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let message = match serde_json::from_str(&line) {
-                Ok(value) => ProcessMessage::Event {
-                    generation: generation.clone(),
-                    value,
-                },
-                Err(_) => ProcessMessage::InvalidEvent {
-                    generation: generation.clone(),
-                    line,
-                },
-            };
-            if sender.send(message).await.is_err() {
-                break;
-            }
-        }
-    });
-}
-
-fn spawn_stderr_reader(
-    stderr: tokio::process::ChildStderr,
-    generation: String,
-    sender: mpsc::Sender<ProcessMessage>,
-) {
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if sender
-                .send(ProcessMessage::Stderr {
-                    generation: generation.clone(),
-                    line,
-                })
-                .await
-                .is_err()
-            {
-                break;
-            }
-        }
-    });
-}
-
-fn spawn_waiter(
-    mut child: tokio::process::Child,
-    generation: String,
-    sender: mpsc::Sender<ProcessMessage>,
-) {
-    tokio::spawn(async move {
-        match child.wait().await {
-            Ok(status) => {
-                let _ = sender
-                    .send(ProcessMessage::Exited {
-                        generation,
-                        code: status.code(),
-                        signal: status.signal(),
-                    })
-                    .await;
-            }
-            Err(error) => warn!(%error, "failed waiting for worker process"),
-        }
-    });
-}
-
-fn signal_process(pid: u32, signal: Signal) -> Result<(), SupervisorError> {
-    kill(Pid::from_raw(pid as i32), signal)
-        .map_err(|error| SupervisorError::Operation(error.to_string()))
-}
-
-fn new_generation() -> String {
-    Uuid::new_v4().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1126,6 +1112,8 @@ while :; do sleep 1; done
         wait_for_state(&handle, ProcessState::Running).await;
         assert!(handle.status.borrow().video_ready);
         assert!(handle.status.borrow().audio_ready);
+        assert!(handle.ai.status().control_available);
+        assert_eq!(handle.ai.status().config.unwrap().enabled, false);
         wait_for_preview(&handle).await;
         assert!(handle.preview.status().available);
         assert_eq!(

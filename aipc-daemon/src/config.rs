@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -67,6 +68,36 @@ impl Default for ViConfig {
 pub struct VpssConfig {
     pub group_id: i32,
     pub channel_id: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AiInputConfig {
+    pub enabled: bool,
+    pub channel_id: i32,
+    pub width: i32,
+    pub height: i32,
+    pub fps: i32,
+    pub pixel_format: String,
+    pub fit_mode: String,
+    pub buffer_count: i32,
+    pub depth: i32,
+}
+
+impl Default for AiInputConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            channel_id: 1,
+            width: 640,
+            height: 360,
+            fps: 10,
+            pixel_format: "nv12".into(),
+            fit_mode: "contain".into(),
+            buffer_count: 2,
+            depth: 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -146,6 +177,7 @@ pub struct WorkerConfig {
     pub isp: IspConfig,
     pub vi: ViConfig,
     pub vpss: VpssConfig,
+    pub ai_input: AiInputConfig,
     pub video: VideoConfig,
     pub audio: AudioConfig,
 }
@@ -178,6 +210,53 @@ impl WorkerConfig {
             1,
             16,
         );
+        if self.ai_input.enabled {
+            range(
+                &mut errors,
+                "ai_input.channel_id",
+                self.ai_input.channel_id,
+                0,
+                3,
+            );
+            range(&mut errors, "ai_input.width", self.ai_input.width, 2, 4096);
+            range(
+                &mut errors,
+                "ai_input.height",
+                self.ai_input.height,
+                2,
+                4096,
+            );
+            range(
+                &mut errors,
+                "ai_input.fps",
+                self.ai_input.fps,
+                1,
+                self.video.fps,
+            );
+            range(
+                &mut errors,
+                "ai_input.buffer_count",
+                self.ai_input.buffer_count,
+                1,
+                8,
+            );
+            range(&mut errors, "ai_input.depth", self.ai_input.depth, 0, 8);
+            if self.ai_input.width % 2 != 0 || self.ai_input.height % 2 != 0 {
+                errors.push("ai_input width and height must be even for NV12".into());
+            }
+            if self.ai_input.channel_id == self.vpss.channel_id {
+                errors.push("ai_input.channel_id must differ from vpss.channel_id".into());
+            }
+            if self.ai_input.pixel_format != "nv12" {
+                errors.push("ai_input.pixel_format must be nv12".into());
+            }
+            if !matches!(
+                self.ai_input.fit_mode.as_str(),
+                "stretch" | "contain" | "cover"
+            ) {
+                errors.push("ai_input.fit_mode must be stretch, contain, or cover".into());
+            }
+        }
         if self.runtime.warning_timeout_count >= self.runtime.stalled_timeout_count
             || self.runtime.stalled_timeout_count >= self.runtime.fatal_timeout_count
         {
@@ -269,6 +348,30 @@ pub struct DaemonConfig {
     pub preview: PreviewConfig,
     pub recording: RecordingConfig,
     pub rtsp: RtspConfig,
+    pub webrtc: WebRtcConfig,
+    pub ai: AiDaemonConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AiDaemonConfig {
+    pub enabled: bool,
+    pub worker_path: PathBuf,
+    pub startup_timeout_ms: u64,
+    pub max_model_bytes: u64,
+    pub result_ttl_ms: u64,
+}
+
+impl Default for AiDaemonConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            worker_path: "ai_worker".into(),
+            startup_timeout_ms: 30_000,
+            max_model_bytes: 128 * 1024 * 1024,
+            result_ttl_ms: 500,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,6 +434,66 @@ pub struct RtspConfig {
     pub mtu: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebRtcConfig {
+    pub enabled: bool,
+    pub bind: String,
+    pub advertised_ip: Option<IpAddr>,
+    pub max_clients: usize,
+    pub mtu: usize,
+    pub connect_timeout_ms: u64,
+    pub idle_timeout_ms: u64,
+}
+
+impl Default for WebRtcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bind: "0.0.0.0:10000".into(),
+            advertised_ip: None,
+            max_clients: 4,
+            mtu: 1200,
+            connect_timeout_ms: 10_000,
+            idle_timeout_ms: 30_000,
+        }
+    }
+}
+
+impl WebRtcConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let bind: SocketAddr = self
+            .bind
+            .parse()
+            .map_err(|_| anyhow::anyhow!("webrtc.bind must be a socket address"))?;
+        if bind.port() == 0 {
+            anyhow::bail!("webrtc.bind port must be non-zero");
+        }
+        if !bind.is_ipv4() {
+            anyhow::bail!("webrtc.bind must use IPv4 in the LAN-only release");
+        }
+        if self
+            .advertised_ip
+            .is_some_and(|value| value.is_unspecified())
+        {
+            anyhow::bail!("webrtc.advertised_ip must not be unspecified");
+        }
+        if self.advertised_ip.is_some_and(|value| !value.is_ipv4()) {
+            anyhow::bail!("webrtc.advertised_ip must use IPv4 in the LAN-only release");
+        }
+        if self.max_clients == 0 {
+            anyhow::bail!("webrtc.max_clients must be greater than zero");
+        }
+        if !(656..=1500).contains(&self.mtu) {
+            anyhow::bail!("webrtc.mtu must be in [656, 1500]");
+        }
+        if self.connect_timeout_ms == 0 || self.idle_timeout_ms == 0 {
+            anyhow::bail!("webrtc timeouts must be greater than zero");
+        }
+        Ok(())
+    }
+}
+
 impl Default for RtspConfig {
     fn default() -> Self {
         Self {
@@ -360,6 +523,8 @@ impl Default for DaemonConfig {
             preview: PreviewConfig::default(),
             recording: RecordingConfig::default(),
             rtsp: RtspConfig::default(),
+            webrtc: WebRtcConfig::default(),
+            ai: AiDaemonConfig::default(),
         }
     }
 }
@@ -377,6 +542,7 @@ impl DaemonConfig {
         config.data_dir = resolve(executable_dir, &config.data_dir);
         config.runtime_dir = resolve(executable_dir, &config.runtime_dir);
         config.seed_config = resolve(executable_dir, &config.seed_config);
+        config.ai.worker_path = resolve(executable_dir, &config.ai.worker_path);
         config.recording.directory = resolve(executable_dir, &config.recording.directory);
         config.recording.allowed_roots = config
             .recording
@@ -384,6 +550,7 @@ impl DaemonConfig {
             .iter()
             .map(|path| resolve(executable_dir, path))
             .collect();
+        config.webrtc.validate()?;
         Ok(config)
     }
 }
@@ -423,5 +590,21 @@ mod tests {
         let errors = config.validate();
         assert!(errors.iter().any(|item| item.contains("even")));
         assert!(errors.iter().any(|item| item.contains("G711A")));
+    }
+
+    #[test]
+    fn validates_webrtc_settings() {
+        assert!(WebRtcConfig::default().validate().is_ok());
+        let mut config = WebRtcConfig {
+            bind: "0.0.0.0:0".into(),
+            ..WebRtcConfig::default()
+        };
+        assert!(config.validate().is_err());
+        config.bind = "0.0.0.0:10000".into();
+        config.max_clients = 0;
+        assert!(config.validate().is_err());
+        config.max_clients = 1;
+        config.advertised_ip = Some("0.0.0.0".parse().unwrap());
+        assert!(config.validate().is_err());
     }
 }

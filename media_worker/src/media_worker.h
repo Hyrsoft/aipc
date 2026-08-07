@@ -10,6 +10,9 @@
 #include "config.h"
 #include "event_emitter.h"
 #include "metrics_sampler.h"
+#include "media_control.h"
+#include "media_control_service.h"
+#include "media_runtime.h"
 #include "video_pipeline.h"
 
 namespace media_worker {
@@ -30,8 +33,6 @@ public:
 
 private:
     bool PreflightOutputs(std::string* error);
-    bool InitSharedRuntime(std::string* error);
-    void DeinitSharedRuntime();
     void RequestFatalStop(const std::string& message);
     std::string RuntimeError() const;
     void EmitMetrics(double elapsed_seconds);
@@ -41,12 +42,12 @@ private:
     EventEmitter events_;
     std::unique_ptr<VideoPipeline> video_;
     std::unique_ptr<AudioPipeline> audio_;
+    std::unique_ptr<MediaControl> control_;
+    std::unique_ptr<MediaControlService> control_service_;
+    std::unique_ptr<MediaRuntime> runtime_;
     std::atomic<bool> stop_requested_{false};
     mutable std::mutex error_mutex_;
     std::string runtime_error_;
-    bool isp_initialized_ = false;
-    bool isp_running_ = false;
-    bool mpi_initialized_ = false;
     MetricsSampler video_metrics_sampler_;
     MetricsSampler audio_metrics_sampler_;
 };

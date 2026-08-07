@@ -1,3 +1,5 @@
+mod ai;
+mod ai_manager;
 mod api;
 mod config;
 mod model;
@@ -6,6 +8,7 @@ mod recording;
 mod rtsp;
 mod store;
 mod supervisor;
+mod webrtc;
 
 use anyhow::{Context, bail};
 use clap::Parser;
@@ -63,11 +66,33 @@ async fn main() -> anyhow::Result<()> {
         .max(settings.recording.queue_capacity);
 
     let store = StateStore::new(&settings.data_dir);
-    let initial = match store.load().await? {
+    let mut initial = match store.load().await? {
         Some(state) => state,
         None => PersistentState::new(load_seed(&settings.seed_config).await?),
     };
+    // The active Lua manifest is the sole authority for the AI VPSS channel.
+    // Always boot the media worker with the side channel disabled; AiManager
+    // restores a persisted project online after FD 6 becomes ready.
+    for config in [
+        initial.desired.as_mut(),
+        initial.active.as_mut(),
+        initial.pending.as_mut(),
+        initial.last_good.as_mut(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        config.ai_input.enabled = false;
+    }
     let supervisor = spawn_supervisor(settings.clone(), initial).await;
+    let ai = ai_manager::AiManager::new(
+        settings.ai.clone(),
+        &settings.data_dir,
+        supervisor.ai.clone(),
+        supervisor.events.clone(),
+    )
+    .await?;
+    ai.start_persisted();
     let recording = recording::RecordingManager::new(
         settings.recording.clone(),
         &settings.data_dir,
@@ -81,10 +106,19 @@ async fn main() -> anyhow::Result<()> {
         supervisor.events.clone(),
     )
     .await?;
+    let webrtc = webrtc::WebRtcServer::start(
+        settings.webrtc.clone(),
+        supervisor.preview.clone(),
+        supervisor.events.clone(),
+        Some(ai.clone()),
+    )
+    .await?;
     let app = api::router(
         supervisor.clone(),
         recording.clone(),
         rtsp.clone(),
+        webrtc.clone(),
+        ai.clone(),
         &settings.web_dir,
     );
     let listener = TcpListener::bind(&settings.bind)
@@ -92,12 +126,17 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("bind HTTP server at {}", settings.bind))?;
     info!(bind = %settings.bind, "aipc daemon ready (trusted LAN, authentication disabled)");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     info!("HTTP shutdown requested; stopping media worker");
     recording.shutdown().await;
     rtsp.shutdown().await;
+    webrtc.shutdown().await;
+    ai.shutdown().await;
     supervisor.shutdown().await;
     Ok(())
 }

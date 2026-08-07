@@ -4,12 +4,15 @@
 #include <cstdio>
 #include <functional>
 #include <string>
-#include <thread>
+#include <vector>
 #include <memory>
+#include <thread>
 
+#include "ai_input_channel.h"
 #include "config.h"
 #include "event_emitter.h"
 #include "pipeline_stats.h"
+#include "rgn_manager.h"
 #include "video_ipc_publisher.h"
 
 #include "rk_common.h"
@@ -28,6 +31,13 @@ public:
 
     bool Init(std::string* error);
     bool Start(std::string* error);
+    bool ReconfigureAiInput(const AiInputConfig& config, std::string* error);
+    bool PauseAiFrames(std::string* error);
+    bool ResumeAiFrames(std::string* error);
+    nlohmann::json ProbeRegionCapability(std::string* error);
+    bool SetOsdMode(const std::string& mode, std::string* error);
+    bool UpdateRegions(const std::vector<OsdRegion>& regions, int ttl_ms,
+                       std::string* error);
     void Stop();
     void Deinit();
     nlohmann::json Stats() const;
@@ -50,6 +60,8 @@ private:
     std::atomic<bool> ready_reported_{false};
     std::thread fetch_thread_;
     std::unique_ptr<VideoIpcPublisher> ipc_publisher_;
+    std::unique_ptr<AiInputChannel> ai_input_;
+    std::unique_ptr<RgnManager> rgn_manager_;
     std::uint64_t ipc_sequence_ = 0;
     std::FILE* output_ = nullptr;
 

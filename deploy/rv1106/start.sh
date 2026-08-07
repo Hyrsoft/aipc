@@ -9,6 +9,22 @@ CONFIG_PATH=${AIPC_DAEMON_CONFIG:-"${APP_DIR}/config/aipc-daemon.json"}
 mkdir -p "${APP_DIR}/data"
 export LD_LIBRARY_PATH="${APP_DIR}/lib:/oem/usr/lib:/oem/lib:${LD_LIBRARY_PATH:-}"
 
+mkdir -p "${APP_DIR}/data/ai/projects" "${APP_DIR}/data/ai/models"
+if [ -d "${APP_DIR}/seed/ai/projects" ]; then
+    for project in "${APP_DIR}"/seed/ai/projects/*; do
+        [ -d "${project}" ] || continue
+        target="${APP_DIR}/data/ai/projects/$(basename "${project}")"
+        [ -e "${target}" ] || cp -a "${project}" "${target}"
+    done
+fi
+if [ -d "${APP_DIR}/seed/ai/models" ]; then
+    for model in "${APP_DIR}"/seed/ai/models/*; do
+        [ -f "${model}" ] || continue
+        target="${APP_DIR}/data/ai/models/$(basename "${model}")"
+        [ -e "${target}" ] || cp -a "${model}" "${target}"
+    done
+fi
+
 rm -f /tmp/media_worker_video.h264 /tmp/media_worker_audio.g711a
 
 # Migrate only the historical daemon defaults. Explicit recording paths chosen by
@@ -21,6 +37,7 @@ if [ -f "${STATE_PATH}" ]; then
         "${STATE_PATH}"
 fi
 
+pkill -TERM ai_worker >/dev/null 2>&1 || true
 pkill -TERM media_worker >/dev/null 2>&1 || true
 if [ -x /oem/usr/bin/RkLunch-stop.sh ]; then
     /oem/usr/bin/RkLunch-stop.sh >/dev/null 2>&1 || true

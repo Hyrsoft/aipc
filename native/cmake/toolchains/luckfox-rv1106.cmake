@@ -1,0 +1,35 @@
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR arm)
+
+get_filename_component(_repo_root "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+get_filename_component(_default_sdk_root "${_repo_root}/.." ABSOLUTE)
+
+if(DEFINED ENV{AIPC_SDK_ROOT} AND NOT "$ENV{AIPC_SDK_ROOT}" STREQUAL "")
+    set(AIPC_SDK_ROOT "$ENV{AIPC_SDK_ROOT}" CACHE PATH "Luckfox Pico SDK root")
+elseif(DEFINED ENV{LUCKFOX_SDK_ROOT} AND NOT "$ENV{LUCKFOX_SDK_ROOT}" STREQUAL "")
+    set(AIPC_SDK_ROOT "$ENV{LUCKFOX_SDK_ROOT}" CACHE PATH "Luckfox Pico SDK root")
+else()
+    set(AIPC_SDK_ROOT "${_default_sdk_root}" CACHE PATH "Luckfox Pico SDK root")
+endif()
+
+set(_toolchain_dir
+    "${AIPC_SDK_ROOT}/tools/linux/toolchain/arm-rockchip830-linux-uclibcgnueabihf")
+set(_tool_prefix "${_toolchain_dir}/bin/arm-rockchip830-linux-uclibcgnueabihf")
+foreach(tool gcc g++ ar ranlib strip)
+    if(NOT EXISTS "${_tool_prefix}-${tool}")
+        message(FATAL_ERROR "Luckfox cross compiler tool missing: ${_tool_prefix}-${tool}")
+    endif()
+endforeach()
+
+set(CMAKE_C_COMPILER "${_tool_prefix}-gcc")
+set(CMAKE_CXX_COMPILER "${_tool_prefix}-g++")
+set(CMAKE_AR "${_tool_prefix}-ar")
+set(CMAKE_RANLIB "${_tool_prefix}-ranlib")
+set(CMAKE_STRIP "${_tool_prefix}-strip")
+set(CMAKE_SYSROOT
+    "${_toolchain_dir}/arm-rockchip830-linux-uclibcgnueabihf/sysroot")
+set(CMAKE_LINK_DEPENDS_NO_SHARED TRUE)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
