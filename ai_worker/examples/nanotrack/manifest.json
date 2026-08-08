@@ -11,5 +11,5 @@
   "nms_threshold": 0.0,
   "max_detections": 1,
   "class_filter": [],
-  "options": {"auto_init": true, "center_width_ratio": 0.25, "center_height_ratio": 0.25, "max_lost_frames": 30, "position_smooth": 0.6, "max_scale_change": 1.05, "min_scale_change": 0.9, "runtime_guard": "three-model RKNN pipeline was not run after the board entered loader mode", "runtime_guard_ack": false}
+  "options": {"auto_init": true, "center_width_ratio": 0.25, "center_height_ratio": 0.25, "max_lost_frames": 30, "position_smooth": 0.6, "max_scale_change": 1.05, "min_scale_change": 0.9}
 }

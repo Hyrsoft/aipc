@@ -397,7 +397,16 @@ public:
         }
     }
 
-    json Infer(const Frame&, const json&) override { return json::array(); }
+    json Infer(const Frame& frame, const json&) override {
+        const bool ok = status_.value("ok", false);
+        json item = ObjectFromXywh(0, 0, static_cast<int>(frame.width),
+                                   static_cast<int>(frame.height), ok ? 1.0F : 0.0F,
+                                   0, "npu-clock", "status");
+        for (auto value = status_.begin(); value != status_.end(); ++value) {
+            item[value.key()] = value.value();
+        }
+        return json::array({std::move(item)});
+    }
     const char* Name() const override { return "visiong"; }
 
 private:

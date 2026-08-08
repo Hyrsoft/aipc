@@ -11,5 +11,5 @@
   "nms_threshold": 0.0,
   "max_detections": 16,
   "class_filter": [],
-  "options": {"box_threshold": 0.5, "use_dilate": true, "rec_fast_max_ratio": 9.0, "rec_fast_enable_fallback": true, "rec_fast_fallback_score_thresh": 0.2, "model_input_format": "rgb", "det_unclip_ratio": 1.6, "runtime_guard": "multi-model RKNN pipeline was not run after the board entered loader mode", "runtime_guard_ack": false}
+  "options": {"box_threshold": 0.5, "use_dilate": true, "rec_fast_max_ratio": 9.0, "rec_fast_enable_fallback": true, "rec_fast_fallback_score_thresh": 0.2, "model_input_format": "rgb", "det_unclip_ratio": 1.6}
 }
