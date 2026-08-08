@@ -514,7 +514,15 @@ impl AiManager {
             if !entry.file_type().await?.is_dir() {
                 continue;
             }
-            if let Ok(document) = self.get_project(&entry.file_name().to_string_lossy()).await {
+            let entry_name = entry.file_name();
+            let id = entry_name.to_string_lossy();
+            // A watchdog reset can interrupt an atomic PUT after the staging
+            // directory has been synced but before it is renamed. Hidden
+            // staging/backup directories are recovery artifacts, not projects.
+            if id.starts_with('.') {
+                continue;
+            }
+            if let Ok(document) = self.get_project(&id).await {
                 projects.push(AiProjectSummary {
                     id: document.manifest.id.clone(),
                     name: document.manifest.name.clone(),
