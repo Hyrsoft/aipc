@@ -23,7 +23,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(version, about = "RV1106 AIPC media worker supervisor")]
+#[command(version, about = "AIPC media worker supervisor")]
 struct Args {
     #[arg(long)]
     config: Option<PathBuf>,
@@ -120,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
         rtsp.clone(),
         webrtc.clone(),
         ai.clone(),
+        settings.ui.clone(),
         &settings.web_dir,
     );
     let listener = TcpListener::bind(&settings.bind)

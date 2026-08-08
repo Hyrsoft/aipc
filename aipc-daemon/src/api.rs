@@ -1,5 +1,5 @@
 use crate::ai_manager::{AiManager, AiProjectDocument, OsdMode};
-use crate::config::WorkerConfig;
+use crate::config::{UiConfig, WorkerConfig};
 use crate::preview::PreviewHub;
 use crate::recording::{RecordingManager, RecordingSettingsUpdate};
 use crate::rtsp::RtspServer;
@@ -14,7 +14,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use futures_util::stream;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -38,6 +38,7 @@ struct AppState {
     rtsp: RtspServer,
     webrtc: WebRtcServer,
     ai: AiManager,
+    ui: UiConfig,
 }
 
 pub fn router(
@@ -46,12 +47,14 @@ pub fn router(
     rtsp: RtspServer,
     webrtc: WebRtcServer,
     ai: AiManager,
+    ui: UiConfig,
     web_dir: &Path,
 ) -> Router {
     let index = web_dir.join("index.html");
     let static_service = ServeDir::new(web_dir).fallback(ServeFile::new(index));
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/api/v1/about", get(about))
         .route("/api/v1/status", get(status))
         .route("/api/v1/ai/status", get(ai_status))
         .route(
@@ -117,8 +120,23 @@ pub fn router(
             rtsp,
             webrtc,
             ai,
+            ui,
             supervisor,
         })
+}
+
+#[derive(Serialize)]
+struct AboutResponse {
+    #[serde(flatten)]
+    ui: UiConfig,
+    daemon_version: &'static str,
+}
+
+async fn about(State(state): State<AppState>) -> impl IntoResponse {
+    Json(AboutResponse {
+        ui: state.ui,
+        daemon_version: env!("CARGO_PKG_VERSION"),
+    })
 }
 
 #[derive(Deserialize)]
@@ -758,12 +776,18 @@ mod tests {
         )
         .await
         .unwrap();
+        let ui = UiConfig {
+            platform_name: "RK3576".into(),
+            board_name: "Development board".into(),
+            ..UiConfig::default()
+        };
         let app = router(
             handle.clone(),
             recording,
             rtsp,
             webrtc,
             ai.clone(),
+            ui,
             temp.path(),
         );
         let response = app
@@ -777,6 +801,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/about")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let about: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(about["project_name"], "AIPC");
+        assert_eq!(about["platform_name"], "RK3576");
+        assert_eq!(about["board_name"], "Development board");
+        assert_eq!(about["daemon_version"], env!("CARGO_PKG_VERSION"));
 
         let mut invalid = WorkerConfig::default();
         invalid.video.width = 1;

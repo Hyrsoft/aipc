@@ -162,6 +162,11 @@ AIPC_SKIP_BUILD=1 ./scripts/deploy-rv1106-adb.sh
 
 daemon 当前未启用身份认证，只应暴露在可信局域网中。
 
+Web 控制台的平台名称、板卡名称、控制台标题和项目链接来自 daemon 配置的 `ui`
+段，而不是写死在前端。适配新平台时可修改部署目录中的 `config/aipc-daemon.json`，字段
+示例见 [`config/aipc-daemon.example.json`](./config/aipc-daemon.example.json)。“关于”页面
+会同步展示这些平台信息、三进程架构、当前能力和项目链接。
+
 ## AI、Lua 与 OSD 快速使用
 
 完整包第一次启动时会将 `yolov5-coco80` 示例项目、YOLOv5n RKNN 模型和 COCO80

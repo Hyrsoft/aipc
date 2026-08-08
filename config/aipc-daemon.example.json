@@ -10,6 +10,17 @@
   "stop_timeout_ms": 5000,
   "max_restarts": 5,
   "restart_window_sec": 300,
+  "ui": {
+    "project_name": "AIPC",
+    "console_name": "Media Console",
+    "platform_name": "RV1106",
+    "board_name": "Luckfox Pico Ultra W",
+    "project_url": "https://github.com/haoyn231/aipc",
+    "documentation_url": "https://github.com/haoyn231/aipc/tree/main/docs",
+    "visiong_url": "https://github.com/yiex/visiong",
+    "license_name": "Apache-2.0",
+    "license_url": "https://github.com/haoyn231/aipc/blob/main/LICENSE"
+  },
   "preview": {
     "enabled": true,
     "max_clients": 5,

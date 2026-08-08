@@ -153,6 +153,19 @@ export interface RecordingEntry {
 export interface RecordingList { items: RecordingEntry[]; total: number; offset: number; limit: number }
 export interface RtspStatus { enabled: boolean; listening: boolean; bind: string; path: string; clients: number; max_clients: number; last_error: string | null }
 
+export interface AboutInfo {
+  project_name: string
+  console_name: string
+  platform_name: string
+  board_name: string
+  project_url: string
+  documentation_url: string
+  visiong_url: string
+  license_name: string
+  license_url: string
+  daemon_version: string
+}
+
 export type AiOsdMode = 'off' | 'metadata' | 'embedded_rgn'
 export interface AiProjectManifest {
   id: string

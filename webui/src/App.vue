@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api, connectEvents, reduceServerEvent, type LiveState } from './api'
-import type { PersistentState, WorkerConfig } from './types'
+import type { AboutInfo, PersistentState, WorkerConfig } from './types'
 import { initialPreviewSnapshot } from './preview'
 import { AdaptivePreviewController } from './webrtcPreview'
 import { AiOverlayController } from './aiOverlay'
 import AiView from './AiView.vue'
+import AboutView from './AboutView.vue'
 import RecordingsView from './RecordingsView.vue'
 import {
   currentBitrate, currentVideoFps, eventLevel, eventName, eventSummary, matchesEventFilter,
@@ -14,6 +15,7 @@ import {
 } from './telemetry'
 
 const live = reactive<LiveState>({ status: null, events: [], logs: [] })
+const about = ref<AboutInfo | null>(null)
 const configs = ref<PersistentState | null>(null)
 const form = ref<WorkerConfig | null>(null)
 const connected = ref(false)
@@ -31,7 +33,8 @@ const eventViewport = ref<HTMLDivElement | null>(null)
 const eventFilter = ref<EventFilter>('all')
 const eventFilters: EventFilter[] = ['all', 'info', 'warn', 'error']
 const eventFollow = ref(true)
-const activeView = ref<'overview' | 'recordings' | 'ai' | 'settings' | 'diagnostics'>('overview')
+type AppView = 'overview' | 'recordings' | 'ai' | 'settings' | 'diagnostics' | 'about'
+const activeView = ref<AppView>('overview')
 const clockMs = ref(Date.now())
 const statusReceivedAtMs = ref(Date.now())
 let previewController: AdaptivePreviewController | undefined
@@ -39,6 +42,15 @@ let aiOverlay: AiOverlayController | undefined
 let clockTimer: number | undefined
 
 const status = computed(() => live.status)
+const viewMetadata: Record<AppView, { eyebrow: string; title: string }> = {
+  overview: { eyebrow: 'OVERVIEW', title: '运行概览' },
+  recordings: { eyebrow: 'RECORDINGS', title: '录像管理' },
+  ai: { eyebrow: 'AI WORKER', title: 'AI 与 Lua 管理' },
+  settings: { eyebrow: 'CONFIGURATION', title: '媒体配置' },
+  diagnostics: { eyebrow: 'DIAGNOSTICS', title: '日志诊断' },
+  about: { eyebrow: 'ABOUT', title: '关于 AIPC' },
+}
+const activeViewMetadata = computed(() => viewMetadata[activeView.value])
 const metrics = computed(() => status.value?.metrics)
 const videoMetrics = computed(() => metrics.value?.video)
 const audioMetrics = computed(() => metrics.value?.audio)
@@ -82,8 +94,10 @@ async function refreshConfig() {
 
 async function load() {
   try {
-    const [nextStatus, nextConfig, nextLogs] = await Promise.all([api.status(), api.config(), api.logs(100)])
+    const [nextStatus, nextConfig, nextLogs, nextAbout] = await Promise.all([api.status(), api.config(), api.logs(100), api.about()])
     live.status = nextStatus; live.logs = nextLogs; configs.value = nextConfig
+    about.value = nextAbout
+    document.title = `${nextAbout.project_name} ${nextAbout.console_name}`
     form.value = structuredClone(nextConfig.desired || nextConfig.last_good)
   } catch (cause) { error.value = String(cause) }
 }
@@ -181,13 +195,14 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); aiOverlay?
 <template>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">AI</span><div><p class="eyebrow">RV1106 CONTROL</p><h1>Media Console</h1></div></div>
+      <div class="brand"><span class="brand-mark">AI</span><div><p class="eyebrow">{{ about?.platform_name || 'AIPC' }} CONTROL</p><h1>{{ about?.console_name || 'Media Console' }}</h1></div></div>
       <nav class="nav-tabs" aria-label="主导航">
         <button :class="activeView === 'overview' && 'active'" @click="activeView = 'overview'"><span>01</span>运行概览</button>
         <button :class="activeView === 'recordings' && 'active'" @click="activeView = 'recordings'"><span>02</span>录像管理</button>
         <button :class="activeView === 'ai' && 'active'" @click="activeView = 'ai'"><span>03</span>AI 与 Lua</button>
         <button :class="activeView === 'settings' && 'active'" @click="activeView = 'settings'"><span>04</span>媒体配置</button>
         <button :class="activeView === 'diagnostics' && 'active'" @click="activeView = 'diagnostics'"><span>05</span>日志诊断<i v-if="live.events.some(event => eventLevel(event) === 'error')"></i></button>
+        <button :class="activeView === 'about' && 'active'" @click="activeView = 'about'"><span>06</span>关于</button>
       </nav>
       <div class="sidebar-meta">
         <div class="connection"><span :class="['dot', connected && 'online']"></span><div><b>{{ connected ? '服务已连接' : '正在重连' }}</b><small>SSE EVENT STREAM</small></div></div>
@@ -197,7 +212,7 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); aiOverlay?
 
     <main>
       <header class="topbar">
-        <div><p class="eyebrow">{{ activeView === 'overview' ? 'OVERVIEW' : activeView === 'recordings' ? 'RECORDINGS' : activeView === 'ai' ? 'AI WORKER' : activeView === 'settings' ? 'CONFIGURATION' : 'DIAGNOSTICS' }}</p><h2>{{ activeView === 'overview' ? '运行概览' : activeView === 'recordings' ? '录像管理' : activeView === 'ai' ? 'AI 与 Lua 管理' : activeView === 'settings' ? '媒体配置' : '日志诊断' }}</h2></div>
+        <div><p class="eyebrow">{{ activeViewMetadata.eyebrow }}</p><h2>{{ activeViewMetadata.title }}</h2></div>
         <div class="header-status"><span :class="['status-pill', status?.state]">{{ status?.state || 'offline' }}</span><span>运行 {{ uptime }}</span></div>
       </header>
 
@@ -246,12 +261,14 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); aiOverlay?
         <section class="panel config-versions"><div class="section-head"><div><span class="label">CONFIG HISTORY</span><h3>配置版本</h3><p>用于核对当前生效、待应用与最近可用配置。</p></div></div><div class="config-stack"><details v-for="row in configDiff" :key="row.name"><summary><b>{{ row.name }}</b><span>{{ short(row.value?.runtime.generation) }}</span></summary><pre>{{ JSON.stringify(row.value, null, 2) }}</pre></details></div><p v-if="configs?.last_error" class="rollback">最近回滚 / 错误：{{ configs.last_error }}</p></section>
       </template>
 
-      <template v-else>
+      <template v-else-if="activeView === 'diagnostics'">
         <section class="diagnostic-grid">
           <article class="panel terminal"><div class="section-head"><div><span class="label">WORKER STDERR</span><h3>运行日志</h3></div><span class="count">{{ live.logs.length }} / 200</span></div><div class="log-lines"><p v-for="(line, i) in live.logs.slice(-100)" :key="i"><time>{{ new Date(line.timestamp_ms).toLocaleTimeString() }}</time> {{ line.line }}</p><p v-if="!live.logs.length" class="empty-state">暂无 stderr 输出</p></div></article>
           <article class="panel events"><div class="section-head event-head"><div><span class="label">EVENT STREAM</span><h3>结构化事件</h3><p>{{ filteredEvents.length }} 条匹配事件</p></div><div class="event-tools"><div class="event-filters"><button v-for="filter in eventFilters" :key="filter" class="secondary compact" :class="eventFilter === filter && 'selected'" @click="eventFilter = filter">{{ filter }}</button></div><button v-if="!eventFollow" class="secondary compact" @click="resumeEventFollow">继续跟随</button><button class="secondary compact" @click="clearEvents">清空</button></div></div><div ref="eventViewport" class="event-lines" @scroll="handleEventScroll"><details v-for="(event, index) in filteredEvents" :key="`${event.timestamp_ms}-${event.kind}-${index}`" :class="['event-row', `event-${eventLevel(event)}`]"><summary><time>{{ new Date(event.timestamp_ms).toLocaleTimeString() }}</time><span class="event-level">{{ eventLevel(event) }}</span><b>{{ eventName(event) }}</b><span class="event-summary">{{ eventSummary(event) }}</span></summary><pre>{{ JSON.stringify(event.payload, null, 2) }}</pre></details><p v-if="!filteredEvents.length" class="empty-state">当前过滤条件下暂无事件</p></div></article>
         </section>
       </template>
+
+      <AboutView v-else-if="activeView === 'about'" :info="about" />
     </main>
   </div>
 </template>

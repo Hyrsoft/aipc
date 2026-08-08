@@ -1,5 +1,5 @@
 import { aiResultEventTypes } from './aiResults'
-import type { AiCloudEvent, AiModelInfo, AiOsdMode, AiProjectDocument, AiProjectSummary, AiStatus, DaemonStatus, LogEntry, PersistentState, RecordingList, RecordingSettings, RecordingStatus, RtspStatus, ServerEvent, WorkerConfig } from './types'
+import type { AboutInfo, AiCloudEvent, AiModelInfo, AiOsdMode, AiProjectDocument, AiProjectSummary, AiStatus, DaemonStatus, LogEntry, PersistentState, RecordingList, RecordingSettings, RecordingStatus, RtspStatus, ServerEvent, WorkerConfig } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -9,6 +9,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  about: () => request<AboutInfo>('/api/v1/about'),
   status: () => request<DaemonStatus>('/api/v1/status'),
   config: () => request<PersistentState>('/api/v1/config'),
   logs: (limit = 100) => request<LogEntry[]>(`/api/v1/logs?limit=${limit}`),
