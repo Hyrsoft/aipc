@@ -33,13 +33,19 @@ install -m 0755 "${NATIVE_INSTALL}/lib/libvisiong.so" \
 install -m 0755 "${RKNN_RUNTIME_DIR}/librknnmrt.so" \
     "${PACKAGE_DIR}/lib/librknnmrt.so"
 mkdir -p "${PACKAGE_DIR}/licenses/visiong" "${PACKAGE_DIR}/licenses/lua" \
-    "${PACKAGE_DIR}/seed/ai/projects" "${PACKAGE_DIR}/seed/ai/models"
+    "${PACKAGE_DIR}/licenses/models" "${PACKAGE_DIR}/seed/ai/projects" "${PACKAGE_DIR}/seed/ai/models"
 cp -a "${NATIVE_INSTALL}/licenses/visiong/." \
     "${PACKAGE_DIR}/licenses/visiong/"
 install -m 0644 "${NATIVE_INSTALL}/licenses/lua/readme.html" \
     "${PACKAGE_DIR}/licenses/lua/readme.html"
 install -m 0644 "${PROJECT_ROOT}/ai_worker/THIRD_PARTY.md" \
     "${PACKAGE_DIR}/licenses/AI_WORKER_THIRD_PARTY.md"
+install -m 0644 "${PROJECT_ROOT}/ai_worker/MODEL_RELEASE.json" \
+    "${PACKAGE_DIR}/licenses/models/manifest.json"
+install -m 0644 "${PROJECT_ROOT}/ai_worker/MODEL_RELEASE_README.md" \
+    "${PACKAGE_DIR}/licenses/models/README.md"
+install -m 0644 "${PROJECT_ROOT}/ai_worker/MODEL_RELEASE_SHA256SUMS" \
+    "${PACKAGE_DIR}/licenses/models/SHA256SUMS"
 for source in "${PROJECT_ROOT}/ai_worker/examples"/*; do
     [ -d "${source}" ] || continue
     [ -f "${source}/manifest.json" ] || continue

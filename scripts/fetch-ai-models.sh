@@ -38,6 +38,4 @@ while read -r sha path; do
     mv "${MODEL_DIR}/.${name}.part" "${MODEL_DIR}/${name}"
 done <"${STAGING}/SHA256SUMS"
 
-cp "${STAGING}/manifest.json" "${MODEL_DIR}/.release-manifest.json.part"
-mv "${MODEL_DIR}/.release-manifest.json.part" "${MODEL_DIR}/release-manifest.json"
 echo "AI example resources ready from ${RELEASE_TAG} at ${MODEL_DIR}"
