@@ -37,11 +37,14 @@ Options ParseOptions(int argc, char* argv[]) {
             options.validate_only = true;
         } else if (argument == "--mock") {
             options.mock = true;
+        } else if (argument == "--probe-load") {
+            options.probe_load = true;
         } else {
             throw std::runtime_error("unknown option: " + argument);
         }
     }
-    if (options.project_dir.empty() || options.models_dir.empty()) {
+    if (!options.probe_load &&
+        (options.project_dir.empty() || options.models_dir.empty())) {
         throw std::runtime_error("--project-dir and --models-dir are required");
     }
     return options;
@@ -51,6 +54,10 @@ Options ParseOptions(int argc, char* argv[]) {
 
 int Run(int argc, char* argv[]) {
     const Options options = ParseOptions(argc, argv);
+    if (options.probe_load) {
+        std::cout << R"({"loaded":true,"worker":"ai_worker"})" << '\n';
+        return 0;
+    }
     const Manifest manifest = LoadManifest(options.project_dir);
     if (!fs::is_regular_file(options.project_dir / manifest.entry)) {
         throw std::runtime_error("Lua entry file does not exist");

@@ -411,12 +411,45 @@ pub struct DaemonConfig {
     pub max_restarts: usize,
     pub restart_window_sec: u64,
     pub watchdog: WatchdogConfig,
+    pub dependencies: DependencyConfig,
     pub ui: UiConfig,
     pub preview: PreviewConfig,
     pub recording: RecordingConfig,
     pub rtsp: RtspConfig,
     pub webrtc: WebRtcConfig,
     pub ai: AiDaemonConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DependencyConfig {
+    pub enabled: bool,
+    pub root: PathBuf,
+    pub max_upload_bytes: u64,
+}
+
+impl Default for DependencyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            root: "../data/dependencies".into(),
+            max_upload_bytes: 32 * 1024 * 1024,
+        }
+    }
+}
+
+impl DependencyConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.root.is_absolute(),
+            "dependencies.root must be absolute"
+        );
+        anyhow::ensure!(
+            (1024..=256 * 1024 * 1024).contains(&self.max_upload_bytes),
+            "dependencies.max_upload_bytes must be in [1024, 268435456]"
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -668,6 +701,7 @@ impl Default for DaemonConfig {
             max_restarts: 5,
             restart_window_sec: 300,
             watchdog: WatchdogConfig::default(),
+            dependencies: DependencyConfig::default(),
             ui: UiConfig::default(),
             preview: PreviewConfig::default(),
             recording: RecordingConfig::default(),
@@ -692,6 +726,7 @@ impl DaemonConfig {
         config.runtime_dir = resolve(executable_dir, &config.runtime_dir);
         config.seed_config = resolve(executable_dir, &config.seed_config);
         config.ai.worker_path = resolve(executable_dir, &config.ai.worker_path);
+        config.dependencies.root = resolve(executable_dir, &config.dependencies.root);
         config.recording.directory = resolve(executable_dir, &config.recording.directory);
         config.recording.allowed_roots = config
             .recording
@@ -700,6 +735,7 @@ impl DaemonConfig {
             .map(|path| resolve(executable_dir, path))
             .collect();
         config.watchdog.validate()?;
+        config.dependencies.validate()?;
         config.ai.validate()?;
         config.ui.validate()?;
         config.webrtc.validate()?;
@@ -749,16 +785,20 @@ mod tests {
         let mut config = WorkerConfig::default();
         config.ai_input.enabled = true;
         config.ai_input.width = 320;
-        assert!(config
-            .validate()
-            .iter()
-            .any(|item| item.contains("ai_input.width")));
+        assert!(
+            config
+                .validate()
+                .iter()
+                .any(|item| item.contains("ai_input.width"))
+        );
         config.ai_input.width = 640;
         config.ai_input.height = 240;
-        assert!(config
-            .validate()
-            .iter()
-            .any(|item| item.contains("ai_input.height")));
+        assert!(
+            config
+                .validate()
+                .iter()
+                .any(|item| item.contains("ai_input.height"))
+        );
     }
 
     #[test]

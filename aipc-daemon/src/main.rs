@@ -3,6 +3,7 @@ mod ai_manager;
 mod ai_results;
 mod api;
 mod config;
+mod dependencies;
 mod model;
 mod preview;
 mod recording;
@@ -86,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
     {
         config.ai_input.enabled = false;
     }
+    dependencies::DependencyManager::recover(&settings.dependencies).await?;
     let supervisor = spawn_supervisor(settings.clone(), initial).await;
     let ai = ai_manager::AiManager::new(
         settings.ai.clone(),
@@ -95,6 +97,16 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
     ai.start_persisted();
+    let dependencies = dependencies::DependencyManager::new(
+        settings.dependencies.clone(),
+        executable_dir,
+        settings.worker_path.clone(),
+        settings.ai.worker_path.clone(),
+        supervisor.clone(),
+        ai.clone(),
+        supervisor.events.clone(),
+    )
+    .await?;
     let recording = recording::RecordingManager::new(
         settings.recording.clone(),
         &settings.data_dir,
@@ -121,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
         rtsp.clone(),
         webrtc.clone(),
         ai.clone(),
+        dependencies,
         settings.ui.clone(),
         &settings.web_dir,
     );

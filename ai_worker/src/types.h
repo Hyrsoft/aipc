@@ -22,6 +22,7 @@ struct Options {
     int output_fd = 4;
     bool validate_only = false;
     bool mock = false;
+    bool probe_load = false;
 };
 
 struct Manifest {

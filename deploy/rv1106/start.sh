@@ -7,7 +7,8 @@ APP_DIR=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
 CONFIG_PATH=${AIPC_DAEMON_CONFIG:-"${APP_DIR}/config/aipc-daemon.json"}
 
 mkdir -p "${APP_DIR}/data"
-export LD_LIBRARY_PATH="${APP_DIR}/lib:/oem/usr/lib:/oem/lib:${LD_LIBRARY_PATH:-}"
+mkdir -p "${APP_DIR}/data/dependencies/active"
+export LD_LIBRARY_PATH="${APP_DIR}/data/dependencies/active:${APP_DIR}/lib:/oem/usr/lib:/oem/lib:${LD_LIBRARY_PATH:-}"
 
 mkdir -p "${APP_DIR}/data/ai/projects" "${APP_DIR}/data/ai/models"
 if [ -d "${APP_DIR}/seed/ai/projects" ]; then

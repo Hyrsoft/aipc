@@ -476,6 +476,47 @@ impl AiManager {
         self.inner.status.write().unwrap().state = AiProcessState::Stopped;
     }
 
+    pub async fn stop_for_maintenance(&self) -> Option<String> {
+        let _transition = self.inner.transition.lock().await;
+        let project = {
+            let state = self.inner.state.lock().await;
+            state
+                .active_project
+                .clone()
+                .or_else(|| state.last_good_project.clone())
+        };
+        self.stop_runtime().await;
+        self.inner.status.write().unwrap().state = AiProcessState::Stopped;
+        project
+    }
+
+    pub async fn start_for_maintenance(&self, project: Option<String>) -> anyhow::Result<()> {
+        let Some(project) = project else {
+            return Ok(());
+        };
+        let _transition = self.inner.transition.lock().await;
+        anyhow::ensure!(self.inner.config.enabled, "AI is disabled");
+        self.validate_project(&project).await?;
+        self.activate(&project, true).await
+    }
+
+    pub async fn restart_for_maintenance(&self) -> anyhow::Result<()> {
+        let project = {
+            let state = self.inner.state.lock().await;
+            state
+                .active_project
+                .clone()
+                .or_else(|| state.last_good_project.clone())
+        };
+        let Some(project) = project else {
+            return Ok(());
+        };
+        let _transition = self.inner.transition.lock().await;
+        anyhow::ensure!(self.inner.config.enabled, "AI is disabled");
+        self.validate_project(&project).await?;
+        self.activate(&project, true).await
+    }
+
     pub fn subscribe_metadata(&self) -> broadcast::Receiver<Arc<AiMetadata>> {
         self.inner.metadata.subscribe()
     }

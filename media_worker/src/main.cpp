@@ -30,6 +30,10 @@ int main(int argc, char* argv[]) {
         std::cerr << media_worker::Usage(argv[0]);
         return 0;
     }
+    if (options.probe_load) {
+        std::cout << R"({"loaded":true,"worker":"media_worker"})" << '\n';
+        return 0;
+    }
 
     media_worker::WorkerConfig config;
     if (!media_worker::LoadConfigFile(options.config_path, &config, &error)) {

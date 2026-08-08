@@ -146,6 +146,8 @@ bool ParseCli(int argc, char* argv[], CliOptions* options, std::string* error) {
             options->no_audio = true;
         } else if (arg == "--validate-only") {
             options->validate_only = true;
+        } else if (arg == "--probe-load") {
+            options->probe_load = true;
         } else {
             *error = "unknown option: " + arg;
             return false;
@@ -393,6 +395,7 @@ std::string Usage(const char* program_name) {
            << "  --control-fd <fd>        Daemon media-control descriptor\n"
            << "  --no-audio               Disable AI/AENC pipeline\n"
            << "  --validate-only          Validate config without accessing hardware\n"
+           << "  --probe-load             Exit after the dynamic loader succeeds\n"
            << "  --help                   Show this help\n";
     return output.str();
 }

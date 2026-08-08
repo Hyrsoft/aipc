@@ -17,6 +17,11 @@
     "timeout_sec": 30,
     "feed_interval_ms": 5000
   },
+  "dependencies": {
+    "enabled": false,
+    "root": "../data/dependencies",
+    "max_upload_bytes": 33554432
+  },
   "ui": {
     "project_name": "AIPC",
     "console_name": "Media Console",
