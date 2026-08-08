@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
   "id": "npu-clock",
-  "name": "NPU 时钟探测（需人工确认）",
+  "name": "NPU 时钟 420 MHz（需人工确认）",
   "entry": "main.lua",
   "algorithm": "npu_clock",
-  "input": {"enabled": true, "channel_id": 1, "width": 320, "height": 320, "fps": 1, "pixel_format": "nv12", "fit_mode": "contain", "buffer_count": 2, "depth": 1},
+  "input": {"enabled": true, "channel_id": 1, "width": 640, "height": 360, "fps": 1, "pixel_format": "nv12", "fit_mode": "contain", "buffer_count": 2, "depth": 1},
   "threshold": 0.0,
   "nms_threshold": 0.0,
   "max_detections": 1,
   "class_filter": [],
-  "options": {"apply": false, "rate_mhz": 420, "update_cru_clk500m_src": true, "unbind_rebind_npu": false, "runtime_guard": "read-only NPU clock probing reset the tested RV1106 board", "runtime_guard_ack": false}
+  "options": {"apply": true, "rate_mhz": 420, "update_cru_clk500m_src": true, "unbind_rebind_npu": true, "runtime_guard": "changing the live NPU clock can reset the tested RV1106 board", "runtime_guard_ack": false}
 }

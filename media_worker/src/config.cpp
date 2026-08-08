@@ -297,8 +297,11 @@ std::vector<std::string> ValidateConfig(const WorkerConfig& config) {
     require_range("video.stream_buffer_count", config.video.stream_buffer_count, 1, 16);
     if (config.ai_input.enabled) {
         require_range("ai_input.channel_id", config.ai_input.channel_id, 0, 3);
-        require_range("ai_input.width", config.ai_input.width, 2, 4096);
-        require_range("ai_input.height", config.ai_input.height, 2, 4096);
+        // The RV1106 VPSS driver can hard-lock the SoC instead of returning an
+        // error for small live AI channels. Keep the transport channel in the
+        // validated range and let VisionG resize to the RKNN model dimensions.
+        require_range("ai_input.width", config.ai_input.width, 384, 4096);
+        require_range("ai_input.height", config.ai_input.height, 256, 4096);
         require_range("ai_input.fps", config.ai_input.fps, 1, config.video.fps);
         require_range("ai_input.buffer_count", config.ai_input.buffer_count, 1, 8);
         require_range("ai_input.depth", config.ai_input.depth, 0, 8);

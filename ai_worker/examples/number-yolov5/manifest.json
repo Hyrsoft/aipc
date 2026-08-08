@@ -6,10 +6,10 @@
   "algorithm": "yolov5",
   "model": "yolov5s_number_320.rknn",
   "labels": "number.txt",
-  "input": {"enabled": true, "channel_id": 1, "width": 320, "height": 320, "fps": 10, "pixel_format": "nv12", "fit_mode": "contain", "buffer_count": 2, "depth": 1},
+  "input": {"enabled": true, "channel_id": 1, "width": 640, "height": 640, "fps": 10, "pixel_format": "nv12", "fit_mode": "contain", "buffer_count": 2, "depth": 1},
   "threshold": 0.35,
   "nms_threshold": 0.45,
   "max_detections": 16,
   "class_filter": [],
-  "options": {"model_format": "rgb", "runtime_guard": "this model hard-reset the tested RV1106 board with its current librknnmrt", "runtime_guard_ack": false}
+  "options": {"model_format": "rgb"}
 }

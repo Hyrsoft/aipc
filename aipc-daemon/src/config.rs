@@ -218,12 +218,18 @@ impl WorkerConfig {
                 0,
                 3,
             );
-            range(&mut errors, "ai_input.width", self.ai_input.width, 2, 4096);
+            range(
+                &mut errors,
+                "ai_input.width",
+                self.ai_input.width,
+                384,
+                4096,
+            );
             range(
                 &mut errors,
                 "ai_input.height",
                 self.ai_input.height,
-                2,
+                256,
                 4096,
             );
             range(
@@ -736,6 +742,23 @@ mod tests {
         let errors = config.validate();
         assert!(errors.iter().any(|item| item.contains("even")));
         assert!(errors.iter().any(|item| item.contains("G711A")));
+    }
+
+    #[test]
+    fn rejects_unsafe_small_ai_vpss_channels() {
+        let mut config = WorkerConfig::default();
+        config.ai_input.enabled = true;
+        config.ai_input.width = 320;
+        assert!(config
+            .validate()
+            .iter()
+            .any(|item| item.contains("ai_input.width")));
+        config.ai_input.width = 640;
+        config.ai_input.height = 240;
+        assert!(config
+            .validate()
+            .iter()
+            .any(|item| item.contains("ai_input.height")));
     }
 
     #[test]
