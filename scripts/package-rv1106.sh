@@ -7,6 +7,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TARGET="armv7-unknown-linux-uclibceabihf"
 PACKAGE_DIR="${AIPC_PACKAGE_DIR:-${PROJECT_ROOT}/target/package/aipc-rust}"
 NATIVE_INSTALL="${PROJECT_ROOT}/target/native/RV1106Release/install"
+RKNN_RUNTIME_DIR="${AIPC_RKNN_RUNTIME_DIR:-${PROJECT_ROOT}/target/rknn-runtime}"
 
 if ! command -v jq >/dev/null 2>&1; then
     echo "jq is required to generate the daemon-managed worker config" >&2
@@ -15,6 +16,7 @@ fi
 
 "${SCRIPT_DIR}/build-rv1106.sh"
 "${SCRIPT_DIR}/fetch-ai-models.sh"
+"${SCRIPT_DIR}/fetch-rknn-runtime.sh"
 npm --prefix "${PROJECT_ROOT}/webui" run build
 
 rm -rf "${PACKAGE_DIR}"
@@ -28,6 +30,8 @@ install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/ai_worker" \
     "${PACKAGE_DIR}/bin/ai_worker"
 install -m 0755 "${NATIVE_INSTALL}/lib/libvisiong.so" \
     "${PACKAGE_DIR}/lib/libvisiong.so"
+install -m 0755 "${RKNN_RUNTIME_DIR}/librknnmrt.so" \
+    "${PACKAGE_DIR}/lib/librknnmrt.so"
 mkdir -p "${PACKAGE_DIR}/licenses/visiong" "${PACKAGE_DIR}/licenses/lua" \
     "${PACKAGE_DIR}/seed/ai/projects" "${PACKAGE_DIR}/seed/ai/models"
 cp -a "${NATIVE_INSTALL}/licenses/visiong/." \

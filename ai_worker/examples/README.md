@@ -27,6 +27,11 @@
 资源来自用户示例包；没有该文件时可以上传任意 JPEG 到 `/api/v1/ai/models`，并在
 manifest 的 `model` 字段引用它。
 
+RV1106 包会通过 `scripts/fetch-rknn-runtime.sh` 固定并校验官方 RKNN runtime
+2.3.2。Luckfox SDK 自带的 1.6.0 runtime 不支持 PPOCR 模型使用的 `exNorm`
+fallback；2.3.2 与当前 0.9.2 NPU 驱动兼容，并作为 AIPC 私有库加载，不覆盖板端
+`/oem/usr/lib/librknnmrt.so`。
+
 ## 板端验证结果（2026-08-08）
 
 - `yolov5-coco80`：通过，约 10 FPS / 88 ms。
