@@ -63,6 +63,10 @@ jq '.video.output_path = "" | .audio.output_path = ""' \
     "${PROJECT_ROOT}/media_worker/config/media_worker.example.json" \
     >"${PACKAGE_DIR}/config/media_worker.json"
 chmod 0644 "${PACKAGE_DIR}/config/media_worker.json"
+jq '.data_dir = "/userdata/aipc-rust/data" | .recording.directory = "/userdata/aipc-rust/recordings" | .recording.allowed_roots = ["/userdata/aipc-rust/recordings"] | .dependencies.root = "/userdata/aipc-rust/data/dependencies"' \
+    "${PACKAGE_DIR}/config/aipc-daemon.json" \
+    >"${PACKAGE_DIR}/config/aipc-daemon.json.part"
+mv "${PACKAGE_DIR}/config/aipc-daemon.json.part" "${PACKAGE_DIR}/config/aipc-daemon.json"
 install -m 0755 "${PROJECT_ROOT}/deploy/rv1106/start.sh" "${PACKAGE_DIR}/scripts/start.sh"
 install -m 0755 "${PROJECT_ROOT}/deploy/rv1106/launch.sh" "${PACKAGE_DIR}/scripts/launch.sh"
 install -m 0755 "${PROJECT_ROOT}/deploy/rv1106/stop.sh" "${PACKAGE_DIR}/scripts/stop.sh"

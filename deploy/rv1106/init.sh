@@ -2,7 +2,12 @@
 
 set -eu
 
-APP_DIR=/root/aipc-rust
+if [ -x /userdata/aipc-rust/scripts/launch.sh ]; then
+    APP_DIR=/userdata/aipc-rust
+else
+    APP_DIR=/root/aipc-rust
+fi
+export AIPC_DATA_DIR=/userdata/aipc-rust/data
 
 case "${1:-}" in
     start)

@@ -3,7 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REMOTE_DIR="${AIPC_REMOTE_DIR:-/root/aipc-rust}"
+REMOTE_DIR="${AIPC_REMOTE_DIR:-/userdata/aipc-rust}"
+REMOTE_DATA_DIR="${AIPC_REMOTE_DATA_DIR:-/userdata/aipc-rust/data}"
 LOCAL_PORT="${AIPC_ADB_HTTP_PORT:-18080}"
 BASE_URL="http://127.0.0.1:${LOCAL_PORT}"
 WORK_DIR="$(mktemp -d)"
@@ -29,7 +30,7 @@ wait_running() {
     done
     echo "worker did not reach Running" >&2
     cat "${WORK_DIR}/status.json" >&2 || true
-    adb shell "tail -100 '${REMOTE_DIR}/data/daemon.stderr.log'" >&2 || true
+    adb shell "tail -100 '${REMOTE_DATA_DIR}/daemon.stderr.log'" >&2 || true
     return 1
 }
 
