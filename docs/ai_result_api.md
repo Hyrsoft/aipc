@@ -82,6 +82,13 @@ stream ID 会改变；消费者必须把新的 generation/gap 视为重新同步
       "label": "tv",
       "confidence": 0.58,
       "bbox": {"x": 0.42, "y": 0.31, "width": 0.16, "height": 0.28}
+    }],
+    "annotations": [{
+      "kind": "text",
+      "label": "沪A12345",
+      "confidence": 0.93,
+      "bbox": {"x": 0.42, "y": 0.31, "width": 0.16, "height": 0.08},
+      "data": {"text": "沪A12345", "text_score": 0.93}
     }]
   }
 }
@@ -91,6 +98,11 @@ stream ID 会改变；消费者必须把新的 generation/gap 视为重新同步
 `frame.width/height` 换算像素。`pts_us` 是媒体链路单调微秒时间戳，用于和视频帧、
 录像 generation 对齐；CloudEvent `time` 和 `published_at_ms` 是 daemon 发布墙上时间，
 适合日志排序，但不能替代精确媒体 PTS。
+
+`objects` 是经过 Rust tracker 关联、用于生命周期事件的目标；`annotations` 是 Lua/
+VisionG 后端返回的附加结果，保留 `kind` 和算法专属 `data`。例如 PPOCR 使用
+`kind=text` 并保留 `quad/text`，MLSD 使用 `kind=line` 并保留 `length`，NCC 使用
+`kind=similarity` 并保留 `similarity`。附加结果不会改变主路视频或 OSD 的消费者隔离。
 
 ## SSE 补发和 gap
 

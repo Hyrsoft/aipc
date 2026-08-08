@@ -55,8 +55,12 @@ int Run(int argc, char* argv[]) {
     if (!fs::is_regular_file(options.project_dir / manifest.entry)) {
         throw std::runtime_error("Lua entry file does not exist");
     }
-    if (!options.mock && !fs::is_regular_file(options.models_dir / manifest.model)) {
-        throw std::runtime_error("model file does not exist");
+    if (!options.mock) {
+        for (const auto& file : ReferencedFiles(manifest)) {
+            if (!fs::is_regular_file(options.models_dir / file)) {
+                throw std::runtime_error("AI resource does not exist: " + file);
+            }
+        }
     }
     if (options.validate_only) {
         LuaRuntime runtime(manifest, options.project_dir, CreateMockBackend());

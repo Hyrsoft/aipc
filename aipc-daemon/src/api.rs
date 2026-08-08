@@ -691,6 +691,7 @@ mod tests {
                     height: 0.4,
                 },
             }],
+            annotations: vec![],
         }
     }
 

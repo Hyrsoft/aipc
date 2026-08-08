@@ -128,6 +128,13 @@ function(aipc_add_rockchip_targets rkmpi_root)
     target_link_options(aipc_rockchip_visiong_runtime INTERFACE
         "-Wl,-rpath-link,${lib_root}")
     if(DEFINED AIPC_SDK_ROOT AND EXISTS "${AIPC_SDK_ROOT}/media/out/lib")
+        if(EXISTS "${AIPC_SDK_ROOT}/media/out/include/rockive/rk_mpi_ive.h")
+            target_include_directories(aipc_rockchip_visiong_runtime INTERFACE
+                "${AIPC_SDK_ROOT}/media/out/include/rockive")
+        elseif(EXISTS "${AIPC_SDK_ROOT}/media/ive/ive/include/rk_mpi_ive.h")
+            target_include_directories(aipc_rockchip_visiong_runtime INTERFACE
+                "${AIPC_SDK_ROOT}/media/ive/ive/include")
+        endif()
         target_link_directories(aipc_rockchip_visiong_runtime INTERFACE
             "${AIPC_SDK_ROOT}/media/out/lib")
         target_link_options(aipc_rockchip_visiong_runtime INTERFACE

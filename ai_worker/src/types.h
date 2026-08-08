@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -23,23 +24,16 @@ struct Options {
     bool mock = false;
 };
 
-struct DetectionResult {
-    int x1 = 0;
-    int y1 = 0;
-    int x2 = 0;
-    int y2 = 0;
-    float score = 0.0F;
-    int class_id = 0;
-    std::string label;
-};
-
 struct Manifest {
+    int schema_version = 2;
     std::string id;
     std::string name;
     std::string entry = "main.lua";
     std::string algorithm = "yolov5";
     std::string model;
     std::string labels;
+    std::map<std::string, std::string> files;
+    json options = json::object();
     float threshold = 0.25F;
     float nms_threshold = 0.45F;
     int max_detections = 32;

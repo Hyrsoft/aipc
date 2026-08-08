@@ -29,6 +29,7 @@ function event(id: string, type: AiResultEventType = 'io.aipc.ai.frame.v1'): AiC
         confidence: 0.91,
         bbox: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
       }],
+      annotations: [],
     } : {
       schema_version: 1,
       source_id: 'camera0',

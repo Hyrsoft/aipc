@@ -168,12 +168,15 @@ export interface AboutInfo {
 
 export type AiOsdMode = 'off' | 'metadata' | 'embedded_rgn'
 export interface AiProjectManifest {
+  schema_version: number
   id: string
   name: string
   entry: string
-  algorithm: 'yolov5'
+  algorithm: 'yolov5' | 'yolo11' | 'lprnet' | 'mlsd' | 'ppocr' | 'nanotrack' | 'find_blobs' | 'ive_filter' | 'ive_ncc' | 'npu_clock' | 'frame_info'
   model: string
   labels: string
+  files: Record<string, string>
+  options: Record<string, unknown>
   input: WorkerConfig['ai_input']
   threshold: number
   nms_threshold: number
@@ -278,6 +281,14 @@ export interface AiResultObject {
   bbox: AiResultBoundingBox
 }
 
+export interface AiResultAnnotation {
+  kind: string
+  label: string
+  confidence: number
+  bbox: AiResultBoundingBox
+  data: Record<string, unknown>
+}
+
 export interface AiResultFrameInfo {
   width: number
   height: number
@@ -302,9 +313,10 @@ export interface AiFrameResultData {
   frame: AiResultFrameInfo
   inference: AiResultInferenceInfo
   objects: AiResultObject[]
+  annotations: AiResultAnnotation[]
 }
 
-export interface AiTrackResultData extends Omit<AiFrameResultData, 'objects'> {
+export interface AiTrackResultData extends Omit<AiFrameResultData, 'objects' | 'annotations'> {
   object: AiResultObject
   reason: string
 }
