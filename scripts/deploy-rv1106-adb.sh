@@ -25,7 +25,7 @@ fi
 "${ADB[@]}" shell "rm -rf '${REMOTE_DIR}.previous' && if [ -d '${REMOTE_DIR}' ]; then mv '${REMOTE_DIR}' '${REMOTE_DIR}.previous'; fi && mv '${REMOTE_DIR}.new' '${REMOTE_DIR}'"
 "${ADB[@]}" shell "mkdir -p '${REMOTE_DATA_DIR}' && if [ -d '${OLD_DATA_DIR}' ] && [ '${OLD_DATA_DIR}' != '${REMOTE_DATA_DIR}' ]; then cp -a '${OLD_DATA_DIR}/.' '${REMOTE_DATA_DIR}/'; fi && if [ -d '${REMOTE_DIR}.previous/data' ]; then cp -a '${REMOTE_DIR}.previous/data/.' '${REMOTE_DATA_DIR}/'; fi"
 "${ADB[@]}" shell "mkdir -p '${REMOTE_DIR}/data' '${REMOTE_DIR}/lib'"
-"${ADB[@]}" shell "ln -sfn '${REMOTE_DIR}/scripts/init.sh' /etc/init.d/S99aipc" || true
+"${ADB[@]}" shell "if [ -L /etc/init.d/S99aipc ]; then rm -f /etc/init.d/S99aipc; fi; ln -s '${REMOTE_DIR}/scripts/init.sh' /etc/init.d/S99aipc" || true
 init_target=$("${ADB[@]}" shell "readlink /etc/init.d/S99aipc 2>/dev/null || true" | tr -d '\r')
 if [ "${init_target}" != "${REMOTE_DIR}/scripts/init.sh" ]; then
     echo "warning: /etc/init.d is not writable; install the init link in the firmware or remount rootfs before reboot" >&2

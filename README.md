@@ -158,8 +158,8 @@ AIPC_SKIP_BUILD=1 ./scripts/deploy-rv1106-adb.sh
 - HTTP/Web UI：`http://<board-ip>:8080`
 - RTSP：`rtsp://<board-ip>:8554/live`
 - WebRTC 媒体：`udp://<board-ip>:10000`（信令复用 HTTP API）
-- 默认部署目录：`/root/aipc-rust`
-- 默认录像目录：`/root/aipc-rust/recordings`
+- 默认部署目录：`/userdata/aipc-rust`
+- 默认录像目录：`/userdata/aipc-rust/recordings`
 
 daemon 当前未启用身份认证，只应暴露在可信局域网中。
 
@@ -174,7 +174,7 @@ Web 控制台的平台名称、板卡名称、控制台标题和项目链接来�
 标签复制到持久化目录；已有同名文件不会被覆盖：
 
 ```text
-/root/aipc-rust/data/ai/
+/userdata/aipc-rust/data/ai/
   models/
   projects/
   deployments/

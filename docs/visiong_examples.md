@@ -47,6 +47,10 @@ SoC。实测 `320×240`、由 `320×320 contain` 产生的 `320×180`、以及
 看门狗随后使 boot ID 变化，`S99aipc` 自动启动 daemon，重新 armed `/dev/watchdog`，
 并恢复最后一次成功的 AI 项目。整个过程不需要人工复位，也未修改任何分区。
 
+一次依赖 factory 恢复实验触发复位后，ext4 将 rootfs 保护性挂载为只读，而
+`/userdata` 保持可写。AIPC 因此将应用包、PID、日志、AI 状态、录像和依赖 active
+override 统一迁移到 `/userdata/aipc-rust`，避免复位后的启动入口再次依赖 `/root` 写入。
+
 ## 资源获取
 
 全部 13 个 RKNN 模型和 5 个辅助资源由 `scripts/fetch-ai-models.sh` 从固定的

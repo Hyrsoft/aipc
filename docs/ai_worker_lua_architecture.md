@@ -366,7 +366,7 @@ licenses/lua/
 ```
 
 默认示例项目可随包放入 seed 目录，但部署时只在目标不存在时复制到
-`/root/aipc-rust/data/ai`。现有 data、项目、模型、state、录制和日志不能被包覆盖。
+`/userdata/aipc-rust/data/ai`。现有 data、项目、模型、state、录制和日志不能被包覆盖。
 部署前保留上一版可启动的 bin/lib，失败时恢复它；只停止 package 自身的
 `aipc-daemon`、`media_worker` 和 `ai_worker`。
 

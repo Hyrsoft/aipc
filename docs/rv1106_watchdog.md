@@ -223,10 +223,10 @@ sha256sum output/image/*.img > output/image/SHA256SUMS
 启用 `NOWAYOUT` 后，停止 daemon 会启动不可取消的硬件倒计时。AIPC 的 ADB
 部署脚本因此采用以下顺序：
 
-1. daemon 继续喂狗时，将新包上传到 `/root/aipc-rust.new`；
+1. daemon 继续喂狗时，将新包上传到 `/userdata/aipc-rust.new`；
 2. 上传成功后停止旧 daemon；
 3. 原子切换当前目录和 previous 目录；
-4. 复制持久状态，安装 `/etc/init.d/S99aipc` 开机启动链接；
+4. 复制持久状态到 `/userdata/aipc-rust/data`，安装 `/etc/init.d/S99aipc` 开机启动链接；
 5. 立即启动新 daemon。
 
 这样上传 35 MB 左右的软件包不会消耗 30 秒的 watchdog 重启窗口。
@@ -236,7 +236,7 @@ watchdog 触发复位后，Buildroot init 会通过 `S99aipc` 自动恢复 AIPC�
 ## 6. 烧录后板端验证
 
 完整 `update.img` 会重写 rootfs、OEM 和 userdata；当前 SDK 固件打包流程不会把
-AIPC 的 `/root/aipc-rust` 部署目录嵌入镜像。烧录完成并重新进入 Linux 后，先
+AIPC 的 `/userdata/aipc-rust` 部署目录位于可写 userdata。烧录完成并重新进入 Linux 后，先
 进行只读检查：
 
 ```bash
@@ -258,7 +258,7 @@ AIPC_ADB_SERIAL=BOARD_SERIAL ./scripts/deploy-rv1106-adb.sh
 启动 AIPC 后检查：
 
 ```bash
-adb shell 'grep -i watchdog /root/aipc-rust/data/daemon.stderr.log | tail -n 20'
+adb shell 'grep -i watchdog /userdata/aipc-rust/data/daemon.stderr.log | tail -n 20'
 curl -fsS http://BOARD_IP:8080/healthz
 curl -fsS http://BOARD_IP:8080/api/v1/status
 ```
@@ -277,7 +277,7 @@ hardware watchdog armed
 没有分区写入操作时执行：
 
 ```bash
-adb shell '/root/aipc-rust/scripts/stop.sh'
+adb shell '/userdata/aipc-rust/scripts/stop.sh'
 ```
 
 随后不要手动喂狗，预期板子在驱动返回的实际 timeout 附近自动复位。复位后验证：
@@ -332,7 +332,7 @@ DesignWare 驱动会将请求值量化到硬件支持的 TOP 档位，因此本�
 44 秒。daemon 日志会记录 `requested_timeout_sec=30` 和
 `actual_timeout_sec=44`，复位实验应以实际值为准。
 
-真实实验步骤为停止 `/root/aipc-rust/scripts/stop.sh` 后不进行任何人工操作。
+真实实验步骤为停止 `/userdata/aipc-rust/scripts/stop.sh` 后不进行任何人工操作。
 观测结果：
 
 ```text
