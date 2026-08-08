@@ -217,7 +217,7 @@ pre { overflow: auto; max-height: 280px; margin: 0; padding: 11px; background: #
 .result-gap .result-type, .result-exited .result-type { background: #fff0ee; color: var(--red); }
 .result-gap pre, .result-exited pre { border-left-color: #dc7b72; }
 .ai-workspace { display: grid; grid-template-columns: 245px minmax(0, 1fr); gap: 14px; margin-bottom: 14px; }
-.ai-project-list { align-self: start; }
+.ai-project-list { align-self: start; max-height: min(620px, calc(100vh - 220px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .project-item { display: block; position: relative; width: 100%; margin-top: 7px; padding: 12px; border-color: var(--line); background: #f8fbfa; text-align: left; }
 .project-item b, .project-item small { display: block; padding-right: 45px; }
 .project-item b { font-size: 11px; }

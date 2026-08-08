@@ -34,7 +34,7 @@ const eventViewport = ref<HTMLDivElement | null>(null)
 const eventFilter = ref<EventFilter>('all')
 const eventFilters: EventFilter[] = ['all', 'info', 'warn', 'error']
 const eventFollow = ref(true)
-type AppView = 'overview' | 'recordings' | 'ai' | 'settings' | 'diagnostics' | 'about'
+type AppView = 'overview' | 'recordings' | 'ai' | 'settings' | 'dependencies' | 'diagnostics' | 'about'
 const activeView = ref<AppView>('overview')
 const clockMs = ref(Date.now())
 const statusReceivedAtMs = ref(Date.now())
@@ -48,6 +48,7 @@ const viewMetadata: Record<AppView, { eyebrow: string; title: string }> = {
   recordings: { eyebrow: 'RECORDINGS', title: '录像管理' },
   ai: { eyebrow: 'AI WORKER', title: 'AI 与 Lua 管理' },
   settings: { eyebrow: 'CONFIGURATION', title: '媒体配置' },
+  dependencies: { eyebrow: 'DEPENDENCY RUNTIME', title: '依赖库管理' },
   diagnostics: { eyebrow: 'DIAGNOSTICS', title: '日志诊断' },
   about: { eyebrow: 'ABOUT', title: '关于 AIPC' },
 }
@@ -202,8 +203,9 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); aiOverlay?
         <button :class="activeView === 'recordings' && 'active'" @click="activeView = 'recordings'"><span>02</span>录像管理</button>
         <button :class="activeView === 'ai' && 'active'" @click="activeView = 'ai'"><span>03</span>AI 与 Lua</button>
         <button :class="activeView === 'settings' && 'active'" @click="activeView = 'settings'"><span>04</span>媒体配置</button>
-        <button :class="activeView === 'diagnostics' && 'active'" @click="activeView = 'diagnostics'"><span>05</span>日志诊断<i v-if="live.events.some(event => eventLevel(event) === 'error')"></i></button>
-        <button :class="activeView === 'about' && 'active'" @click="activeView = 'about'"><span>06</span>关于</button>
+        <button :class="activeView === 'dependencies' && 'active'" @click="activeView = 'dependencies'"><span>05</span>依赖库</button>
+        <button :class="activeView === 'diagnostics' && 'active'" @click="activeView = 'diagnostics'"><span>06</span>日志诊断<i v-if="live.events.some(event => eventLevel(event) === 'error')"></i></button>
+        <button :class="activeView === 'about' && 'active'" @click="activeView = 'about'"><span>07</span>关于</button>
       </nav>
       <div class="sidebar-meta">
         <div class="connection"><span :class="['dot', connected && 'online']"></span><div><b>{{ connected ? '服务已连接' : '正在重连' }}</b><small>SSE EVENT STREAM</small></div></div>
@@ -260,8 +262,9 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); aiOverlay?
           <details class="advanced-details"><summary><div><b>高级硬件与运行时参数</b><small>诊断输出不是业务数据通道，正式音频由 AIPA IPC 提供</small></div><span>展开</span></summary><div class="form-grid advanced"><label>IQ 目录<input v-model="form.isp.iq_dir"></label><label>VI device<input type="number" v-model.number="form.vi.device_id"></label><label>VI pipe<input type="number" v-model.number="form.vi.pipe_id"></label><label>VI channel<input type="number" v-model.number="form.vi.channel_id"></label><label>VI buffers<input type="number" v-model.number="form.vi.buffer_count"></label><label>VPSS group<input type="number" v-model.number="form.vpss.group_id"></label><label>VPSS channel<input type="number" v-model.number="form.vpss.channel_id"></label><label>VENC channel<input type="number" v-model.number="form.video.venc_channel_id"></label><label>VENC buffers<input type="number" v-model.number="form.video.stream_buffer_count"></label><label>Warning timeout<input type="number" v-model.number="form.runtime.warning_timeout_count"></label><label>Stalled timeout<input type="number" v-model.number="form.runtime.stalled_timeout_count"></label><label>Fatal timeout<input type="number" v-model.number="form.runtime.fatal_timeout_count"></label><label>Metrics (ms)<input type="number" v-model.number="form.runtime.metrics_interval_ms"></label><label class="wide">视频诊断输出<input v-model="form.video.output_path"></label><label class="wide">音频诊断输出<input v-model="form.audio.output_path"></label></div></details>
         </section>
         <section class="panel config-versions"><div class="section-head"><div><span class="label">CONFIG HISTORY</span><h3>配置版本</h3><p>用于核对当前生效、待应用与最近可用配置。</p></div></div><div class="config-stack"><details v-for="row in configDiff" :key="row.name"><summary><b>{{ row.name }}</b><span>{{ short(row.value?.runtime.generation) }}</span></summary><pre>{{ JSON.stringify(row.value, null, 2) }}</pre></details></div><p v-if="configs?.last_error" class="rollback">最近回滚 / 错误：{{ configs.last_error }}</p></section>
-        <DependencyPanel />
       </template>
+
+      <DependencyPanel v-else-if="activeView === 'dependencies'" />
 
       <template v-else-if="activeView === 'diagnostics'">
         <section class="diagnostic-grid">
