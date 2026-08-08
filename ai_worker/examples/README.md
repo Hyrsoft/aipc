@@ -17,11 +17,11 @@
 | `test_find_blob.py` | `find-blobs` | HSV 阈值转成 blob 对象 |
 | `test_ive_filter.py` | `ive-filter` | 在 AI 进程执行硬件滤波；NV12 先转 GRAY8，输出为空表示只做处理/健康检查 |
 | `test_ive_ncc.py` | `ive-ncc` | 以模型目录中的模板图片计算 NCC 相似度 |
-| `test_npu_clock.py` | `npu-clock` | 当前板端访问时钟接口会复位，默认由 runtime guard 阻止在线部署 |
-| `test_rtsp.py` | `media-pipeline` | RTSP 已由 AIPC daemon 原生提供，Lua 只做帧健康探测 |
-| `test_gui.py` | `media-pipeline` + WebUI | GUI/相册由 AIPC WebUI 和 preview 拥有，不能在 AI worker 抢 framebuffer |
-| `test_display_spi.py` | `media-pipeline` | SPI 显示属于独立媒体 sink，保留为部署说明，不复制到 AI worker |
-| `test_isp_af.py` | `media-pipeline` | ISP/AF 属于 media_worker；当前版本不向不可信 Lua 暴露 AIQ 指针 |
+| `test_npu_clock.py` | `npu-clock` | 对齐 Python 参数设置 420 MHz、更新 CRU 并 rebind NPU，默认由 runtime guard 阻止在线部署 |
+| `test_rtsp.py` | `visiong-rtsp` | RTSP 由 AIPC daemon 提供，Lua 发布 daemon-managed capability 结果 |
+| `test_gui.py` | `visiong-webui-gui` | GUI/相册映射到 WebUI、preview 与录像 API，不抢 framebuffer |
+| `test_display_spi.py` | `visiong-spi-display` | SPI 显示标记为外部 media sink，Lua 只验证输入帧与能力边界 |
+| `test_isp_af.py` | `visiong-isp-af` | ISP/AF 归 media_worker 所有，不向不可信 Lua 暴露 AIQ 指针 |
 
 模型由 `scripts/fetch-ai-models.sh` 下载并按 SHA-256 校验。`ive-ncc` 的小型模板
 资源来自用户示例包；没有该文件时可以上传任意 JPEG 到 `/api/v1/ai/models`，并在
@@ -34,24 +34,33 @@ fallback；2.3.2 与当前 0.9.2 NPU 驱动兼容，并作为 AIPC 私有库加�
 
 ## 板端验证结果（2026-08-08）
 
-- `yolov5-coco80`：通过，约 10 FPS / 88 ms。
-- `yolo11-coco80`：通过，约 7 FPS / 131 ms。
-- `mlsd`：通过首帧推理，约 115 ms。
+- `yolov5-coco80`：通过，约 10.1 FPS / 88.6 ms。
+- `yolo11-coco80`：通过，约 7.1 FPS / 128.1 ms。
+- `number-yolov5`：通过，约 10.1 FPS / 31.8 ms。
+- `yolo11-number-320`：通过，约 10.0 FPS / 32.1 ms。
+- `lprnet`：通过，约 5.0 FPS / 84.0 ms，输出结构化车牌文本。
+- `mlsd`：通过，约 7.7 FPS / 121.1 ms。
+- `mlsd-tiny`：通过，约 10.1 FPS / 49.0 ms。
 - `media-pipeline`：通过，约 2 FPS / 0.1 ms，媒体链路保持健康。
 - `find-blobs`：通过，约 10 FPS / 12 ms。
 - `ive-filter`：通过（NV12→GRAY8），约 5 FPS / 9–12 ms；Lua 每 5 秒轮换 Gaussian、Sharpen、Edge、Emboss 四个 Python 样例 kernel。
 - `ive-ncc`：通过，约 5 FPS / 15.6 ms，相似度约 0.89。
-- `npu-clock`：只读探测也触发板端复位，已加入 runtime guard。
-- `number-yolov5`：当前板载 RKNN runtime 下触发整板复位。
-- `lprnet`：当前板载 RKNN runtime 下触发整板复位并停在 Rockchip loader。
-- `ppocr`、`nanotrack`：因板子进入 loader 未继续冒险测试。
+- `ppocr`：通过，约 5.0 FPS / 83.6 ms。
+- `ppocr-v6`：通过，约 5.0 FPS / 80.9 ms。
+- `nanotrack`：通过，约 10.3 FPS / 59.8 ms，输出 `kind=track`。
+- `npu-clock`：通过，已设置并读取到 `aclk_npu_root=420000000`；因会修改硬件时钟，仍保留 runtime guard。
 
 `yolo11-number-320`、`ppocr-v6` 和 `nanotrack` 等资源来自用户提供的
 VisionG 示例包。模型不进入 Git；设置 `AIPC_VISIONG_SAMPLE_ARCHIVE` 后，
 `scripts/fetch-ai-models.sh` 会解包、校验并加入本地打包目录。没有该变量时，
 可用示例仍会正常构建，缺失资源的项目会在部署校验阶段明确报错。
 
-会触发或可能触发底层复位的项目带有 `options.runtime_guard`，daemon 默认拒绝部署。
-只有在确认 `librknnmrt.so`、NPU 驱动/固件与模型导出版本匹配后，才应显式设置
-`options.runtime_guard_ack=true`。这个保护只阻止危险的在线部署，不影响 Lua/manifest
-校验和模型资源管理。
+附件中的 `fb0.sh` 会直接读写启动介质内的 FDT header 和 DTB，不属于运行期
+VisionG API，也不适合放进可在线部署的 Lua 沙箱。AIPC 只记录其对应关系，实际
+屏幕反色应在 SDK 设备树中配置并随固件构建，不能由 AI 项目修改分区。
+
+板端复位最终定位为过小的实时 AI VPSS 通道，而非数字模型或 LPRNet 本身。
+RV1106 当前要求传输通道至少为 384×256；数字模型使用安全的 640×640 通道，
+由 VisionG 在 NPU 内部继续缩放到模型的 320×320。daemon 与 media_worker 已同时
+加入该约束，避免驱动硬锁。只有具有真实硬件副作用的 `npu-clock` 继续使用
+`options.runtime_guard`。
