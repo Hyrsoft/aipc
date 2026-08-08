@@ -79,6 +79,7 @@ flowchart LR
 | H.264 视频编码 | 🧪 | ✅ | 🚧 | 🚧 | RV1106 真机已验证 1920×1080/30 FPS |
 | G711A 音频采集/编码 | 🧪 | ✅ | 🚧 | 🚧 | 已接入 Rust 分发、WebRTC PCMA 和录像伴随音频；尚未复用到 MP4/RTSP 音轨 |
 | Rust worker 监督与冷重启回滚 | ✅ | ✅ | 🚧 | 🚧 | generation、启动超时、异常退出和 last-good 配置 |
+| [RV1106 硬件看门狗自动复位](docs/rv1106_watchdog.md) | 🧪 | ✅ | 🚧 | 🚧 | SDK WDT 节点启用后由 daemon 5 秒喂狗，30 秒无心跳自动复位 |
 | 编码视频 IPC / VideoHub | 🧪 | ✅ | 🚧 | 🚧 | 当前协议面向 Rust daemon，后续需验证跨 SoC 时基和码流差异 |
 | WebSocket 实时预览 | ✅ | ✅ | 🚧 | 🚧 | Vue + jMuxer/MSE |
 | Rust WebRTC 音视频分发 | 🧪 | 🧪 | 🚧 | 🚧 | str0m、H.264 High Profile、PCMA、LAN-only ICE-lite |

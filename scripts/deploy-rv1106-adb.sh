@@ -16,12 +16,13 @@ if [ "${AIPC_SKIP_BUILD:-0}" != "1" ]; then
 fi
 
 "${ADB[@]}" get-state >/dev/null
-"${ADB[@]}" shell "'${REMOTE_DIR}/scripts/stop.sh' >/dev/null 2>&1 || true"
 "${ADB[@]}" shell "rm -rf '${REMOTE_DIR}.new' && mkdir -p '${REMOTE_DIR}.new'"
 "${ADB[@]}" push "${PACKAGE_DIR}/." "${REMOTE_DIR}.new/"
+"${ADB[@]}" shell "'${REMOTE_DIR}/scripts/stop.sh' >/dev/null 2>&1 || true"
 "${ADB[@]}" shell "rm -rf '${REMOTE_DIR}.previous' && if [ -d '${REMOTE_DIR}' ]; then mv '${REMOTE_DIR}' '${REMOTE_DIR}.previous'; fi && mv '${REMOTE_DIR}.new' '${REMOTE_DIR}'"
 "${ADB[@]}" shell "if [ -d '${REMOTE_DIR}.previous/data' ]; then cp -a '${REMOTE_DIR}.previous/data/.' '${REMOTE_DIR}/data/'; fi"
 "${ADB[@]}" shell "mkdir -p '${REMOTE_DIR}/data' '${REMOTE_DIR}/lib'"
+"${ADB[@]}" shell "ln -sfn '${REMOTE_DIR}/scripts/init.sh' /etc/init.d/S99aipc"
 "${ADB[@]}" shell "'${REMOTE_DIR}/scripts/launch.sh'"
 
 echo "Deployed and started AIPC daemon at ${REMOTE_DIR}"

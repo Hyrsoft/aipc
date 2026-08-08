@@ -56,6 +56,7 @@ chmod 0644 "${PACKAGE_DIR}/config/media_worker.json"
 install -m 0755 "${PROJECT_ROOT}/deploy/rv1106/start.sh" "${PACKAGE_DIR}/scripts/start.sh"
 install -m 0755 "${PROJECT_ROOT}/deploy/rv1106/launch.sh" "${PACKAGE_DIR}/scripts/launch.sh"
 install -m 0755 "${PROJECT_ROOT}/deploy/rv1106/stop.sh" "${PACKAGE_DIR}/scripts/stop.sh"
+install -m 0755 "${PROJECT_ROOT}/deploy/rv1106/init.sh" "${PACKAGE_DIR}/scripts/init.sh"
 cp -a "${PROJECT_ROOT}/webui/dist/." "${PACKAGE_DIR}/www/"
 
 echo "RV1106 package assembled at ${PACKAGE_DIR}"

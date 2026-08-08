@@ -404,12 +404,53 @@ pub struct DaemonConfig {
     pub stop_timeout_ms: u64,
     pub max_restarts: usize,
     pub restart_window_sec: u64,
+    pub watchdog: WatchdogConfig,
     pub ui: UiConfig,
     pub preview: PreviewConfig,
     pub recording: RecordingConfig,
     pub rtsp: RtspConfig,
     pub webrtc: WebRtcConfig,
     pub ai: AiDaemonConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct WatchdogConfig {
+    pub enabled: bool,
+    pub required: bool,
+    pub device: PathBuf,
+    pub timeout_sec: u32,
+    pub feed_interval_ms: u64,
+}
+
+impl Default for WatchdogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            required: false,
+            device: "/dev/watchdog".into(),
+            timeout_sec: 30,
+            feed_interval_ms: 5_000,
+        }
+    }
+}
+
+impl WatchdogConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.device.is_absolute(),
+            "watchdog.device must be absolute"
+        );
+        anyhow::ensure!(
+            (2..=300).contains(&self.timeout_sec),
+            "watchdog.timeout_sec must be in [2, 300]"
+        );
+        anyhow::ensure!(
+            (250..self.timeout_sec as u64 * 500).contains(&self.feed_interval_ms),
+            "watchdog.feed_interval_ms must be at least 250 ms and less than half the timeout"
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -620,6 +661,7 @@ impl Default for DaemonConfig {
             stop_timeout_ms: 5_000,
             max_restarts: 5,
             restart_window_sec: 300,
+            watchdog: WatchdogConfig::default(),
             ui: UiConfig::default(),
             preview: PreviewConfig::default(),
             recording: RecordingConfig::default(),
@@ -651,6 +693,7 @@ impl DaemonConfig {
             .iter()
             .map(|path| resolve(executable_dir, path))
             .collect();
+        config.watchdog.validate()?;
         config.ai.validate()?;
         config.ui.validate()?;
         config.webrtc.validate()?;
@@ -724,6 +767,22 @@ mod tests {
             ..AiDaemonConfig::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validates_watchdog_settings() {
+        assert!(WatchdogConfig::default().validate().is_ok());
+        let too_slow = WatchdogConfig {
+            timeout_sec: 10,
+            feed_interval_ms: 5_000,
+            ..WatchdogConfig::default()
+        };
+        assert!(too_slow.validate().is_err());
+        let relative = WatchdogConfig {
+            device: "watchdog0".into(),
+            ..WatchdogConfig::default()
+        };
+        assert!(relative.validate().is_err());
     }
 
     #[test]

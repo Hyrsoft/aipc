@@ -8,4 +8,7 @@ PID_FILE="${APP_DIR}/data/daemon.pid"
 
 mkdir -p "${APP_DIR}/data"
 export AIPC_LOG_TO_FILES=1
+if ! pgrep -x aipc-daemon >/dev/null 2>&1; then
+    rm -f "${PID_FILE}"
+fi
 start-stop-daemon -S -b -m -p "${PID_FILE}" -x "${APP_DIR}/scripts/start.sh"

@@ -9,6 +9,7 @@ mod recording;
 mod rtsp;
 mod store;
 mod supervisor;
+mod watchdog;
 mod webrtc;
 
 use anyhow::{Context, bail};
@@ -126,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&settings.bind)
         .await
         .with_context(|| format!("bind HTTP server at {}", settings.bind))?;
+    let _watchdog = watchdog::Watchdog::start(&settings.watchdog)?;
     info!(bind = %settings.bind, "aipc daemon ready (trusted LAN, authentication disabled)");
 
     axum::serve(
