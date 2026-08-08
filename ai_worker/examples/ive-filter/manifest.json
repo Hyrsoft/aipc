@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "id": "ive-filter",
+  "name": "IVE 5x5 滤波健康检查",
+  "entry": "main.lua",
+  "algorithm": "ive_filter",
+  "input": {"enabled": true, "channel_id": 1, "width": 640, "height": 360, "fps": 5, "pixel_format": "nv12", "fit_mode": "contain", "buffer_count": 2, "depth": 1},
+  "threshold": 0.0,
+  "nms_threshold": 0.0,
+  "max_detections": 1,
+  "class_filter": [],
+  "options": {"kernel": [1, 4, 6, 4, 1, 4, 16, 24, 16, 4, 6, 24, 36, 24, 6, 4, 16, 24, 16, 4, 1, 4, 6, 4, 1]}
+}

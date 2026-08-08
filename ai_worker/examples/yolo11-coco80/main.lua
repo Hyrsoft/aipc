@@ -1,8 +1,8 @@
-local model = nil
+local model
 
 function init(config)
-  model = aipc.load_model(config.model)
-  aipc.log("info", "YOLOv5 project initialized")
+  model = aipc.load_model(config.model, config)
+  aipc.log("info", "YOLO11 COCO80 initialized")
 end
 
 function process(frame)

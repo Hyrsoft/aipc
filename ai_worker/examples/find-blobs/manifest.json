@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "id": "find-blobs",
+  "name": "HSV Blob 查找",
+  "entry": "main.lua",
+  "algorithm": "find_blobs",
+  "input": {"enabled": true, "channel_id": 1, "width": 640, "height": 360, "fps": 10, "pixel_format": "nv12", "fit_mode": "contain", "buffer_count": 2, "depth": 1},
+  "threshold": 0.0,
+  "nms_threshold": 0.0,
+  "max_detections": 32,
+  "class_filter": [],
+  "options": {"thresholds": [[0, 131, 161, 255, 0, 255]], "area_threshold": 150, "pixels_threshold": 150, "merge": true}
+}

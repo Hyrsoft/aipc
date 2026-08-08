@@ -29,21 +29,24 @@ install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/ai_worker" \
 install -m 0755 "${NATIVE_INSTALL}/lib/libvisiong.so" \
     "${PACKAGE_DIR}/lib/libvisiong.so"
 mkdir -p "${PACKAGE_DIR}/licenses/visiong" "${PACKAGE_DIR}/licenses/lua" \
-    "${PACKAGE_DIR}/seed/ai/projects/yolov5-coco80" "${PACKAGE_DIR}/seed/ai/models"
+    "${PACKAGE_DIR}/seed/ai/projects" "${PACKAGE_DIR}/seed/ai/models"
 cp -a "${NATIVE_INSTALL}/licenses/visiong/." \
     "${PACKAGE_DIR}/licenses/visiong/"
 install -m 0644 "${NATIVE_INSTALL}/licenses/lua/readme.html" \
     "${PACKAGE_DIR}/licenses/lua/readme.html"
 install -m 0644 "${PROJECT_ROOT}/ai_worker/THIRD_PARTY.md" \
     "${PACKAGE_DIR}/licenses/AI_WORKER_THIRD_PARTY.md"
-install -m 0644 "${PROJECT_ROOT}/ai_worker/examples/yolov5/manifest.json" \
-    "${PACKAGE_DIR}/seed/ai/projects/yolov5-coco80/manifest.json"
-install -m 0644 "${PROJECT_ROOT}/ai_worker/examples/yolov5/main.lua" \
-    "${PACKAGE_DIR}/seed/ai/projects/yolov5-coco80/main.lua"
-install -m 0644 "${PROJECT_ROOT}/target/ai-models/yolov5n_coco80_640.rknn" \
-    "${PACKAGE_DIR}/seed/ai/models/yolov5n_coco80_640.rknn"
-install -m 0644 "${PROJECT_ROOT}/target/ai-models/coco_80_labels_list.txt" \
-    "${PACKAGE_DIR}/seed/ai/models/coco_80_labels_list.txt"
+for source in "${PROJECT_ROOT}/ai_worker/examples"/*; do
+    [ -d "${source}" ] || continue
+    [ -f "${source}/manifest.json" ] || continue
+    project_id="$(jq -r '.id' "${source}/manifest.json")"
+    mkdir -p "${PACKAGE_DIR}/seed/ai/projects/${project_id}"
+    install -m 0644 "${source}/manifest.json" \
+        "${PACKAGE_DIR}/seed/ai/projects/${project_id}/manifest.json"
+    install -m 0644 "${source}/main.lua" \
+        "${PACKAGE_DIR}/seed/ai/projects/${project_id}/main.lua"
+done
+cp -a "${PROJECT_ROOT}/target/ai-models/." "${PACKAGE_DIR}/seed/ai/models/"
 install -m 0644 "${PROJECT_ROOT}/config/aipc-daemon.example.json" \
     "${PACKAGE_DIR}/config/aipc-daemon.json"
 jq '.video.output_path = "" | .audio.output_path = ""' \

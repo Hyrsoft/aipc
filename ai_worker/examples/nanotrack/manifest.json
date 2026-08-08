@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "id": "nanotrack",
+  "name": "NanoTrack 中心目标追踪",
+  "entry": "main.lua",
+  "algorithm": "nanotrack",
+  "model": "T_model_backbone.rknn",
+  "files": {"search": "X_model_backbone.rknn", "head": "model_head.rknn"},
+  "input": {"enabled": true, "channel_id": 1, "width": 640, "height": 360, "fps": 10, "pixel_format": "nv12", "fit_mode": "contain", "buffer_count": 2, "depth": 1},
+  "threshold": 0.60,
+  "nms_threshold": 0.0,
+  "max_detections": 1,
+  "class_filter": [],
+  "options": {"auto_init": true, "center_width_ratio": 0.25, "center_height_ratio": 0.25, "max_lost_frames": 30, "position_smooth": 0.6, "max_scale_change": 1.05, "min_scale_change": 0.9, "runtime_guard": "three-model RKNN pipeline was not run after the board entered loader mode", "runtime_guard_ack": false}
+}
