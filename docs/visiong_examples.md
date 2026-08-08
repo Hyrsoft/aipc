@@ -49,6 +49,7 @@ SoC。实测 `320×240`、由 `320×320 contain` 产生的 `320×180`、以及
 
 ## 资源获取
 
-标准模型由 `scripts/fetch-ai-models.sh` 从固定 VisionG 提交下载。附件独有的
-`yolo11n_number_320.rknn` 通过 `AIPC_VISIONG_SAMPLE_ARCHIVE` 导入并校验；大模型
-不提交 Git。RKNN runtime 由 `scripts/fetch-rknn-runtime.sh` 独立下载和校验。
+全部 13 个 RKNN 模型和 5 个辅助资源由 `scripts/fetch-ai-models.sh` 从固定的
+GitHub Release `ai-models-v1.0.0` 下载。归档和每个文件均进行 SHA-256 校验，
+也可通过 `AIPC_AI_MODELS_ARCHIVE` 指定本地归档完成离线构建；大模型不写入 Git
+历史。RKNN runtime 由 `scripts/fetch-rknn-runtime.sh` 独立下载和校验。

@@ -22,5 +22,6 @@ CMake FetchContent verifies native dependency hashes before configuration. For
 offline builds, set `FETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON`,
 `FETCHCONTENT_SOURCE_DIR_LUA`, `FETCHCONTENT_SOURCE_DIR_VISIONG`, and
 `FETCHCONTENT_SOURCE_DIR_LUCKFOX_RKMPI`, then enable
-`AIPC_FETCHCONTENT_OFFLINE`. `scripts/fetch-ai-models.sh` independently verifies
-the runtime model and label hashes.
+`AIPC_FETCHCONTENT_OFFLINE`. `scripts/fetch-ai-models.sh` downloads the immutable
+`ai-models-v1.0.0` GitHub Release and verifies both the archive and every model
+or resource hash. Release provenance is recorded in `MODEL_RELEASE.json`.
