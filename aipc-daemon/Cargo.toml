@@ -26,6 +26,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 str0m = { version = "=0.21.0", default-features = false, features = ["openssl"] }
+time = { version = "0.3.41", features = ["formatting"] }
 
 [build-dependencies]
 cc = "1"

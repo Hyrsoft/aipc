@@ -360,6 +360,11 @@ pub struct AiDaemonConfig {
     pub startup_timeout_ms: u64,
     pub max_model_bytes: u64,
     pub result_ttl_ms: u64,
+    pub source_id: String,
+    pub result_replay_capacity: usize,
+    pub track_confirmations: usize,
+    pub track_lost_timeout_ms: u64,
+    pub track_update_interval_ms: u64,
 }
 
 impl Default for AiDaemonConfig {
@@ -370,7 +375,42 @@ impl Default for AiDaemonConfig {
             startup_timeout_ms: 30_000,
             max_model_bytes: 128 * 1024 * 1024,
             result_ttl_ms: 500,
+            source_id: "camera0".into(),
+            result_replay_capacity: 256,
+            track_confirmations: 2,
+            track_lost_timeout_ms: 500,
+            track_update_interval_ms: 500,
         }
+    }
+}
+
+impl AiDaemonConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.source_id.is_empty()
+                && self.source_id.len() <= 64
+                && self.source_id.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                }),
+            "ai.source_id must contain 1-64 safe identifier characters"
+        );
+        anyhow::ensure!(
+            (1..=4096).contains(&self.result_replay_capacity),
+            "ai.result_replay_capacity must be in [1, 4096]"
+        );
+        anyhow::ensure!(
+            (1..=16).contains(&self.track_confirmations),
+            "ai.track_confirmations must be in [1, 16]"
+        );
+        anyhow::ensure!(
+            (50..=60_000).contains(&self.track_lost_timeout_ms),
+            "ai.track_lost_timeout_ms must be in [50, 60000]"
+        );
+        anyhow::ensure!(
+            (50..=60_000).contains(&self.track_update_interval_ms),
+            "ai.track_update_interval_ms must be in [50, 60000]"
+        );
+        Ok(())
     }
 }
 
@@ -550,6 +590,7 @@ impl DaemonConfig {
             .iter()
             .map(|path| resolve(executable_dir, path))
             .collect();
+        config.ai.validate()?;
         config.webrtc.validate()?;
         Ok(config)
     }
@@ -605,6 +646,21 @@ mod tests {
         assert!(config.validate().is_err());
         config.max_clients = 1;
         config.advertised_ip = Some("0.0.0.0".parse().unwrap());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validates_ai_result_settings() {
+        assert!(AiDaemonConfig::default().validate().is_ok());
+        let config = AiDaemonConfig {
+            source_id: "../camera".into(),
+            ..AiDaemonConfig::default()
+        };
+        assert!(config.validate().is_err());
+        let config = AiDaemonConfig {
+            result_replay_capacity: 0,
+            ..AiDaemonConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 }

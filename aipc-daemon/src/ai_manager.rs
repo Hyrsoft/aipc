@@ -1,4 +1,9 @@
 use crate::ai::{AiFrame, AiHub, encode_ai_frame};
+use crate::ai_results::{
+    AiBoundingBoxV1, AiFrameInfoV1, AiGenerationEventDataV1, AiInferenceInfoV1, AiLifecycleTracker,
+    AiObjectV1, AiResultBus, AiResultBusStatus, AiResultInput, AiTrackEventDataV1,
+    FRAME_RESULT_TYPE, GENERATION_TYPE, TRACK_ENTERED_TYPE, TRACK_EXITED_TYPE, TRACK_UPDATED_TYPE,
+};
 use crate::config::{AiDaemonConfig, AiInputConfig};
 use crate::model::{ServerEvent, now_ms};
 use nix::sys::signal::{Signal, kill};
@@ -12,7 +17,7 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -168,6 +173,7 @@ pub struct AiStatus {
     pub last_error: Option<String>,
     pub osd_mode: OsdMode,
     pub rgn_capability: Option<Value>,
+    pub result_bus: AiResultBusStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -182,6 +188,13 @@ struct PersistedAiState {
 struct Runtime {
     pid: u32,
     generation: String,
+}
+
+#[derive(Clone)]
+struct InferenceDescriptor {
+    project: String,
+    algorithm: String,
+    model: String,
 }
 
 #[derive(Clone)]
@@ -213,6 +226,9 @@ struct Inner {
     last_metadata: RwLock<Option<Arc<AiMetadata>>>,
     metadata_history: RwLock<VecDeque<TimedMetadata>>,
     tracker: Mutex<Tracker>,
+    result_bus: AiResultBus,
+    lifecycle: StdMutex<AiLifecycleTracker>,
+    active_inference: RwLock<Option<InferenceDescriptor>>,
     last_media_generation: Mutex<Option<String>>,
     recovery_times: Mutex<VecDeque<u64>>,
     recovery_tx: mpsc::Sender<(String, String)>,
@@ -250,6 +266,13 @@ impl AiManager {
         };
         let (metadata, _) = broadcast::channel(32);
         let (recovery_tx, recovery_rx) = mpsc::channel(4);
+        let result_bus = AiResultBus::new(config.source_id.clone(), config.result_replay_capacity);
+        let lifecycle = AiLifecycleTracker::new(
+            config.track_confirmations,
+            config.track_lost_timeout_ms,
+            config.track_update_interval_ms,
+        );
+        let tracker_retention_us = config.track_lost_timeout_ms.saturating_mul(1_000);
         let status = AiStatus {
             enabled: config.enabled,
             state: AiProcessState::Stopped,
@@ -267,6 +290,7 @@ impl AiManager {
             last_error: None,
             osd_mode: state.osd_mode,
             rgn_capability: None,
+            result_bus: result_bus.status(),
         };
         let manager = Self {
             inner: Arc::new(Inner {
@@ -284,7 +308,10 @@ impl AiManager {
                 metadata,
                 last_metadata: RwLock::new(None),
                 metadata_history: RwLock::new(VecDeque::with_capacity(2)),
-                tracker: Mutex::new(Tracker::default()),
+                tracker: Mutex::new(Tracker::new(tracker_retention_us)),
+                result_bus,
+                lifecycle: StdMutex::new(lifecycle),
+                active_inference: RwLock::new(None),
                 last_media_generation: Mutex::new(None),
                 recovery_times: Mutex::new(VecDeque::new()),
                 recovery_tx,
@@ -294,6 +321,7 @@ impl AiManager {
         manager.spawn_recovery_loop(recovery_rx);
         manager.spawn_media_reconcile_loop();
         manager.spawn_embedded_osd_loop();
+        manager.spawn_result_lifecycle_loop();
         Ok(manager)
     }
 
@@ -342,6 +370,7 @@ impl AiManager {
     pub fn status(&self) -> AiStatus {
         let mut status = self.inner.status.read().unwrap().clone();
         status.input = self.inner.hub.status();
+        status.result_bus = self.inner.result_bus.status();
         status
     }
 
@@ -358,6 +387,32 @@ impl AiManager {
 
     pub fn subscribe_metadata(&self) -> broadcast::Receiver<Arc<AiMetadata>> {
         self.inner.metadata.subscribe()
+    }
+
+    pub fn latest_result(&self) -> Option<Arc<crate::ai_results::AiCloudEvent>> {
+        self.inner.result_bus.latest()
+    }
+
+    pub fn subscribe_results(
+        &self,
+        cursor: Option<&str>,
+    ) -> crate::ai_results::AiResultSubscription {
+        self.inner.result_bus.subscribe_from(cursor)
+    }
+
+    pub fn replay_results_after(
+        &self,
+        sequence: u64,
+    ) -> (VecDeque<Arc<crate::ai_results::AiCloudEvent>>, u64) {
+        self.inner.result_bus.replay_after_sequence(sequence)
+    }
+
+    pub fn record_result_lag(&self, skipped: u64) {
+        self.inner.result_bus.record_lagged(skipped);
+    }
+
+    pub fn result_schema() -> &'static str {
+        AiResultBus::schema()
     }
 
     pub async fn list_projects(&self) -> anyhow::Result<Vec<AiProjectSummary>> {
@@ -531,6 +586,11 @@ impl AiManager {
             .hub
             .configure_input(document.manifest.input.clone())
             .await?;
+        *self.inner.active_inference.write().unwrap() = Some(InferenceDescriptor {
+            project: document.manifest.id.clone(),
+            algorithm: document.manifest.algorithm.clone(),
+            model: document.manifest.model.clone(),
+        });
         *self.inner.last_media_generation.lock().await = self.inner.hub.status().generation.clone();
         {
             let mut status = self.inner.status.write().unwrap();
@@ -606,6 +666,7 @@ impl AiManager {
                         {
                             break;
                         }
+                        manager.finish_result_generation("worker_exited");
                         let current = manager.inner.status.read().unwrap().generation.clone();
                         if current.as_deref() == Some(&active_generation) {
                             let mut status = manager.inner.status.write().unwrap();
@@ -715,6 +776,7 @@ impl AiManager {
     }
 
     async fn stop_runtime(&self) {
+        self.finish_result_generation("worker_stopped");
         if let Some(runtime) = self.inner.runtime.lock().await.take() {
             self.inner
                 .intentional_stops
@@ -736,7 +798,13 @@ impl AiManager {
         }
         self.inner.metadata_history.write().unwrap().clear();
         *self.inner.last_metadata.write().unwrap() = None;
-        *self.inner.tracker.lock().await = Tracker::default();
+        *self.inner.tracker.lock().await = Tracker::new(
+            self.inner
+                .config
+                .track_lost_timeout_ms
+                .saturating_mul(1_000),
+        );
+        *self.inner.active_inference.write().unwrap() = None;
         self.clear_embedded_regions().await;
     }
 
@@ -921,6 +989,20 @@ impl AiManager {
         });
     }
 
+    fn spawn_result_lifecycle_loop(&self) {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(100));
+            loop {
+                tick.tick().await;
+                let exited = manager.inner.lifecycle.lock().unwrap().expire(now_ms());
+                for event in exited {
+                    manager.publish_track_event(TRACK_EXITED_TYPE, event);
+                }
+            }
+        });
+    }
+
     async fn clear_embedded_regions(&self) -> bool {
         if self.inner.status.read().unwrap().osd_mode != OsdMode::EmbeddedRgn {
             return true;
@@ -993,7 +1075,58 @@ impl AiManager {
                 height: (y2 - y1).abs(),
             });
         }
-        let detections = self.inner.tracker.lock().await.update(boxes, frame.pts);
+        let detections =
+            self.inner
+                .tracker
+                .lock()
+                .await
+                .update(boxes, frame.pts, &frame.generation);
+        let descriptor = self
+            .inner
+            .active_inference
+            .read()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| InferenceDescriptor {
+                project: "unknown".into(),
+                algorithm: "unknown".into(),
+                model: "unknown".into(),
+            });
+        let published_at_ms = now_ms();
+        self.publish_standard_result(AiResultInput {
+            source_id: self.inner.config.source_id.clone(),
+            media_generation: frame.generation.clone(),
+            ai_generation: generation.to_owned(),
+            sequence,
+            pts_us: frame.pts,
+            published_at_ms,
+            frame: AiFrameInfoV1 {
+                width: frame.main_width,
+                height: frame.main_height,
+                coordinate_space: "main_normalized_top_left".into(),
+            },
+            inference: AiInferenceInfoV1 {
+                project: descriptor.project,
+                algorithm: descriptor.algorithm,
+                model: descriptor.model,
+                duration_us: inference_us,
+            },
+            objects: detections
+                .iter()
+                .map(|detection| AiObjectV1 {
+                    track_id: detection.track_id,
+                    class_id: detection.class_id,
+                    label: detection.label.clone(),
+                    confidence: detection.confidence,
+                    bbox: AiBoundingBoxV1 {
+                        x: detection.x,
+                        y: detection.y,
+                        width: detection.width,
+                        height: detection.height,
+                    },
+                })
+                .collect(),
+        });
         let metadata = Arc::new(AiMetadata {
             version: 1,
             generation: generation.to_owned(),
@@ -1022,7 +1155,7 @@ impl AiManager {
             });
         }
         let _ = self.inner.metadata.send(metadata.clone());
-        let observed_at = now_ms();
+        let observed_at = published_at_ms;
         let mut status = self.inner.status.write().unwrap();
         if let Some(previous) = status.last_result_at_ms {
             let elapsed_ms = observed_at.saturating_sub(previous);
@@ -1045,6 +1178,69 @@ impl AiManager {
             serde_json::to_value(&*metadata)?,
         ));
         Ok(())
+    }
+
+    fn publish_standard_result(&self, input: AiResultInput) {
+        let batch = self.inner.lifecycle.lock().unwrap().observe(&input);
+        for event in batch.exited {
+            self.publish_track_event(TRACK_EXITED_TYPE, event);
+        }
+        if let Some(event) = batch.generation {
+            self.publish_generation_event(event);
+        }
+        self.inner.result_bus.publish(
+            FRAME_RESULT_TYPE,
+            format!("frame/{}/{}", input.media_generation, input.sequence),
+            &input.data(),
+            true,
+        );
+        for event in batch.entered {
+            self.publish_track_event(TRACK_ENTERED_TYPE, event);
+        }
+        for event in batch.updated {
+            self.publish_track_event(TRACK_UPDATED_TYPE, event);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn publish_test_result(&self, input: AiResultInput) {
+        self.publish_standard_result(input);
+    }
+
+    fn publish_track_event(&self, event_type: &str, event: AiTrackEventDataV1) {
+        self.inner.result_bus.publish(
+            event_type,
+            format!("track/{}/{}", event.ai_generation, event.object.track_id),
+            &event,
+            false,
+        );
+    }
+
+    fn publish_generation_event(&self, event: AiGenerationEventDataV1) {
+        let subject = event
+            .ai_generation
+            .as_deref()
+            .or(event.previous_ai_generation.as_deref())
+            .map(|generation| format!("generation/{generation}"))
+            .unwrap_or_else(|| "generation/none".into());
+        self.inner
+            .result_bus
+            .publish(GENERATION_TYPE, subject, &event, false);
+    }
+
+    fn finish_result_generation(&self, reason: &str) {
+        let finish = self
+            .inner
+            .lifecycle
+            .lock()
+            .unwrap()
+            .finish(reason, now_ms());
+        for event in finish.exited {
+            self.publish_track_event(TRACK_EXITED_TYPE, event);
+        }
+        if let Some(event) = finish.generation {
+            self.publish_generation_event(event);
+        }
     }
 
     pub async fn list_models(&self) -> anyhow::Result<Vec<AiModelInfo>> {

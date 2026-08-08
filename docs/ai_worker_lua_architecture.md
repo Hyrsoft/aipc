@@ -324,10 +324,15 @@ RGA 或 NPU 同步路径，因此 WebRTC、RTSP 和 MP4 都包含框，主路保
 - `GET /api/v1/ai/osd`
 - `PUT /api/v1/ai/osd`，body 为 `{ "mode": "..." }`
 - `GET /api/v1/ai/events`，SSE metadata fallback
+- `GET /api/v1/ai/results/latest`，最新标准 CloudEvent
+- `GET /api/v1/ai/results/stream`，支持 `Last-Event-ID` 的 SSE/replay
+- `GET /api/v1/ai/results/schema`，AI 结果 JSON Schema
 
 AI status 至少返回 enabled/state、active/last-good project、generation、active input、
 worker PID、ready、last result time、inference FPS/latency、media/daemon/AI drop 计数、
-RGN capability 和 last error。删除活动或 last-good 引用的模型必须返回冲突。
+RGN capability、标准结果总线状态和 last error。删除活动或 last-good 引用的模型必须
+返回冲突。外部服务接口的 CloudEvents、坐标和 replay 契约见
+[`ai_result_api.md`](./ai_result_api.md)。
 
 Web UI 提供 AI 状态、项目列表、Lua/manifest 编辑、校验、部署、模型上传/删除、
 推理指标、错误和 OSD 三态控制。文件先写 `.part` 并 fsync/rename，失败不得覆盖

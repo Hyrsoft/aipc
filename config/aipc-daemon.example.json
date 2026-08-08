@@ -48,6 +48,11 @@
     "worker_path": "ai_worker",
     "startup_timeout_ms": 30000,
     "max_model_bytes": 134217728,
-    "result_ttl_ms": 500
+    "result_ttl_ms": 500,
+    "source_id": "camera0",
+    "result_replay_capacity": 256,
+    "track_confirmations": 2,
+    "track_lost_timeout_ms": 500,
+    "track_update_interval_ms": 500
   }
 }

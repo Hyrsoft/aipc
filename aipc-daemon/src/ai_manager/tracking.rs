@@ -4,10 +4,11 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-#[derive(Default)]
 pub(super) struct Tracker {
     next_id: u64,
     previous: Vec<(u64, UntrackedDetection, u64)>,
+    retention_us: u64,
+    media_generation: Option<String>,
 }
 
 #[derive(Clone)]
@@ -22,11 +23,25 @@ pub(super) struct UntrackedDetection {
 }
 
 impl Tracker {
+    pub(super) fn new(retention_us: u64) -> Self {
+        Self {
+            next_id: 0,
+            previous: Vec::new(),
+            retention_us,
+            media_generation: None,
+        }
+    }
+
     pub(super) fn update(
         &mut self,
         current: Vec<UntrackedDetection>,
         pts: u64,
+        media_generation: &str,
     ) -> Vec<AiDetection> {
+        if self.media_generation.as_deref() != Some(media_generation) {
+            self.previous.clear();
+            self.media_generation = Some(media_generation.into());
+        }
         let mut used = vec![false; self.previous.len()];
         let mut output = Vec::new();
         let mut next_previous = Vec::new();
@@ -59,6 +74,11 @@ impl Tracker {
                 height: item.height,
             });
             next_previous.push((track_id, item, pts));
+        }
+        for (index, previous) in self.previous.iter().enumerate() {
+            if !used[index] && pts.saturating_sub(previous.2) <= self.retention_us {
+                next_previous.push(previous.clone());
+            }
         }
         self.previous = next_previous;
         output
@@ -191,4 +211,31 @@ pub(super) fn number(value: &Value, key: &str) -> anyhow::Result<f64> {
         .get(key)
         .and_then(Value::as_f64)
         .ok_or_else(|| anyhow::anyhow!("detection field {key} is missing"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detection(x: f64) -> UntrackedDetection {
+        UntrackedDetection {
+            class_id: 0,
+            label: "person".into(),
+            confidence: 0.9,
+            x,
+            y: 0.1,
+            width: 0.2,
+            height: 0.3,
+        }
+    }
+
+    #[test]
+    fn media_generation_change_starts_new_track_ids() {
+        let mut tracker = Tracker::new(500_000);
+        let first = tracker.update(vec![detection(0.1)], 100, "media-1");
+        let same = tracker.update(vec![detection(0.11)], 200, "media-1");
+        let restarted = tracker.update(vec![detection(0.11)], 10, "media-2");
+        assert_eq!(first[0].track_id, same[0].track_id);
+        assert_ne!(first[0].track_id, restarted[0].track_id);
+    }
 }

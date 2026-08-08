@@ -73,6 +73,9 @@ pub fn router(
         .route("/api/v1/ai/models/{name}", delete(ai_model_delete))
         .route("/api/v1/ai/osd", get(ai_osd).put(ai_osd_update))
         .route("/api/v1/ai/events", get(ai_events))
+        .route("/api/v1/ai/results/latest", get(ai_results_latest))
+        .route("/api/v1/ai/results/stream", get(ai_results_stream))
+        .route("/api/v1/ai/results/schema", get(ai_results_schema))
         .route("/api/v1/config", get(config).put(apply_config))
         .route("/api/v1/worker/start", post(start))
         .route("/api/v1/worker/stop", post(stop))
@@ -628,6 +631,9 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai_results::{
+        AiBoundingBoxV1, AiFrameInfoV1, AiInferenceInfoV1, AiObjectV1, AiResultInput,
+    };
     use crate::config::{AiDaemonConfig, DaemonConfig, RtspConfig, WebRtcConfig};
     use crate::model::PersistentState;
     use crate::supervisor::spawn_supervisor;
@@ -635,6 +641,40 @@ mod tests {
     use http_body_util::BodyExt;
     use tempfile::tempdir;
     use tower::ServiceExt;
+
+    fn ai_result_input(sequence: u64) -> AiResultInput {
+        AiResultInput {
+            source_id: "camera0".into(),
+            media_generation: "media-test".into(),
+            ai_generation: "ai-test".into(),
+            sequence,
+            pts_us: sequence * 100_000,
+            published_at_ms: 1000 + sequence * 100,
+            frame: AiFrameInfoV1 {
+                width: 1920,
+                height: 1080,
+                coordinate_space: "main_normalized_top_left".into(),
+            },
+            inference: AiInferenceInfoV1 {
+                project: "test".into(),
+                algorithm: "yolov5".into(),
+                model: "test.rknn".into(),
+                duration_us: 100,
+            },
+            objects: vec![AiObjectV1 {
+                track_id: 1,
+                class_id: 0,
+                label: "person".into(),
+                confidence: 0.9,
+                bbox: AiBoundingBoxV1 {
+                    x: 0.1,
+                    y: 0.2,
+                    width: 0.3,
+                    height: 0.4,
+                },
+            }],
+        }
+    }
 
     #[test]
     fn parses_http_byte_ranges() {
@@ -718,7 +758,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let app = router(handle.clone(), recording, rtsp, webrtc, ai, temp.path());
+        let app = router(
+            handle.clone(),
+            recording,
+            rtsp,
+            webrtc,
+            ai.clone(),
+            temp.path(),
+        );
         let response = app
             .clone()
             .oneshot(
@@ -734,6 +781,7 @@ mod tests {
         let mut invalid = WorkerConfig::default();
         invalid.video.width = 1;
         let response = app
+            .clone()
             .oneshot(
                 axum::http::Request::builder()
                     .method("PUT")
@@ -747,6 +795,86 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         assert!(String::from_utf8_lossy(&body).contains("invalid_config"));
+
+        let latest = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/ai/results/latest")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(latest.status(), StatusCode::NO_CONTENT);
+
+        ai.publish_test_result(ai_result_input(1));
+        let latest = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/ai/results/latest")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(latest.status(), StatusCode::OK);
+        let latest_body = latest.into_body().collect().await.unwrap().to_bytes();
+        let latest_json: serde_json::Value = serde_json::from_slice(&latest_body).unwrap();
+        assert_eq!(latest_json["type"], "io.aipc.ai.frame.v1");
+        assert_eq!(latest_json["data"]["objects"][0]["bbox"]["x"], 0.1);
+        let latest_id = latest_json["id"].as_str().unwrap().to_owned();
+
+        let schema = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/ai/results/schema")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(schema.status(), StatusCode::OK);
+        assert_eq!(
+            schema.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/schema+json"
+        );
+        let schema_body = schema.into_body().collect().await.unwrap().to_bytes();
+        let schema_json: serde_json::Value = serde_json::from_slice(&schema_body).unwrap();
+        assert_eq!(schema_json["$id"], "/api/v1/ai/results/schema");
+
+        let stream_response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/ai/results/stream")
+                    .header("last-event-id", latest_id)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stream_response.status(), StatusCode::OK);
+        assert!(
+            stream_response.headers()[header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with("text/event-stream")
+        );
+        ai.publish_test_result(ai_result_input(2));
+        let mut stream_body = stream_response.into_body();
+        let frame = tokio::time::timeout(Duration::from_secs(1), stream_body.frame())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let data = frame.into_data().unwrap();
+        let text = String::from_utf8_lossy(&data);
+        assert!(text.contains("event: io.aipc.ai.frame.v1"));
+        assert!(text.contains("\"sequence\":2"));
+
         handle.shutdown().await;
     }
 }
