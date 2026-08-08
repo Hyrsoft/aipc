@@ -194,6 +194,35 @@ export interface AiProjectSummary {
   last_good: boolean
 }
 export interface AiModelInfo { name: string; bytes: number; sha256: string; active: boolean }
+
+export type DependencyOwner = 'ai_worker' | 'media_worker'
+export interface DependencyVersion {
+  sha256: string
+  bytes: number
+  soname: string
+  build_id: string | null
+  detected_version: string | null
+  needed: string[]
+  source: 'factory' | 'uploaded' | string
+  uploaded_at_ms: number | null
+}
+export interface DependencyInfo {
+  id: string
+  display_name: string
+  load_names: string[]
+  owners: DependencyOwner[]
+  state: 'idle' | 'validating' | 'restarting' | 'rolling_back' | 'degraded' | string
+  factory: DependencyVersion | null
+  active: DependencyVersion | null
+  previous: DependencyVersion | null
+  versions: DependencyVersion[]
+  last_error: string | null
+}
+export interface DependencyList {
+  enabled: boolean
+  max_upload_bytes: number
+  items: DependencyInfo[]
+}
 export interface AiInputStatus {
   generation: string | null
   available: boolean

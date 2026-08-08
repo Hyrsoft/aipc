@@ -6,6 +6,7 @@ import { initialPreviewSnapshot } from './preview'
 import { AdaptivePreviewController } from './webrtcPreview'
 import { AiOverlayController } from './aiOverlay'
 import AiView from './AiView.vue'
+import DependencyPanel from './DependencyPanel.vue'
 import AboutView from './AboutView.vue'
 import RecordingsView from './RecordingsView.vue'
 import {
@@ -259,6 +260,7 @@ onBeforeUnmount(() => { disconnect?.(); previewController?.destroy(); aiOverlay?
           <details class="advanced-details"><summary><div><b>高级硬件与运行时参数</b><small>诊断输出不是业务数据通道，正式音频由 AIPA IPC 提供</small></div><span>展开</span></summary><div class="form-grid advanced"><label>IQ 目录<input v-model="form.isp.iq_dir"></label><label>VI device<input type="number" v-model.number="form.vi.device_id"></label><label>VI pipe<input type="number" v-model.number="form.vi.pipe_id"></label><label>VI channel<input type="number" v-model.number="form.vi.channel_id"></label><label>VI buffers<input type="number" v-model.number="form.vi.buffer_count"></label><label>VPSS group<input type="number" v-model.number="form.vpss.group_id"></label><label>VPSS channel<input type="number" v-model.number="form.vpss.channel_id"></label><label>VENC channel<input type="number" v-model.number="form.video.venc_channel_id"></label><label>VENC buffers<input type="number" v-model.number="form.video.stream_buffer_count"></label><label>Warning timeout<input type="number" v-model.number="form.runtime.warning_timeout_count"></label><label>Stalled timeout<input type="number" v-model.number="form.runtime.stalled_timeout_count"></label><label>Fatal timeout<input type="number" v-model.number="form.runtime.fatal_timeout_count"></label><label>Metrics (ms)<input type="number" v-model.number="form.runtime.metrics_interval_ms"></label><label class="wide">视频诊断输出<input v-model="form.video.output_path"></label><label class="wide">音频诊断输出<input v-model="form.audio.output_path"></label></div></details>
         </section>
         <section class="panel config-versions"><div class="section-head"><div><span class="label">CONFIG HISTORY</span><h3>配置版本</h3><p>用于核对当前生效、待应用与最近可用配置。</p></div></div><div class="config-stack"><details v-for="row in configDiff" :key="row.name"><summary><b>{{ row.name }}</b><span>{{ short(row.value?.runtime.generation) }}</span></summary><pre>{{ JSON.stringify(row.value, null, 2) }}</pre></details></div><p v-if="configs?.last_error" class="rollback">最近回滚 / 错误：{{ configs.last_error }}</p></section>
+        <DependencyPanel />
       </template>
 
       <template v-else-if="activeView === 'diagnostics'">
