@@ -211,6 +211,15 @@ export interface AiStatus {
   last_error: string | null
   osd_mode: AiOsdMode
   rgn_capability: { line: boolean; cover: boolean; backend: string; max_boxes: number; implemented: boolean } | null
+  result_bus: {
+    stream_id: string
+    latest_event_id: string | null
+    earliest_replay_event_id: string | null
+    published: number
+    replay_depth: number
+    replay_capacity: number
+    lagged_events: number
+  }
 }
 export interface AiDetection {
   track_id: number
@@ -231,4 +240,93 @@ export interface AiMetadata {
   main_height: number
   inference_us: number
   detections: AiDetection[]
+}
+
+export type AiResultEventType =
+  | 'io.aipc.ai.frame.v1'
+  | 'io.aipc.ai.track.entered.v1'
+  | 'io.aipc.ai.track.updated.v1'
+  | 'io.aipc.ai.track.exited.v1'
+  | 'io.aipc.ai.stream.gap.v1'
+  | 'io.aipc.ai.generation.v1'
+
+export interface AiResultBoundingBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface AiResultObject {
+  track_id: number
+  class_id: number
+  label: string
+  confidence: number
+  bbox: AiResultBoundingBox
+}
+
+export interface AiResultFrameInfo {
+  width: number
+  height: number
+  coordinate_space: 'main_normalized_top_left'
+}
+
+export interface AiResultInferenceInfo {
+  project: string
+  algorithm: string
+  model: string
+  duration_us: number
+}
+
+export interface AiFrameResultData {
+  schema_version: 1
+  source_id: string
+  media_generation: string
+  ai_generation: string
+  sequence: number
+  pts_us: number
+  published_at_ms: number
+  frame: AiResultFrameInfo
+  inference: AiResultInferenceInfo
+  objects: AiResultObject[]
+}
+
+export interface AiTrackResultData extends Omit<AiFrameResultData, 'objects'> {
+  object: AiResultObject
+  reason: string
+}
+
+export interface AiGenerationResultData {
+  schema_version: 1
+  source_id: string
+  media_generation: string | null
+  ai_generation: string | null
+  previous_media_generation: string | null
+  previous_ai_generation: string | null
+  state: 'started' | 'stopped'
+  reason: string
+  published_at_ms: number
+}
+
+export interface AiStreamGapResultData {
+  schema_version: 1
+  source_id: string
+  requested_event_id: string | null
+  earliest_event_id: string | null
+  latest_event_id: string | null
+  reason: string
+}
+
+export type AiCloudEventData = AiFrameResultData | AiTrackResultData | AiGenerationResultData | AiStreamGapResultData
+
+export interface AiCloudEvent {
+  specversion: '1.0'
+  id: string
+  source: string
+  type: AiResultEventType
+  subject: string
+  time: string
+  datacontenttype: 'application/json'
+  dataschema: string
+  data: AiCloudEventData
 }

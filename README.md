@@ -66,6 +66,7 @@ flowchart LR
 - VisionG v1.2.1 + YOLOv5n COCO80 RKNN 已在 RV1106 真机持续运行，640×640 推理约 75 ms、结果约 10 FPS。
 - VisionG 的 `(x, y, width, height)` 检测结果会转换为统一角点坐标，再依据 stretch/contain/cover 变换映射到主路归一化坐标，避免模型输入、letterbox 与输出画面尺寸不同造成框偏移。
 - OSD 三态：`off`、默认 `metadata`、`embedded_rgn`。metadata 通过 WebRTC DataChannel/SSE 平滑叠加；embedded 在 RV1106 使用 `COVER_RGN@VI`，运行时探测 VI 原始坐标尺寸并从主路坐标域缩放，可进入 WebRTC、RTSP 和 MP4，且不使用同步 RGA 合成。
+- Rust daemon 提供 CloudEvents 1.0 标准 AI 结果接口：latest JSON、可用 `Last-Event-ID` 有界补发的 SSE、JSON Schema，以及 entered/updated/exited 目标生命周期事件，供报警、记录和其他服务消费。
 - ADB + 以太网/Wi-Fi 联合部署验证流程；已验证 HTTP、WebRTC、MP4/Range、ZIP、RTSP TCP/UDP、AI 崩溃恢复和 10 分钟持续运行。
 
 ## 功能实现矩阵
@@ -192,6 +193,25 @@ daemon 当前未启用身份认证，只应暴露在可信局域网中。
 缩放。这样浏览器 metadata、WebRTC、RTSP 和录像中的 embedded 框使用同一目标位置，
 且坐标转换不会进入 VENC 的同步关键路径。接口和协议细节见
 [`docs/ai_worker_lua_architecture.md`](./docs/ai_worker_lua_architecture.md)。
+
+### 外部进程消费 AI 结果
+
+新服务应使用标准化结果接口，而不是直接依赖浏览器 OSD 的兼容事件：
+
+```bash
+curl -fsS http://<board-ip>:8080/api/v1/ai/results/latest | jq
+curl -N http://<board-ip>:8080/api/v1/ai/results/stream
+curl -fsS http://<board-ip>:8080/api/v1/ai/results/schema | jq
+```
+
+结果使用 CloudEvents 1.0 structured JSON，检测框统一为主路左上角原点的 `[0,1]`
+归一化坐标，并携带 media/AI generation、单调微秒 PTS、项目、模型和推理耗时。
+SSE 支持 `Last-Event-ID` 重连补发；报警服务可直接消费 track entered/exited，记录
+服务可用 `media_generation + pts_us` 和录像关联。完整契约及 Python 示例见
+[`docs/ai_result_api.md`](./docs/ai_result_api.md)。
+
+Web 控制台的“AI 与 Lua”页面内置标准事件查看器，可实时筛选逐帧结果、目标生命周期、
+generation 和 replay gap，并展开查看完整 CloudEvent JSON 与结果总线状态。
 
 ## 路线图
 

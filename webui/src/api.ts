@@ -1,4 +1,5 @@
-import type { AiModelInfo, AiOsdMode, AiProjectDocument, AiProjectSummary, AiStatus, DaemonStatus, LogEntry, PersistentState, RecordingList, RecordingSettings, RecordingStatus, RtspStatus, ServerEvent, WorkerConfig } from './types'
+import { aiResultEventTypes } from './aiResults'
+import type { AiCloudEvent, AiModelInfo, AiOsdMode, AiProjectDocument, AiProjectSummary, AiStatus, DaemonStatus, LogEntry, PersistentState, RecordingList, RecordingSettings, RecordingStatus, RtspStatus, ServerEvent, WorkerConfig } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -65,6 +66,13 @@ export const api = {
   setAiOsd: (mode: AiOsdMode) => request<{ mode: AiOsdMode }>('/api/v1/ai/osd', {
     method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode }),
   }),
+  aiResultLatest: async (): Promise<AiCloudEvent | null> => {
+    const response = await fetch('/api/v1/ai/results/latest')
+    if (response.status === 204) return null
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(body?.error?.message || `HTTP ${response.status}`)
+    return body as AiCloudEvent
+  },
 }
 
 export interface LiveState {
@@ -88,6 +96,24 @@ export function connectEvents(onEvent: (event: ServerEvent) => void, onConnectio
       try {
         const parsed = JSON.parse((message as MessageEvent).data)
         onEvent(parsed?.kind ? parsed : { kind, timestamp_ms: Date.now(), payload: parsed })
+      } catch { /* keep stream alive */ }
+    })
+  }
+  source.onopen = () => onConnection(true)
+  source.onerror = () => onConnection(false)
+  return () => source.close()
+}
+
+export function connectAiResultEvents(
+  onEvent: (event: AiCloudEvent) => void,
+  onConnection: (up: boolean) => void,
+) {
+  const source = new EventSource('/api/v1/ai/results/stream')
+  for (const kind of aiResultEventTypes) {
+    source.addEventListener(kind, (message) => {
+      try {
+        const parsed = JSON.parse((message as MessageEvent).data) as AiCloudEvent
+        if (parsed.specversion === '1.0' && parsed.id && parsed.type === kind) onEvent(parsed)
       } catch { /* keep stream alive */ }
     })
   }
