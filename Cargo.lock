@@ -33,6 +33,7 @@ dependencies = [
  "str0m",
  "tempfile",
  "thiserror 2.0.19",
+ "time",
  "tokio",
  "tokio-util",
  "tower",

@@ -333,6 +333,65 @@ impl WorkerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct UiConfig {
+    pub project_name: String,
+    pub console_name: String,
+    pub platform_name: String,
+    pub board_name: String,
+    pub project_url: String,
+    pub documentation_url: String,
+    pub visiong_url: String,
+    pub license_name: String,
+    pub license_url: String,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            project_name: "AIPC".into(),
+            console_name: "Media Console".into(),
+            platform_name: "RV1106".into(),
+            board_name: "Luckfox Pico Ultra W".into(),
+            project_url: "https://github.com/haoyn231/aipc".into(),
+            documentation_url: "https://github.com/haoyn231/aipc/tree/main/docs".into(),
+            visiong_url: "https://github.com/yiex/visiong".into(),
+            license_name: "Apache-2.0".into(),
+            license_url: "https://github.com/haoyn231/aipc/blob/main/LICENSE".into(),
+        }
+    }
+}
+
+impl UiConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        for (name, value) in [
+            ("ui.project_name", &self.project_name),
+            ("ui.console_name", &self.console_name),
+            ("ui.platform_name", &self.platform_name),
+            ("ui.board_name", &self.board_name),
+            ("ui.license_name", &self.license_name),
+        ] {
+            anyhow::ensure!(
+                !value.trim().is_empty() && value.len() <= 128,
+                "{name} must contain 1-128 characters"
+            );
+        }
+        for (name, value) in [
+            ("ui.project_url", &self.project_url),
+            ("ui.documentation_url", &self.documentation_url),
+            ("ui.visiong_url", &self.visiong_url),
+            ("ui.license_url", &self.license_url),
+        ] {
+            anyhow::ensure!(
+                value.starts_with("https://") || value.starts_with("http://"),
+                "{name} must be an HTTP(S) URL"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct DaemonConfig {
     pub bind: String,
     pub worker_path: PathBuf,
@@ -345,6 +404,7 @@ pub struct DaemonConfig {
     pub stop_timeout_ms: u64,
     pub max_restarts: usize,
     pub restart_window_sec: u64,
+    pub ui: UiConfig,
     pub preview: PreviewConfig,
     pub recording: RecordingConfig,
     pub rtsp: RtspConfig,
@@ -360,6 +420,11 @@ pub struct AiDaemonConfig {
     pub startup_timeout_ms: u64,
     pub max_model_bytes: u64,
     pub result_ttl_ms: u64,
+    pub source_id: String,
+    pub result_replay_capacity: usize,
+    pub track_confirmations: usize,
+    pub track_lost_timeout_ms: u64,
+    pub track_update_interval_ms: u64,
 }
 
 impl Default for AiDaemonConfig {
@@ -370,7 +435,42 @@ impl Default for AiDaemonConfig {
             startup_timeout_ms: 30_000,
             max_model_bytes: 128 * 1024 * 1024,
             result_ttl_ms: 500,
+            source_id: "camera0".into(),
+            result_replay_capacity: 256,
+            track_confirmations: 2,
+            track_lost_timeout_ms: 500,
+            track_update_interval_ms: 500,
         }
+    }
+}
+
+impl AiDaemonConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.source_id.is_empty()
+                && self.source_id.len() <= 64
+                && self.source_id.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                }),
+            "ai.source_id must contain 1-64 safe identifier characters"
+        );
+        anyhow::ensure!(
+            (1..=4096).contains(&self.result_replay_capacity),
+            "ai.result_replay_capacity must be in [1, 4096]"
+        );
+        anyhow::ensure!(
+            (1..=16).contains(&self.track_confirmations),
+            "ai.track_confirmations must be in [1, 16]"
+        );
+        anyhow::ensure!(
+            (50..=60_000).contains(&self.track_lost_timeout_ms),
+            "ai.track_lost_timeout_ms must be in [50, 60000]"
+        );
+        anyhow::ensure!(
+            (50..=60_000).contains(&self.track_update_interval_ms),
+            "ai.track_update_interval_ms must be in [50, 60000]"
+        );
+        Ok(())
     }
 }
 
@@ -520,6 +620,7 @@ impl Default for DaemonConfig {
             stop_timeout_ms: 5_000,
             max_restarts: 5,
             restart_window_sec: 300,
+            ui: UiConfig::default(),
             preview: PreviewConfig::default(),
             recording: RecordingConfig::default(),
             rtsp: RtspConfig::default(),
@@ -550,6 +651,8 @@ impl DaemonConfig {
             .iter()
             .map(|path| resolve(executable_dir, path))
             .collect();
+        config.ai.validate()?;
+        config.ui.validate()?;
         config.webrtc.validate()?;
         Ok(config)
     }
@@ -605,6 +708,36 @@ mod tests {
         assert!(config.validate().is_err());
         config.max_clients = 1;
         config.advertised_ip = Some("0.0.0.0".parse().unwrap());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validates_ai_result_settings() {
+        assert!(AiDaemonConfig::default().validate().is_ok());
+        let config = AiDaemonConfig {
+            source_id: "../camera".into(),
+            ..AiDaemonConfig::default()
+        };
+        assert!(config.validate().is_err());
+        let config = AiDaemonConfig {
+            result_replay_capacity: 0,
+            ..AiDaemonConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validates_ui_platform_and_links() {
+        assert!(UiConfig::default().validate().is_ok());
+        let config = UiConfig {
+            platform_name: "".into(),
+            ..UiConfig::default()
+        };
+        assert!(config.validate().is_err());
+        let config = UiConfig {
+            project_url: "file:///tmp/aipc".into(),
+            ..UiConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 }

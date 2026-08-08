@@ -1,4 +1,8 @@
 use super::*;
+use crate::ai_results::AiCloudEvent;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use tokio::sync::broadcast;
 
 pub(super) async fn ai_status(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.ai.status())
@@ -141,4 +145,84 @@ pub(super) async fn ai_events(
             .interval(Duration::from_secs(10))
             .text("keep-alive"),
     )
+}
+
+pub(super) async fn ai_results_latest(State(state): State<AppState>) -> Response {
+    match state.ai.latest_result() {
+        Some(event) => Json((*event).clone()).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
+pub(super) async fn ai_results_schema() -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/schema+json")
+        .body(Body::from(AiManager::result_schema()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+struct AiResultStreamState {
+    ai: AiManager,
+    receiver: broadcast::Receiver<Arc<AiCloudEvent>>,
+    pending: VecDeque<Arc<AiCloudEvent>>,
+    last_sequence: u64,
+}
+
+pub(super) async fn ai_results_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let cursor = headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok());
+    let subscription = state.ai.subscribe_results(cursor);
+    let stream = stream::unfold(
+        AiResultStreamState {
+            ai: state.ai,
+            receiver: subscription.receiver,
+            pending: subscription.pending,
+            last_sequence: subscription.last_sequence,
+        },
+        |mut state| async move {
+            loop {
+                if let Some(event) = state.pending.pop_front() {
+                    state.last_sequence = event.sequence().unwrap_or(state.last_sequence);
+                    return Some((Ok(cloud_event_sse(&event)), state));
+                }
+                match state.receiver.recv().await {
+                    Ok(event) => {
+                        let sequence = event.sequence().unwrap_or_default();
+                        if sequence <= state.last_sequence {
+                            continue;
+                        }
+                        state.last_sequence = sequence;
+                        return Some((Ok(cloud_event_sse(&event)), state));
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        state.ai.record_result_lag(skipped);
+                        let (pending, cursor) = state.ai.replay_results_after(state.last_sequence);
+                        state.pending = pending;
+                        if state.pending.is_empty() {
+                            state.last_sequence = cursor;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return None,
+                }
+            }
+        },
+    );
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(10))
+            .text("keep-alive"),
+    )
+}
+
+fn cloud_event_sse(event: &AiCloudEvent) -> Event {
+    Event::default()
+        .id(event.id.clone())
+        .event(event.event_type.clone())
+        .json_data(event)
+        .unwrap_or_else(|_| Event::default().event("serialization_error"))
 }

@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "/api/v1/ai/results/schema",
+  "title": "AIPC AI CloudEvent v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["specversion", "id", "source", "type", "subject", "time", "datacontenttype", "dataschema", "data"],
+  "properties": {
+    "specversion": { "const": "1.0" },
+    "id": { "type": "string", "minLength": 3 },
+    "source": { "type": "string", "pattern": "^urn:aipc:camera:" },
+    "type": {
+      "enum": [
+        "io.aipc.ai.frame.v1",
+        "io.aipc.ai.track.entered.v1",
+        "io.aipc.ai.track.updated.v1",
+        "io.aipc.ai.track.exited.v1",
+        "io.aipc.ai.stream.gap.v1",
+        "io.aipc.ai.generation.v1"
+      ]
+    },
+    "subject": { "type": "string" },
+    "time": { "type": "string", "format": "date-time" },
+    "datacontenttype": { "const": "application/json" },
+    "dataschema": { "const": "/api/v1/ai/results/schema" },
+    "data": {
+      "oneOf": [
+        { "$ref": "#/$defs/frameResult" },
+        { "$ref": "#/$defs/trackEvent" },
+        { "$ref": "#/$defs/generationEvent" },
+        { "$ref": "#/$defs/streamGap" }
+      ]
+    }
+  },
+  "$defs": {
+    "bbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "width": { "type": "number", "minimum": 0, "maximum": 1 },
+        "height": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["track_id", "class_id", "label", "confidence", "bbox"],
+      "properties": {
+        "track_id": { "type": "integer", "minimum": 1 },
+        "class_id": { "type": "integer" },
+        "label": { "type": "string", "maxLength": 128 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bbox": { "$ref": "#/$defs/bbox" }
+      }
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "coordinate_space"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "coordinate_space": { "const": "main_normalized_top_left" }
+      }
+    },
+    "inference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "algorithm", "model", "duration_us"],
+      "properties": {
+        "project": { "type": "string" },
+        "algorithm": { "type": "string" },
+        "model": { "type": "string" },
+        "duration_us": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "common": {
+      "type": "object",
+      "required": ["schema_version", "source_id", "media_generation", "ai_generation", "sequence", "pts_us", "published_at_ms", "frame", "inference"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "source_id": { "type": "string" },
+        "media_generation": { "type": "string" },
+        "ai_generation": { "type": "string" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "pts_us": { "type": "integer", "minimum": 0 },
+        "published_at_ms": { "type": "integer", "minimum": 0 },
+        "frame": { "$ref": "#/$defs/frame" },
+        "inference": { "$ref": "#/$defs/inference" }
+      }
+    },
+    "frameResult": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["objects"],
+          "properties": { "objects": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/object" } } }
+        }
+      ]
+    },
+    "trackEvent": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["object", "reason"],
+          "properties": {
+            "object": { "$ref": "#/$defs/object" },
+            "reason": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "generationEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "source_id", "media_generation", "ai_generation", "previous_media_generation", "previous_ai_generation", "state", "reason", "published_at_ms"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "source_id": { "type": "string" },
+        "media_generation": { "type": ["string", "null"] },
+        "ai_generation": { "type": ["string", "null"] },
+        "previous_media_generation": { "type": ["string", "null"] },
+        "previous_ai_generation": { "type": ["string", "null"] },
+        "state": { "enum": ["started", "stopped"] },
+        "reason": { "type": "string" },
+        "published_at_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "streamGap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "source_id", "requested_event_id", "earliest_event_id", "latest_event_id", "reason"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "source_id": { "type": "string" },
+        "requested_event_id": { "type": ["string", "null"] },
+        "earliest_event_id": { "type": ["string", "null"] },
+        "latest_event_id": { "type": ["string", "null"] },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

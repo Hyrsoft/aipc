@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { api } from './api'
-import type { AiModelInfo, AiOsdMode, AiProjectDocument, AiProjectSummary, AiStatus } from './types'
+import { api, connectAiResultEvents } from './api'
+import { aiResultCategory, aiResultMatches, aiResultSummary, aiResultTypeLabel, appendAiResultEvents, shortEventId } from './aiResults'
+import type { AiResultFilter } from './aiResults'
+import type { AiCloudEvent, AiModelInfo, AiOsdMode, AiProjectDocument, AiProjectSummary, AiStatus } from './types'
 
 const status = ref<AiStatus | null>(null)
 const projects = ref<AiProjectSummary[]>([])
@@ -12,9 +14,18 @@ const busy = ref(false)
 const notice = ref('')
 const error = ref('')
 const upload = ref<HTMLInputElement | null>(null)
+const resultEvents = ref<AiCloudEvent[]>([])
+const resultFilter = ref<AiResultFilter>('all')
+const resultConnected = ref(false)
+const resultPaused = ref(false)
+const resultSkipped = ref(0)
+const pendingResultEvents: AiCloudEvent[] = []
 let timer = 0
+let resultTimer = 0
+let disconnectResults: (() => void) | null = null
 
 const selected = computed(() => projects.value.find((project) => project.id === selectedId.value))
+const visibleResultEvents = computed(() => resultEvents.value.filter((event) => aiResultMatches(event, resultFilter.value)))
 
 async function refresh() {
   try {
@@ -134,11 +145,51 @@ async function action(operation: () => Promise<void>) {
   try { await operation() } catch (cause) { error.value = String(cause) } finally { busy.value = false }
 }
 
+function enqueueResult(event: AiCloudEvent) {
+  if (resultPaused.value) {
+    resultSkipped.value += 1
+    return
+  }
+  pendingResultEvents.push(event)
+}
+
+function flushResultEvents() {
+  if (!pendingResultEvents.length) return
+  resultEvents.value = appendAiResultEvents(resultEvents.value, pendingResultEvents.splice(0))
+}
+
+async function toggleResultPause() {
+  resultPaused.value = !resultPaused.value
+  if (!resultPaused.value) {
+    const latest = await api.aiResultLatest().catch(() => null)
+    if (latest) enqueueResult(latest)
+    flushResultEvents()
+  }
+}
+
+function clearResultEvents() {
+  pendingResultEvents.splice(0)
+  resultEvents.value = []
+  resultSkipped.value = 0
+}
+
+function eventTime(event: AiCloudEvent) {
+  const time = new Date(event.time)
+  return Number.isNaN(time.getTime()) ? event.time : time.toLocaleTimeString()
+}
+
 onMounted(() => {
   void refresh()
   timer = window.setInterval(() => { void api.aiStatus().then((value) => { status.value = value }).catch(() => undefined) }, 2000)
+  resultTimer = window.setInterval(flushResultEvents, 120)
+  void api.aiResultLatest().then((event) => { if (event) enqueueResult(event) }).catch(() => undefined)
+  disconnectResults = connectAiResultEvents(enqueueResult, (connected) => { resultConnected.value = connected })
 })
-onBeforeUnmount(() => window.clearInterval(timer))
+onBeforeUnmount(() => {
+  window.clearInterval(timer)
+  window.clearInterval(resultTimer)
+  disconnectResults?.()
+})
 </script>
 
 <template>
@@ -179,6 +230,43 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <div class="section-head"><div><span class="label">RKNN MODELS</span><h3>模型与标签</h3><p>上传使用临时文件和原子 rename；活动或 last-good 项目引用的文件不可删除。</p></div><div class="model-upload"><input ref="upload" type="file" accept=".rknn,.txt"><button class="accent" :disabled="busy" @click="uploadModel">上传</button></div></div>
       <div class="model-row model-header"><span>文件</span><span>大小</span><span>SHA-256</span><span>状态</span><span></span></div>
       <div v-for="model in models" :key="model.name" class="model-row"><b>{{ model.name }}</b><span>{{ (model.bytes / 1024 / 1024).toFixed(2) }} MiB</span><code>{{ model.sha256 }}</code><span>{{ model.active ? 'IN USE' : 'AVAILABLE' }}</span><button class="secondary compact" :disabled="model.active || busy" @click="removeModel(model)">删除</button></div>
+    </section>
+
+    <section class="panel ai-results-panel">
+      <div class="section-head event-head">
+        <div><span class="label">STANDARD AI EVENTS</span><h3>结构化识别事件</h3><p>CloudEvents 1.0 实时结果；展开事件可查看完整标准 JSON，适用于报警和记录服务联调。</p></div>
+        <div class="section-actions result-actions">
+          <span :class="['result-connection', resultConnected && 'online']"><i></i>{{ resultConnected ? 'LIVE' : 'RECONNECTING' }}</span>
+          <button class="secondary compact" :class="resultPaused && 'selected'" @click="toggleResultPause">{{ resultPaused ? '继续' : '暂停' }}</button>
+          <button class="secondary compact" @click="clearResultEvents">清空</button>
+        </div>
+      </div>
+      <div class="result-bus-grid">
+        <div><span>Stream</span><b>{{ status?.result_bus.stream_id.slice(0, 8) || '—' }}</b></div>
+        <div><span>Latest</span><b>{{ shortEventId(status?.result_bus.latest_event_id) }}</b></div>
+        <div><span>Replay</span><b>{{ status?.result_bus.replay_depth || 0 }} / {{ status?.result_bus.replay_capacity || 0 }}</b></div>
+        <div><span>Published</span><b>{{ status?.result_bus.published || 0 }}</b></div>
+        <div><span>Subscriber lag</span><b>{{ status?.result_bus.lagged_events || 0 }}</b></div>
+      </div>
+      <div class="result-toolbar">
+        <label>事件类型<select v-model="resultFilter"><option value="all">全部事件</option><option value="frame">逐帧结果</option><option value="tracks">目标生命周期</option><option value="generation">Generation</option><option value="gap">Replay gap</option></select></label>
+        <span>{{ visibleResultEvents.length }} / {{ resultEvents.length }} events</span>
+        <span v-if="resultSkipped">暂停期间跳过 {{ resultSkipped }}</span>
+        <a href="/api/v1/ai/results/schema" target="_blank" rel="noreferrer">查看 JSON Schema ↗</a>
+      </div>
+      <div class="ai-result-events">
+        <details v-for="event in visibleResultEvents" :key="event.id" :class="['ai-result-row', `result-${aiResultCategory(event)}`, event.type.includes('.exited.') && 'result-exited']">
+          <summary>
+            <time>{{ eventTime(event) }}</time>
+            <span class="result-type">{{ aiResultTypeLabel(event.type) }}</span>
+            <b>{{ event.subject }}</b>
+            <span class="result-summary">{{ aiResultSummary(event) }}</span>
+            <code>{{ shortEventId(event.id) }}</code>
+          </summary>
+          <pre>{{ JSON.stringify(event, null, 2) }}</pre>
+        </details>
+        <p v-if="!visibleResultEvents.length" class="empty-state">等待标准化 AI 事件…</p>
+      </div>
     </section>
   </div>
 </template>
