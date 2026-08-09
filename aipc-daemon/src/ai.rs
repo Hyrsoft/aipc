@@ -47,6 +47,7 @@ pub struct AiFrameTransform {
 
 #[derive(Debug, Clone)]
 pub struct AiFrame {
+    pub source_id: String,
     pub generation: String,
     pub pts: u64,
     pub sequence: u64,
@@ -104,6 +105,7 @@ pub fn encode_ai_frame(frame: &AiFrame) -> Vec<u8> {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AiInputStatus {
+    pub source_id: String,
     pub generation: Option<String>,
     pub available: bool,
     pub frames_received: u64,
@@ -123,6 +125,7 @@ pub struct AiInputStatus {
 impl Default for AiInputStatus {
     fn default() -> Self {
         Self {
+            source_id: "camera0".into(),
             generation: None,
             available: false,
             frames_received: 0,
@@ -211,10 +214,20 @@ pub struct AiHub {
     control: Arc<RwLock<Option<MediaControlClient>>>,
     max_frame_bytes: usize,
     events: broadcast::Sender<ServerEvent>,
+    default_source_id: Arc<str>,
 }
 
 impl AiHub {
+    #[cfg(test)]
     pub fn new(max_frame_bytes: usize, events: broadcast::Sender<ServerEvent>) -> Self {
+        Self::new_with_source_id(max_frame_bytes, "camera0".into(), events)
+    }
+
+    pub fn new_with_source_id(
+        max_frame_bytes: usize,
+        source_id: String,
+        events: broadcast::Sender<ServerEvent>,
+    ) -> Self {
         let (frames, _) = watch::channel(None);
         Self {
             frames,
@@ -222,6 +235,7 @@ impl AiHub {
             control: Arc::new(RwLock::new(None)),
             max_frame_bytes,
             events,
+            default_source_id: source_id.into(),
         }
     }
 
@@ -234,12 +248,31 @@ impl AiHub {
     }
 
     pub fn begin_generation(&self, generation: String, config: AiInputConfig) {
+        self.begin_generation_for_source(generation, config, self.default_source_id.to_string());
+    }
+
+    pub fn begin_generation_for_source(
+        &self,
+        generation: String,
+        config: AiInputConfig,
+        source_id: String,
+    ) {
         self.frames.send_replace(None);
         *self.status.write().unwrap() = AiInputStatus {
+            source_id,
             generation: Some(generation),
             config: Some(config),
             ..AiInputStatus::default()
         };
+    }
+
+    pub fn source_id_for_generation(&self, generation: &str) -> String {
+        let status = self.status.read().unwrap();
+        if status.generation.as_deref() == Some(generation) {
+            status.source_id.clone()
+        } else {
+            self.default_source_id.to_string()
+        }
     }
 
     pub fn set_control(&self, control: MediaControlClient) {
@@ -252,10 +285,11 @@ impl AiHub {
     }
 
     pub fn clear_generation(&self, generation: &str) {
-        self.frames.send_replace(None);
-        if self.status.read().unwrap().generation.as_deref() == Some(generation) {
-            self.status.write().unwrap().available = false;
+        if self.status.read().unwrap().generation.as_deref() != Some(generation) {
+            return;
         }
+        self.frames.send_replace(None);
+        self.status.write().unwrap().available = false;
         if self
             .control
             .read()
@@ -269,12 +303,22 @@ impl AiHub {
     }
 
     pub async fn configure_input(&self, config: AiInputConfig) -> anyhow::Result<Value> {
-        let control = self
-            .control
-            .read()
-            .unwrap()
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("media control is not available"))?;
+        let control = self.control.read().unwrap().clone();
+        // External sources are decoded by `video_decode_worker` and do not
+        // expose the camera media-control socket. The processor is configured
+        // from the source manager, so the AI project only needs its input
+        // settings recorded here; the AI worker can still be (re)started
+        // against the AIPF frames. Camera sources retain the existing control
+        // path below.
+        let Some(control) = control else {
+            let source_id = self.status.read().unwrap().source_id.clone();
+            anyhow::ensure!(
+                source_id != self.default_source_id.as_ref(),
+                "media control is not available"
+            );
+            self.status.write().unwrap().config = Some(config);
+            return Ok(json!({"source_id": source_id, "external": true}));
+        };
         control.request("pause_ai_frames", json!({})).await?;
         let response = match control
             .request("configure_ai_channel", json!({"ai_input": config}))
@@ -385,6 +429,7 @@ pub async fn read_ai_frame_ipc<R: AsyncRead + Unpin>(
             break;
         }
         hub.ingest(AiFrame {
+            source_id: hub.source_id_for_generation(&generation),
             generation: generation.clone(),
             pts: u64_at(&header, 12),
             sequence: u64_at(&header, 20),
@@ -489,6 +534,7 @@ mod tests {
         let fixture: Fixture =
             serde_json::from_str(include_str!("../../testdata/protocol/aipf-v1.json")).unwrap();
         let frame = AiFrame {
+            source_id: "camera0".into(),
             generation: "fixture".into(),
             pts: fixture.pts,
             sequence: fixture.sequence,

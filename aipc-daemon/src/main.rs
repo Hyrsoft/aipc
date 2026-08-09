@@ -8,6 +8,7 @@ mod model;
 mod preview;
 mod recording;
 mod rtsp;
+mod source;
 mod store;
 mod supervisor;
 mod watchdog;
@@ -17,6 +18,7 @@ use anyhow::{Context, bail};
 use clap::Parser;
 use config::{DaemonConfig, WorkerConfig};
 use model::PersistentState;
+use source::SourceManager;
 use std::path::PathBuf;
 use store::StateStore;
 use supervisor::spawn_supervisor;
@@ -89,6 +91,15 @@ async fn main() -> anyhow::Result<()> {
     }
     dependencies::DependencyManager::recover(&settings.dependencies).await?;
     let supervisor = spawn_supervisor(settings.clone(), initial).await;
+    let sources = SourceManager::new(
+        settings.input.clone(),
+        supervisor.preview.clone(),
+        supervisor.ai.clone(),
+        supervisor.events.clone(),
+    )?;
+    if sources.enabled() {
+        sources.start_active().await?;
+    }
     let ai = ai_manager::AiManager::new(
         settings.ai.clone(),
         &settings.data_dir,
@@ -134,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         webrtc.clone(),
         ai.clone(),
         dependencies,
+        sources.clone(),
         settings.ui.clone(),
         &settings.web_dir,
     );
@@ -153,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
     recording.shutdown().await;
     rtsp.shutdown().await;
     webrtc.shutdown().await;
+    sources.shutdown().await;
     ai.shutdown().await;
     supervisor.shutdown().await;
     Ok(())

@@ -46,7 +46,7 @@ cmake --preset RV1106Release "${NATIVE_CMAKE_ARGS[@]}"
 cmake --build --preset RV1106Release
 cmake --install "${PROJECT_ROOT}/target/native/RV1106Release/build"
 
-for native_binary in media_worker ai_worker; do
+for native_binary in media_worker ai_worker video_decode_worker; do
     if [ ! -x "${NATIVE_INSTALL}/bin/${native_binary}" ]; then
         echo "native build did not install ${native_binary}" >&2
         exit 1
@@ -74,7 +74,10 @@ install -m 0755 "${NATIVE_INSTALL}/bin/media_worker" \
     "target/${TARGET}/release/media_worker"
 install -m 0755 "${NATIVE_INSTALL}/bin/ai_worker" \
     "target/${TARGET}/release/ai_worker"
+install -m 0755 "${NATIVE_INSTALL}/bin/video_decode_worker" \
+    "target/${TARGET}/release/video_decode_worker"
 
 file "target/${TARGET}/release/aipc-daemon"
 file "target/${TARGET}/release/media_worker"
 file "target/${TARGET}/release/ai_worker"
+file "target/${TARGET}/release/video_decode_worker"

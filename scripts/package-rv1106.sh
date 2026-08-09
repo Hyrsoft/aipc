@@ -21,13 +21,16 @@ npm --prefix "${PROJECT_ROOT}/webui" run build
 
 rm -rf "${PACKAGE_DIR}"
 mkdir -p "${PACKAGE_DIR}/bin" "${PACKAGE_DIR}/config" "${PACKAGE_DIR}/data" \
-    "${PACKAGE_DIR}/lib" "${PACKAGE_DIR}/scripts" "${PACKAGE_DIR}/www"
+    "${PACKAGE_DIR}/lib" "${PACKAGE_DIR}/media" "${PACKAGE_DIR}/scripts" \
+    "${PACKAGE_DIR}/www"
 install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/aipc-daemon" \
     "${PACKAGE_DIR}/bin/aipc-daemon"
 install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/media_worker" \
     "${PACKAGE_DIR}/bin/media_worker"
 install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/ai_worker" \
     "${PACKAGE_DIR}/bin/ai_worker"
+install -m 0755 "${PROJECT_ROOT}/target/${TARGET}/release/video_decode_worker" \
+    "${PACKAGE_DIR}/bin/video_decode_worker"
 install -m 0755 "${NATIVE_INSTALL}/lib/libvisiong.so" \
     "${PACKAGE_DIR}/lib/libvisiong.so"
 install -m 0755 "${RKNN_RUNTIME_DIR}/librknnmrt.so" \

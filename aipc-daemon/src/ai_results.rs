@@ -190,7 +190,7 @@ struct BusState {
 
 #[derive(Clone)]
 pub struct AiResultBus {
-    source: String,
+    source: Arc<StdMutex<String>>,
     schema_url: String,
     replay_capacity: usize,
     sender: broadcast::Sender<Arc<AiCloudEvent>>,
@@ -203,7 +203,7 @@ impl AiResultBus {
         let (sender, _) = broadcast::channel(capacity.max(32));
         let stream_id = Uuid::new_v4().to_string();
         Self {
-            source: format!("urn:aipc:camera:{source_id}"),
+            source: Arc::new(StdMutex::new(format!("urn:aipc:source:{source_id}"))),
             schema_url: "/api/v1/ai/results/schema".into(),
             replay_capacity: capacity,
             sender,
@@ -216,6 +216,10 @@ impl AiResultBus {
                 latest_frame: None,
             })),
         }
+    }
+
+    pub fn set_source_id(&self, source_id: &str) {
+        *self.source.lock().unwrap() = format!("urn:aipc:source:{source_id}");
     }
 
     pub fn publish<T: Serialize>(
@@ -233,7 +237,7 @@ impl AiResultBus {
             let event = Arc::new(AiCloudEvent {
                 specversion: "1.0".into(),
                 id,
-                source: self.source.clone(),
+                source: self.source.lock().unwrap().clone(),
                 event_type: event_type.into(),
                 subject,
                 time: utc_rfc3339(),
@@ -333,6 +337,7 @@ impl AiResultBus {
     }
 
     fn gap_for(&self, requested: Option<&str>) -> (VecDeque<Arc<AiCloudEvent>>, u64) {
+        let source = self.source.lock().unwrap().clone();
         let event = {
             let mut state = self.state.lock().unwrap();
             state.next_sequence += 1;
@@ -342,7 +347,7 @@ impl AiResultBus {
             Arc::new(AiCloudEvent {
                 specversion: "1.0".into(),
                 id,
-                source: self.source.clone(),
+                source: source.clone(),
                 event_type: STREAM_GAP_TYPE.into(),
                 subject: "stream".into(),
                 time: utc_rfc3339(),
@@ -350,7 +355,7 @@ impl AiResultBus {
                 dataschema: self.schema_url.clone(),
                 data: serde_json::to_value(AiStreamGapDataV1 {
                     schema_version: 1,
-                    source_id: self.source.trim_start_matches("urn:aipc:camera:").into(),
+                    source_id: source.trim_start_matches("urn:aipc:source:").into(),
                     requested_event_id: requested.map(str::to_owned),
                     earliest_event_id: earliest,
                     latest_event_id: latest,

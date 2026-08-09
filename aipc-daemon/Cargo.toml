@@ -12,6 +12,7 @@ bytes = "1"
 clap = { version = "4", features = ["derive"] }
 crc32fast = "1"
 futures-util = "0.3"
+retina = { version = "=0.4.19", default-features = false }
 libc = "0.2"
 mp4 = "0.14"
 nix = { version = "0.30", default-features = false, features = ["process", "signal"] }
@@ -25,6 +26,7 @@ tower-http = { version = "0.6", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+url = "2"
 str0m = { version = "=0.21.0", default-features = false, features = ["openssl"] }
 time = { version = "0.3.41", features = ["formatting"] }
 

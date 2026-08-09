@@ -1,4 +1,5 @@
 #include "aipc/native/aipf.h"
+#include "aipc/native/aipv2.h"
 
 #include <cassert>
 #include <cstdint>
@@ -6,6 +7,7 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
+#include <unistd.h>
 
 namespace {
 
@@ -54,5 +56,34 @@ int main() {
     assert(encoded[4] == 0 && encoded[5] == 1);
     assert(encoded[6] == 0 && encoded[7] == 1);
     assert(encoded[12] == 1 && encoded[19] == 8);
+
+    aipc::native::EncodedAccessUnit access_unit;
+    access_unit.data = {0, 0, 0, 1, 0x65, 0x88};
+    access_unit.pts = 123456;
+    access_unit.sequence = 42;
+    access_unit.flags = aipc::native::kAipv2Keyframe |
+                        aipc::native::kAipv2CodecConfig;
+    const auto encoded_access_unit =
+        aipc::native::EncodeAipv2AccessUnit(access_unit);
+    assert(encoded_access_unit.size() ==
+           aipc::native::kAipv2HeaderSize + access_unit.data.size());
+    assert(encoded_access_unit[0] == 'A' && encoded_access_unit[3] == 'V');
+    assert(encoded_access_unit[4] == 0 && encoded_access_unit[5] == 2);
+    assert(encoded_access_unit[7] == 5);
+    int fds[2];
+    assert(pipe(fds) == 0);
+    assert(write(fds[1], encoded_access_unit.data(), encoded_access_unit.size()) ==
+           static_cast<ssize_t>(encoded_access_unit.size()));
+    close(fds[1]);
+    std::string protocol_error;
+    const auto decoded_access_unit =
+        aipc::native::ReadAipv2AccessUnit(fds[0], &protocol_error);
+    close(fds[0]);
+    assert(decoded_access_unit.has_value());
+    assert(protocol_error.empty());
+    assert(decoded_access_unit->data == access_unit.data);
+    assert(decoded_access_unit->pts == access_unit.pts);
+    assert(decoded_access_unit->sequence == access_unit.sequence);
+    assert(decoded_access_unit->keyframe());
     return 0;
 }

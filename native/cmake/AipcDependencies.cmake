@@ -72,6 +72,7 @@ function(aipc_add_rockchip_targets rkmpi_root)
             "${include_root}/rk_mpi_sys.h"
             "${lib_root}/libsample_comm.a"
             "${lib_root}/librockit.so"
+            "${lib_root}/librockit_full.so"
             "${lib_root}/librockchip_mpp.so.0"
             "${lib_root}/librkaiq.so"
             "${lib_root}/librga.so")
@@ -96,6 +97,7 @@ function(aipc_add_rockchip_targets rkmpi_root)
     foreach(spec
             "sample_comm;STATIC;libsample_comm.a"
             "rockit;SHARED;librockit.so"
+            "rockit_full;SHARED;librockit_full.so"
             "mpp;SHARED;librockchip_mpp.so.0"
             "rkaiq;SHARED;librkaiq.so"
             "rga;SHARED;librga.so")
@@ -120,6 +122,16 @@ function(aipc_add_rockchip_targets rkmpi_root)
     target_link_directories(aipc_rockchip_media_runtime INTERFACE "${lib_root}")
     target_link_options(aipc_rockchip_media_runtime INTERFACE
         "-Wl,-rpath-link,${lib_root}")
+
+    if(DEFINED AIPC_SDK_ROOT AND EXISTS "${AIPC_SDK_ROOT}/media/out/lib/libdrm.so")
+        add_library(aipc_rockchip_drm SHARED IMPORTED GLOBAL)
+        set_target_properties(aipc_rockchip_drm PROPERTIES
+            IMPORTED_LOCATION "${AIPC_SDK_ROOT}/media/out/lib/libdrm.so")
+        target_link_directories(aipc_rockchip_media_runtime INTERFACE
+            "${AIPC_SDK_ROOT}/media/out/lib")
+        target_link_options(aipc_rockchip_media_runtime INTERFACE
+            "-Wl,-rpath-link,${AIPC_SDK_ROOT}/media/out/lib")
+    endif()
 
     add_library(aipc_rockchip_visiong_runtime INTERFACE)
     add_library(Rockchip::VisionGRuntime ALIAS aipc_rockchip_visiong_runtime)

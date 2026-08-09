@@ -77,5 +77,28 @@
     "track_confirmations": 2,
     "track_lost_timeout_ms": 500,
     "track_update_interval_ms": 500
+  },
+  "input": {
+    "enabled": false,
+    "active_source": null,
+    "file_roots": ["../media"],
+    "processor_path": "video_decode_worker",
+    "processor_startup_timeout_ms": 10000,
+    "reconnect_initial_ms": 500,
+    "reconnect_max_ms": 10000,
+    "processor": {
+      "enabled": true,
+      "channel_id": 1,
+      "width": 640,
+      "height": 360,
+      "fps": 10,
+      "pixel_format": "nv12",
+      "fit_mode": "contain",
+      "buffer_count": 2,
+      "depth": 1
+    },
+    "processor_vdec_channel": 0,
+    "processor_vpss_group": 1,
+    "sources": []
   }
 }

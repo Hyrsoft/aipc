@@ -21,6 +21,7 @@ aipc_setup_dependencies()
 aipc_create_build_options()
 
 add_library(aipc_native_common STATIC
+    common/src/aipv2.cpp
     common/src/aipf.cpp
     common/src/io.cpp
     common/src/validation.cpp
@@ -34,6 +35,8 @@ target_link_libraries(aipc_native_common PUBLIC
 
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../media_worker"
                  "${CMAKE_CURRENT_BINARY_DIR}/media_worker")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../video_decode_worker"
+                 "${CMAKE_CURRENT_BINARY_DIR}/video_decode_worker")
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ai_worker"
                  "${CMAKE_CURRENT_BINARY_DIR}/ai_worker")
 

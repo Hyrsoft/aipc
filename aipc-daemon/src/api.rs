@@ -1,9 +1,10 @@
 use crate::ai_manager::{AiManager, AiProjectDocument, OsdMode};
-use crate::config::{UiConfig, WorkerConfig};
+use crate::config::{InputSourceConfig, UiConfig, WorkerConfig};
 use crate::dependencies::DependencyManager;
 use crate::preview::PreviewHub;
 use crate::recording::{RecordingManager, RecordingSettingsUpdate};
 use crate::rtsp::RtspServer;
+use crate::source::SourceManager;
 use crate::supervisor::{ActionAccepted, SupervisorError, SupervisorHandle};
 use crate::webrtc::{WebRtcError, WebRtcServer};
 use axum::Json;
@@ -46,6 +47,7 @@ struct AppState {
     webrtc: WebRtcServer,
     ai: AiManager,
     dependencies: DependencyManager,
+    sources: SourceManager,
     maintenance: Arc<Mutex<()>>,
     ui: UiConfig,
 }
@@ -57,6 +59,7 @@ pub fn router(
     webrtc: WebRtcServer,
     ai: AiManager,
     dependencies: DependencyManager,
+    sources: SourceManager,
     ui: UiConfig,
     web_dir: &Path,
 ) -> Router {
@@ -118,6 +121,15 @@ pub fn router(
         .route("/api/v1/logs", get(logs))
         .route("/api/v1/preview/status", get(preview_status))
         .route("/api/v1/preview/ws", get(preview_ws))
+        .route("/api/v1/sources", get(source_list))
+        .route("/api/v1/sources/{id}", axum::routing::put(source_put))
+        .route("/api/v1/sources/{id}/start", post(source_start))
+        .route("/api/v1/sources/{id}/stop", post(source_stop))
+        .route("/api/v1/sources/{id}/reconnect", post(source_reconnect))
+        .route(
+            "/api/v1/stream/active-source",
+            axum::routing::put(source_set_active),
+        )
         .route(
             "/api/v1/recording/settings",
             get(recording_settings).put(update_recording_settings),
@@ -153,10 +165,90 @@ pub fn router(
             webrtc,
             ai,
             dependencies,
+            sources,
             maintenance: Arc::new(Mutex::new(())),
             ui,
             supervisor,
         })
+}
+
+async fn source_list(State(state): State<AppState>) -> impl IntoResponse {
+    Json(json!({
+        "enabled": state.sources.enabled(),
+        "active_source": state.sources.active_id(),
+        "sources": state.sources.list(),
+    }))
+}
+
+async fn source_put(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(source): Json<InputSourceConfig>,
+) -> Result<impl IntoResponse, SourceApiError> {
+    if source.id != id {
+        return Err(SourceApiError::bad_request(
+            "source id in path and body must match",
+        ));
+    }
+    state
+        .sources
+        .upsert(source)
+        .await
+        .map_err(SourceApiError::from)?;
+    Ok(Json(json!({"source_id": id, "updated": true})))
+}
+
+async fn source_start(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<impl IntoResponse, SourceApiError> {
+    state
+        .sources
+        .start(&id)
+        .await
+        .map_err(SourceApiError::from)?;
+    Ok((StatusCode::ACCEPTED, Json(json!({"source_id": id}))))
+}
+
+async fn source_stop(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<impl IntoResponse, SourceApiError> {
+    state
+        .sources
+        .stop(&id)
+        .await
+        .map_err(SourceApiError::from)?;
+    Ok((StatusCode::ACCEPTED, Json(json!({"source_id": id}))))
+}
+
+async fn source_reconnect(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<impl IntoResponse, SourceApiError> {
+    state
+        .sources
+        .reconnect(&id)
+        .await
+        .map_err(SourceApiError::from)?;
+    Ok((StatusCode::ACCEPTED, Json(json!({"source_id": id}))))
+}
+
+#[derive(Deserialize)]
+struct ActiveSourceUpdate {
+    source_id: String,
+}
+
+async fn source_set_active(
+    State(state): State<AppState>,
+    Json(update): Json<ActiveSourceUpdate>,
+) -> Result<impl IntoResponse, SourceApiError> {
+    state
+        .sources
+        .set_active(&update.source_id)
+        .await
+        .map_err(SourceApiError::from)?;
+    Ok(Json(json!({"active_source": update.source_id})))
 }
 
 #[derive(Serialize)]
@@ -660,6 +752,47 @@ struct ApiError(SupervisorError);
 
 struct WebRtcApiError(WebRtcError);
 
+struct SourceApiError {
+    status: StatusCode,
+    message: String,
+}
+
+impl SourceApiError {
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<anyhow::Error> for SourceApiError {
+    fn from(error: anyhow::Error) -> Self {
+        let message = error.to_string();
+        let status = if message.contains("not found") {
+            StatusCode::NOT_FOUND
+        } else if message.contains("outside")
+            || message.contains("invalid")
+            || message.contains("must")
+        {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        Self { status, message }
+    }
+}
+
+impl IntoResponse for SourceApiError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Json(json!({"error": {"code": "source_error", "message": self.message}})),
+        )
+            .into_response()
+    }
+}
+
 impl From<WebRtcError> for WebRtcApiError {
     fn from(value: WebRtcError) -> Self {
         Self(value)
@@ -862,6 +995,15 @@ mod tests {
         )
         .await
         .unwrap();
+        let mut input_config = settings.input.clone();
+        input_config.file_roots = vec![temp.path().to_path_buf()];
+        let sources = SourceManager::new(
+            input_config,
+            handle.preview.clone(),
+            handle.ai.clone(),
+            handle.events.clone(),
+        )
+        .unwrap();
         let app = router(
             handle.clone(),
             recording,
@@ -869,6 +1011,7 @@ mod tests {
             webrtc,
             ai.clone(),
             dependencies,
+            sources,
             ui,
             temp.path(),
         );
@@ -883,6 +1026,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/sources")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let sources: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(sources["enabled"], false);
+        assert_eq!(sources["sources"], json!([]));
 
         let response = app
             .clone()

@@ -1255,7 +1255,7 @@ impl AiManager {
             });
         let published_at_ms = now_ms();
         self.publish_standard_result(AiResultInput {
-            source_id: self.inner.config.source_id.clone(),
+            source_id: frame.source_id.clone(),
             media_generation: frame.generation.clone(),
             ai_generation: generation.to_owned(),
             sequence,
@@ -1344,6 +1344,7 @@ impl AiManager {
     }
 
     fn publish_standard_result(&self, input: AiResultInput) {
+        self.inner.result_bus.set_source_id(&input.source_id);
         let batch = self.inner.lifecycle.lock().unwrap().observe(&input);
         for event in batch.exited {
             self.publish_track_event(TRACK_EXITED_TYPE, event);

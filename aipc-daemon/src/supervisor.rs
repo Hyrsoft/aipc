@@ -125,7 +125,11 @@ pub async fn spawn_supervisor(
     let persistent = Arc::new(RwLock::new(initial));
     let logs = Arc::new(Mutex::new(VecDeque::with_capacity(LOG_CAPACITY)));
     let preview = PreviewHub::new(settings.preview.clone(), events.clone());
-    let ai = AiHub::new(8 * 1024 * 1024, events.clone());
+    let ai = AiHub::new_with_source_id(
+        8 * 1024 * 1024,
+        settings.ai.source_id.clone(),
+        events.clone(),
+    );
     let handle = SupervisorHandle {
         commands: command_tx,
         status: status_rx,

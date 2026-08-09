@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -97,6 +97,34 @@ impl Default for AiInputConfig {
             buffer_count: 2,
             depth: 1,
         }
+    }
+}
+
+impl AiInputConfig {
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        range(&mut errors, "ai_input.channel_id", self.channel_id, 0, 3);
+        range(&mut errors, "ai_input.width", self.width, 384, 4096);
+        range(&mut errors, "ai_input.height", self.height, 256, 4096);
+        range(&mut errors, "ai_input.fps", self.fps, 1, 120);
+        range(
+            &mut errors,
+            "ai_input.buffer_count",
+            self.buffer_count,
+            1,
+            8,
+        );
+        range(&mut errors, "ai_input.depth", self.depth, 0, 8);
+        if self.width % 2 != 0 || self.height % 2 != 0 {
+            errors.push("ai_input width and height must be even for NV12".into());
+        }
+        if self.pixel_format != "nv12" {
+            errors.push("ai_input.pixel_format must be nv12".into());
+        }
+        if !matches!(self.fit_mode.as_str(), "stretch" | "contain" | "cover") {
+            errors.push("ai_input.fit_mode must be stretch, contain, or cover".into());
+        }
+        errors
     }
 }
 
@@ -418,6 +446,180 @@ pub struct DaemonConfig {
     pub rtsp: RtspConfig,
     pub webrtc: WebRtcConfig,
     pub ai: AiDaemonConfig,
+    pub input: InputConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InputConfig {
+    pub enabled: bool,
+    pub active_source: Option<String>,
+    pub file_roots: Vec<PathBuf>,
+    pub sources: Vec<InputSourceConfig>,
+    pub processor_path: PathBuf,
+    pub processor_startup_timeout_ms: u64,
+    pub reconnect_initial_ms: u64,
+    pub reconnect_max_ms: u64,
+    pub processor: AiInputConfig,
+    pub processor_vdec_channel: i32,
+    pub processor_vpss_group: i32,
+}
+
+impl Default for InputConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            active_source: None,
+            file_roots: vec!["../media".into()],
+            sources: Vec::new(),
+            processor_path: "video_decode_worker".into(),
+            processor_startup_timeout_ms: 10_000,
+            reconnect_initial_ms: 500,
+            reconnect_max_ms: 10_000,
+            processor: AiInputConfig::default(),
+            processor_vdec_channel: 0,
+            processor_vpss_group: 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputSourceConfig {
+    pub id: String,
+    #[serde(default)]
+    pub ai_sidecar: bool,
+    #[serde(flatten)]
+    pub source: InputSourceKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InputSourceKind {
+    File {
+        path: PathBuf,
+        #[serde(default)]
+        loop_playback: bool,
+        #[serde(default = "default_h264_fps")]
+        fps: u32,
+        #[serde(default = "default_true")]
+        realtime: bool,
+    },
+    Rtsp {
+        url: String,
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+        #[serde(default = "default_max_video_width")]
+        max_width: u32,
+        #[serde(default = "default_max_video_height")]
+        max_height: u32,
+        #[serde(default = "default_max_video_fps")]
+        max_fps: u32,
+    },
+}
+
+impl InputConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.reconnect_initial_ms > 0
+                && self.reconnect_initial_ms <= self.reconnect_max_ms
+                && self.reconnect_max_ms <= 300_000,
+            "input reconnect delays are invalid"
+        );
+        anyhow::ensure!(
+            self.processor_startup_timeout_ms > 0,
+            "input.processor_startup_timeout_ms must be greater than zero"
+        );
+        anyhow::ensure!(
+            (0..=3).contains(&self.processor.channel_id),
+            "input.processor.channel_id must be in [0, 3]"
+        );
+        if self.processor.enabled {
+            anyhow::ensure!(
+                self.processor.validate().is_empty(),
+                "input.processor configuration is invalid"
+            );
+        }
+        anyhow::ensure!(
+            (0..=7).contains(&self.processor_vdec_channel),
+            "input.processor_vdec_channel must be in [0, 7]"
+        );
+        anyhow::ensure!(
+            (0..=7).contains(&self.processor_vpss_group),
+            "input.processor_vpss_group must be in [0, 7]"
+        );
+        for root in &self.file_roots {
+            anyhow::ensure!(root.is_absolute(), "input.file_roots must be absolute");
+        }
+        let mut ids = std::collections::HashSet::new();
+        for source in &self.sources {
+            anyhow::ensure!(
+                !source.id.is_empty()
+                    && source.id.len() <= 64
+                    && source.id.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                    }),
+                "input source id must contain 1-64 safe identifier characters"
+            );
+            anyhow::ensure!(ids.insert(source.id.clone()), "duplicate input source id");
+            match &source.source {
+                InputSourceKind::File { path, fps, .. } => {
+                    anyhow::ensure!(path.is_absolute(), "input file path must be absolute");
+                    anyhow::ensure!(
+                        (1..=120).contains(fps),
+                        "input file fps must be in [1, 120]"
+                    );
+                    let normalized_path = normalize_path(path);
+                    anyhow::ensure!(
+                        self.file_roots
+                            .iter()
+                            .map(|root| normalize_path(root))
+                            .any(|root| normalized_path.strip_prefix(root).is_ok()),
+                        "input file path is outside input.file_roots"
+                    );
+                    let extension = path
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    anyhow::ensure!(
+                        matches!(extension.as_str(), "mp4" | "h264" | "264"),
+                        "input file must be MP4 or Annex-B H264"
+                    );
+                }
+                InputSourceKind::Rtsp {
+                    url,
+                    max_width,
+                    max_height,
+                    max_fps,
+                    ..
+                } => {
+                    anyhow::ensure!(
+                        url.starts_with("rtsp://"),
+                        "input RTSP URL must start with rtsp://"
+                    );
+                    anyhow::ensure!(
+                        (160..=8192).contains(max_width)
+                            && (120..=8192).contains(max_height)
+                            && (1..=120).contains(max_fps),
+                        "input RTSP resolution/FPS limits are invalid"
+                    );
+                }
+            }
+        }
+        if self.enabled {
+            let active = self
+                .active_source
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("input.active_source is required"))?;
+            anyhow::ensure!(
+                self.sources.iter().any(|source| source.id == active),
+                "input.active_source does not exist"
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -708,6 +910,7 @@ impl Default for DaemonConfig {
             rtsp: RtspConfig::default(),
             webrtc: WebRtcConfig::default(),
             ai: AiDaemonConfig::default(),
+            input: InputConfig::default(),
         }
     }
 }
@@ -726,6 +929,18 @@ impl DaemonConfig {
         config.runtime_dir = resolve(executable_dir, &config.runtime_dir);
         config.seed_config = resolve(executable_dir, &config.seed_config);
         config.ai.worker_path = resolve(executable_dir, &config.ai.worker_path);
+        config.input.processor_path = resolve(executable_dir, &config.input.processor_path);
+        config.input.file_roots = config
+            .input
+            .file_roots
+            .iter()
+            .map(|path| normalize_path(&resolve(executable_dir, path)))
+            .collect();
+        for source in &mut config.input.sources {
+            if let InputSourceKind::File { path, .. } = &mut source.source {
+                *path = normalize_path(&resolve(executable_dir, path));
+            }
+        }
         config.dependencies.root = resolve(executable_dir, &config.dependencies.root);
         config.recording.directory = resolve(executable_dir, &config.recording.directory);
         config.recording.allowed_roots = config
@@ -739,6 +954,7 @@ impl DaemonConfig {
         config.ai.validate()?;
         config.ui.validate()?;
         config.webrtc.validate()?;
+        config.input.validate()?;
         Ok(config)
     }
 }
@@ -751,6 +967,27 @@ fn resolve(base: &Path, value: &Path) -> PathBuf {
     }
 }
 
+/// Normalize `.` and `..` lexically without touching the filesystem. This is
+/// used for config validation so a relative default such as `../media` has the
+/// same whitelist semantics as its runtime canonical path.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !path.is_absolute() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
 fn range(errors: &mut Vec<String>, name: &str, value: i32, min: i32, max: i32) {
     if value < min || value > max {
         errors.push(format!("{name} must be in [{min}, {max}]"));
@@ -759,6 +996,26 @@ fn range(errors: &mut Vec<String>, name: &str, value: i32, min: i32, max: i32) {
 
 const fn default_two() -> i32 {
     2
+}
+
+const fn default_h264_fps() -> u32 {
+    25
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_max_video_width() -> u32 {
+    4096
+}
+
+const fn default_max_video_height() -> u32 {
+    4096
+}
+
+const fn default_max_video_fps() -> u32 {
+    120
 }
 
 #[cfg(test)]
