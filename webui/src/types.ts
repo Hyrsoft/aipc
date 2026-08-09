@@ -168,12 +168,15 @@ export interface AboutInfo {
 
 export type AiOsdMode = 'off' | 'metadata' | 'embedded_rgn'
 export interface AiProjectManifest {
+  schema_version: number
   id: string
   name: string
   entry: string
-  algorithm: 'yolov5'
+  algorithm: 'yolov5' | 'yolo11' | 'lprnet' | 'mlsd' | 'ppocr' | 'nanotrack' | 'find_blobs' | 'ive_filter' | 'ive_ncc' | 'npu_clock' | 'frame_info'
   model: string
   labels: string
+  files: Record<string, string>
+  options: Record<string, unknown>
   input: WorkerConfig['ai_input']
   threshold: number
   nms_threshold: number
@@ -191,6 +194,35 @@ export interface AiProjectSummary {
   last_good: boolean
 }
 export interface AiModelInfo { name: string; bytes: number; sha256: string; active: boolean }
+
+export type DependencyOwner = 'ai_worker' | 'media_worker'
+export interface DependencyVersion {
+  sha256: string
+  bytes: number
+  soname: string
+  build_id: string | null
+  detected_version: string | null
+  needed: string[]
+  source: 'factory' | 'uploaded' | string
+  uploaded_at_ms: number | null
+}
+export interface DependencyInfo {
+  id: string
+  display_name: string
+  load_names: string[]
+  owners: DependencyOwner[]
+  state: 'idle' | 'validating' | 'restarting' | 'rolling_back' | 'degraded' | string
+  factory: DependencyVersion | null
+  active: DependencyVersion | null
+  previous: DependencyVersion | null
+  versions: DependencyVersion[]
+  last_error: string | null
+}
+export interface DependencyList {
+  enabled: boolean
+  max_upload_bytes: number
+  items: DependencyInfo[]
+}
 export interface AiInputStatus {
   generation: string | null
   available: boolean
@@ -278,6 +310,14 @@ export interface AiResultObject {
   bbox: AiResultBoundingBox
 }
 
+export interface AiResultAnnotation {
+  kind: string
+  label: string
+  confidence: number
+  bbox: AiResultBoundingBox
+  data: Record<string, unknown>
+}
+
 export interface AiResultFrameInfo {
   width: number
   height: number
@@ -302,9 +342,10 @@ export interface AiFrameResultData {
   frame: AiResultFrameInfo
   inference: AiResultInferenceInfo
   objects: AiResultObject[]
+  annotations: AiResultAnnotation[]
 }
 
-export interface AiTrackResultData extends Omit<AiFrameResultData, 'objects'> {
+export interface AiTrackResultData extends Omit<AiFrameResultData, 'objects' | 'annotations'> {
   object: AiResultObject
   reason: string
 }

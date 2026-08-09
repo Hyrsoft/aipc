@@ -56,6 +56,18 @@
         "bbox": { "$ref": "#/$defs/bbox" }
       }
     },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "label", "confidence", "bbox", "data"],
+      "properties": {
+        "kind": { "type": "string", "maxLength": 64 },
+        "label": { "type": "string", "maxLength": 128 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bbox": { "$ref": "#/$defs/bbox" },
+        "data": { "type": "object", "maxProperties": 64 }
+      }
+    },
     "frame": {
       "type": "object",
       "additionalProperties": false,
@@ -97,8 +109,11 @@
         { "$ref": "#/$defs/common" },
         {
           "type": "object",
-          "required": ["objects"],
-          "properties": { "objects": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/object" } } }
+          "required": ["objects", "annotations"],
+          "properties": {
+            "objects": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/object" } },
+            "annotations": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/annotation" } }
+          }
         }
       ]
     },

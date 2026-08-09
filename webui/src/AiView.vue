@@ -48,12 +48,15 @@ function newProject() {
   selectedId.value = ''
   document.value = {
     manifest: {
+      schema_version: 2,
       id: `project-${suffix}`,
       name: `AI Project ${suffix}`,
       entry: 'main.lua',
       algorithm: 'yolov5',
       model: models.value.find((model) => model.name.endsWith('.rknn'))?.name || '',
       labels: models.value.find((model) => model.name.endsWith('.txt'))?.name || '',
+      files: {},
+      options: {},
       input: { enabled: true, channel_id: 1, width: 640, height: 640, fps: 10, pixel_format: 'nv12', fit_mode: 'contain', buffer_count: 2, depth: 1 },
       threshold: 0.25,
       nms_threshold: 0.45,
@@ -138,6 +141,17 @@ function setClassFilter(value: string) {
   document.value.manifest.class_filter = value.split(',').map((item) => Number(item.trim())).filter(Number.isInteger)
 }
 
+function setManifestJson(field: 'files' | 'options', value: string) {
+  if (!document.value) return
+  const parsed = JSON.parse(value || '{}')
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error(`${field} 必须是 JSON 对象`)
+  document.value.manifest[field] = parsed
+}
+
+function manifestJson(field: 'files' | 'options') {
+  return JSON.stringify(document.value?.manifest[field] || {}, null, 2)
+}
+
 async function action(operation: () => Promise<void>) {
   busy.value = true
   error.value = ''
@@ -217,17 +231,18 @@ onBeforeUnmount(() => {
       <article v-if="document" class="panel ai-editor">
         <div class="section-head"><div><span class="label">MANIFEST + LUA</span><h3>{{ document.manifest.name }}</h3></div><div class="section-actions"><button class="secondary" :disabled="busy || selected?.active || selected?.last_good" @click="removeProject">删除</button><button class="secondary" :disabled="busy" @click="validateProject">校验</button><button :disabled="busy" @click="save">保存</button><button class="accent" :disabled="busy" @click="deploy">部署</button></div></div>
         <div class="form-grid ai-manifest">
-          <label>项目 ID<input v-model="document.manifest.id" :disabled="Boolean(selected)"></label><label>名称<input v-model="document.manifest.name"></label><label>模型<select v-model="document.manifest.model"><option v-for="model in models" :key="model.name" :value="model.name">{{ model.name }}</option></select></label><label>标签<select v-model="document.manifest.labels"><option value="">无</option><option v-for="model in models" :key="model.name" :value="model.name">{{ model.name }}</option></select></label>
+          <label>项目 ID<input v-model="document.manifest.id" :disabled="Boolean(selected)"></label><label>名称<input v-model="document.manifest.name"></label><label>算法<select v-model="document.manifest.algorithm"><option v-for="algorithm in ['yolov5', 'yolo11', 'lprnet', 'mlsd', 'ppocr', 'nanotrack', 'find_blobs', 'ive_filter', 'ive_ncc', 'npu_clock', 'frame_info']" :key="algorithm" :value="algorithm">{{ algorithm }}</option></select></label><label>模型 / 主资源<select v-model="document.manifest.model"><option value="">无</option><option v-for="model in models" :key="model.name" :value="model.name">{{ model.name }}</option></select></label><label>标签<select v-model="document.manifest.labels"><option value="">无</option><option v-for="model in models" :key="model.name" :value="model.name">{{ model.name }}</option></select></label>
           <label>AI VPSS 通道<input type="number" min="0" max="3" v-model.number="document.manifest.input.channel_id"></label><label>输入宽度<input type="number" min="2" step="2" v-model.number="document.manifest.input.width"></label><label>输入高度<input type="number" min="2" step="2" v-model.number="document.manifest.input.height"></label><label>抓帧 FPS<input type="number" min="1" max="60" v-model.number="document.manifest.input.fps"></label>
           <label>Fit mode<select v-model="document.manifest.input.fit_mode"><option value="contain">contain / letterbox</option><option value="cover">cover / crop</option><option value="stretch">stretch</option></select></label><label>Buffer<input type="number" min="1" max="8" v-model.number="document.manifest.input.buffer_count"></label><label>Depth<input type="number" min="1" max="8" v-model.number="document.manifest.input.depth"></label><label>最大框数<input type="number" min="1" max="256" v-model.number="document.manifest.max_detections"></label>
           <label>置信度<input type="number" min="0" max="1" step="0.01" v-model.number="document.manifest.threshold"></label><label>NMS<input type="number" min="0" max="1" step="0.01" v-model.number="document.manifest.nms_threshold"></label><label class="wide">类别 ID（逗号分隔，留空为全部）<input :value="document.manifest.class_filter.join(',')" @change="setClassFilter(($event.target as HTMLInputElement).value)"></label>
+          <label class="wide">附加资源 JSON<textarea :value="manifestJson('files')" @change="setManifestJson('files', ($event.target as HTMLTextAreaElement).value)"></textarea></label><label class="wide">算法参数 JSON<textarea :value="manifestJson('options')" @change="setManifestJson('options', ($event.target as HTMLTextAreaElement).value)"></textarea></label>
         </div>
         <label class="lua-editor-label">main.lua<textarea v-model="document.script" spellcheck="false"></textarea></label>
       </article>
     </section>
 
     <section class="panel ai-models">
-      <div class="section-head"><div><span class="label">RKNN MODELS</span><h3>模型与标签</h3><p>上传使用临时文件和原子 rename；活动或 last-good 项目引用的文件不可删除。</p></div><div class="model-upload"><input ref="upload" type="file" accept=".rknn,.txt"><button class="accent" :disabled="busy" @click="uploadModel">上传</button></div></div>
+      <div class="section-head"><div><span class="label">AI RESOURCES</span><h3>模型与资源</h3><p>上传使用临时文件和原子 rename；活动或 last-good 项目引用的文件不可删除。</p></div><div class="model-upload"><input ref="upload" type="file" accept=".rknn,.txt,.jpg,.jpeg,.png,.ttf,.calib"><button class="accent" :disabled="busy" @click="uploadModel">上传</button></div></div>
       <div class="model-row model-header"><span>文件</span><span>大小</span><span>SHA-256</span><span>状态</span><span></span></div>
       <div v-for="model in models" :key="model.name" class="model-row"><b>{{ model.name }}</b><span>{{ (model.bytes / 1024 / 1024).toFixed(2) }} MiB</span><code>{{ model.sha256 }}</code><span>{{ model.active ? 'IN USE' : 'AVAILABLE' }}</span><button class="secondary compact" :disabled="model.active || busy" @click="removeModel(model)">删除</button></div>
     </section>

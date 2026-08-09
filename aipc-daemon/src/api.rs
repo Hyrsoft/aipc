@@ -1,5 +1,6 @@
 use crate::ai_manager::{AiManager, AiProjectDocument, OsdMode};
 use crate::config::{UiConfig, WorkerConfig};
+use crate::dependencies::DependencyManager;
 use crate::preview::PreviewHub;
 use crate::recording::{RecordingManager, RecordingSettingsUpdate};
 use crate::rtsp::RtspServer;
@@ -8,7 +9,9 @@ use crate::webrtc::{WebRtcError, WebRtcServer};
 use axum::Json;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Multipart, Path as AxumPath, Query, State, WebSocketUpgrade};
+use axum::extract::{
+    ConnectInfo, DefaultBodyLimit, Multipart, Path as AxumPath, Query, State, WebSocketUpgrade,
+};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -20,14 +23,18 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
 use tower_http::services::{ServeDir, ServeFile};
 
 mod ai;
+mod dependencies;
 mod zip64;
 use ai::*;
+use dependencies::*;
 use zip64::write_zip64;
 
 #[derive(Clone)]
@@ -38,6 +45,8 @@ struct AppState {
     rtsp: RtspServer,
     webrtc: WebRtcServer,
     ai: AiManager,
+    dependencies: DependencyManager,
+    maintenance: Arc<Mutex<()>>,
     ui: UiConfig,
 }
 
@@ -47,6 +56,7 @@ pub fn router(
     rtsp: RtspServer,
     webrtc: WebRtcServer,
     ai: AiManager,
+    dependencies: DependencyManager,
     ui: UiConfig,
     web_dir: &Path,
 ) -> Router {
@@ -79,6 +89,27 @@ pub fn router(
         .route("/api/v1/ai/results/latest", get(ai_results_latest))
         .route("/api/v1/ai/results/stream", get(ai_results_stream))
         .route("/api/v1/ai/results/schema", get(ai_results_schema))
+        .route("/api/v1/dependencies", get(dependency_list))
+        .route(
+            "/api/v1/dependencies/{id}/versions",
+            post(dependency_version_upload),
+        )
+        .route(
+            "/api/v1/dependencies/{id}/versions/{sha256}",
+            delete(dependency_version_delete),
+        )
+        .route(
+            "/api/v1/dependencies/{id}/activate",
+            post(dependency_activate),
+        )
+        .route(
+            "/api/v1/dependencies/{id}/rollback",
+            post(dependency_rollback),
+        )
+        .route(
+            "/api/v1/dependencies/{id}/factory",
+            post(dependency_factory),
+        )
         .route("/api/v1/config", get(config).put(apply_config))
         .route("/api/v1/worker/start", post(start))
         .route("/api/v1/worker/stop", post(stop))
@@ -114,12 +145,15 @@ pub fn router(
             axum::routing::delete(webrtc_delete),
         )
         .fallback_service(static_service)
+        .layer(DefaultBodyLimit::max(130 * 1024 * 1024))
         .with_state(AppState {
             preview: supervisor.preview.clone(),
             recording,
             rtsp,
             webrtc,
             ai,
+            dependencies,
+            maintenance: Arc::new(Mutex::new(())),
             ui,
             supervisor,
         })
@@ -437,6 +471,20 @@ impl AppError {
             message: message.into(),
         }
     }
+
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            message: message.into(),
+        }
+    }
+
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
 }
 
 impl<E: Into<anyhow::Error>> From<E> for AppError {
@@ -444,9 +492,12 @@ impl<E: Into<anyhow::Error>> From<E> for AppError {
         let message = error.into().to_string();
         let status = if message.contains("not found") {
             StatusCode::NOT_FOUND
+        } else if message.contains("dependency management is disabled") {
+            StatusCode::FORBIDDEN
         } else if message.contains("already")
             || message.contains("while recording")
             || message.contains("not active")
+            || message.contains("operation")
         {
             StatusCode::CONFLICT
         } else if message.contains("not ready") {
@@ -520,19 +571,35 @@ async fn apply_config(
     State(state): State<AppState>,
     Json(config): Json<WorkerConfig>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let _maintenance = state
+        .maintenance
+        .try_lock()
+        .map_err(|_| ApiError(SupervisorError::Conflict))?;
     let accepted = state.supervisor.apply(config).await?;
     Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 
 async fn start(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let _maintenance = state
+        .maintenance
+        .try_lock()
+        .map_err(|_| ApiError(SupervisorError::Conflict))?;
     accepted(state.supervisor.start().await)
 }
 
 async fn stop(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let _maintenance = state
+        .maintenance
+        .try_lock()
+        .map_err(|_| ApiError(SupervisorError::Conflict))?;
     accepted(state.supervisor.stop().await)
 }
 
 async fn restart(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let _maintenance = state
+        .maintenance
+        .try_lock()
+        .map_err(|_| ApiError(SupervisorError::Conflict))?;
     accepted(state.supervisor.restart().await)
 }
 
@@ -691,6 +758,7 @@ mod tests {
                     height: 0.4,
                 },
             }],
+            annotations: vec![],
         }
     }
 
@@ -781,12 +849,26 @@ mod tests {
             board_name: "Development board".into(),
             ..UiConfig::default()
         };
+        let mut dependency_config = settings.dependencies.clone();
+        dependency_config.root = settings.data_dir.join("dependencies");
+        let dependencies = DependencyManager::new(
+            dependency_config,
+            temp.path(),
+            settings.worker_path.clone(),
+            settings.ai.worker_path.clone(),
+            handle.clone(),
+            ai.clone(),
+            handle.events.clone(),
+        )
+        .await
+        .unwrap();
         let app = router(
             handle.clone(),
             recording,
             rtsp,
             webrtc,
             ai.clone(),
+            dependencies,
             ui,
             temp.path(),
         );
@@ -837,6 +919,40 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         assert!(String::from_utf8_lossy(&body).contains("invalid_config"));
+
+        let dependency_list = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/dependencies")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dependency_list.status(), StatusCode::OK);
+        let body = dependency_list
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
+        let dependencies: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(dependencies["enabled"], false);
+        assert_eq!(dependencies["items"].as_array().unwrap().len(), 9);
+
+        let disabled_activation = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/dependencies/rknn-runtime/factory")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(disabled_activation.status(), StatusCode::FORBIDDEN);
 
         let latest = app
             .clone()

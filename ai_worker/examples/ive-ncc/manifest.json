@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "id": "ive-ncc",
+  "name": "IVE NCC 模板匹配",
+  "entry": "main.lua",
+  "algorithm": "ive_ncc",
+  "model": "ncc_template.jpg",
+  "input": {"enabled": true, "channel_id": 1, "width": 500, "height": 500, "fps": 5, "pixel_format": "nv12", "fit_mode": "stretch", "buffer_count": 2, "depth": 1},
+  "threshold": 0.0,
+  "nms_threshold": 0.0,
+  "max_detections": 1,
+  "class_filter": [],
+  "options": {}
+}

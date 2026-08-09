@@ -59,6 +59,15 @@ pub(super) async fn ai_project_deploy(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<impl IntoResponse, AppError> {
+    let _maintenance = state
+        .maintenance
+        .try_lock()
+        .map_err(|_| AppError::conflict("another worker maintenance operation is running"))?;
+    if state.supervisor.status.borrow().state.is_transitioning() {
+        return Err(AppError::conflict(
+            "media worker maintenance operation is still running",
+        ));
+    }
     Ok((StatusCode::ACCEPTED, Json(state.ai.deploy(&id).await?)))
 }
 

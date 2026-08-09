@@ -10,6 +10,18 @@
   "stop_timeout_ms": 5000,
   "max_restarts": 5,
   "restart_window_sec": 300,
+  "watchdog": {
+    "enabled": true,
+    "required": false,
+    "device": "/dev/watchdog",
+    "timeout_sec": 30,
+    "feed_interval_ms": 5000
+  },
+  "dependencies": {
+    "enabled": false,
+    "root": "../data/dependencies",
+    "max_upload_bytes": 33554432
+  },
   "ui": {
     "project_name": "AIPC",
     "console_name": "Media Console",

@@ -59,7 +59,9 @@ export function aiResultSummary(event: AiCloudEvent): string {
   if (event.type === 'io.aipc.ai.frame.v1') {
     const data = event.data as AiFrameResultData
     const labels = data.objects.slice(0, 4).map((object) => `${object.label} ${(object.confidence * 100).toFixed(0)}%`)
-    return `frame ${data.sequence} · ${data.objects.length} objects${labels.length ? ` · ${labels.join(', ')}` : ''}`
+    const annotationKinds = [...new Set(data.annotations.map((annotation) => annotation.kind))]
+    const annotationText = data.annotations.length ? ` · ${data.annotations.length} annotations${annotationKinds.length ? ` (${annotationKinds.join(', ')})` : ''}` : ''
+    return `frame ${data.sequence} · ${data.objects.length} objects${annotationText}${labels.length ? ` · ${labels.join(', ')}` : ''}`
   }
   if (event.type.startsWith('io.aipc.ai.track.')) {
     const data = event.data as AiTrackResultData

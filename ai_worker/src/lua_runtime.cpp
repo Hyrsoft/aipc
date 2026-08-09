@@ -3,6 +3,7 @@
 #include <lua.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -75,6 +76,7 @@ struct LuaRuntime::Impl {
             if (!result.is_array()) {
                 throw std::runtime_error("process(frame) must return an array");
             }
+            NormalizeResults(result);
             if (result.size() >
                 static_cast<std::size_t>(manifest_.max_detections)) {
                 result.erase(result.begin() + manifest_.max_detections,
@@ -99,63 +101,46 @@ private:
         auto* self = Self(state);
         const char* value =
             luaL_optstring(state, 1, self->manifest_.model.c_str());
-        if (value != self->manifest_.model) {
-            return luaL_error(state, "model is fixed by manifest");
+        const std::string requested = value ? value : "";
+        if (!self->manifest_.model.empty() &&
+            requested != self->manifest_.model &&
+            requested != self->manifest_.algorithm && requested != "default") {
+            return luaL_error(state, "backend resources are fixed by manifest");
         }
         lua_pushinteger(state, 1);
         return 1;
     }
 
-    static int Detect(lua_State* state) {
+    static int Infer(lua_State* state) {
         auto* self = Self(state);
         if (!self->current_frame_) {
-            return luaL_error(state, "detect() called outside process()");
+            return luaL_error(state, "infer() called outside process()");
         }
         try {
-            auto detections = self->backend_->Infer(*self->current_frame_);
-            if (!self->manifest_.class_filter.empty()) {
-                detections.erase(
-                    std::remove_if(
-                        detections.begin(), detections.end(),
-                        [self](const DetectionResult& detection) {
-                            return std::find(
-                                       self->manifest_.class_filter.begin(),
-                                       self->manifest_.class_filter.end(),
-                                       detection.class_id) ==
-                                   self->manifest_.class_filter.end();
-                        }),
-                    detections.end());
+            json options = json::object();
+            const int arguments = lua_gettop(state);
+            if (arguments >= 3 && lua_istable(state, 3)) {
+                options = self->LuaToJson(3, 0);
+            } else if (arguments >= 2 && lua_istable(state, 2)) {
+                options = self->LuaToJson(2, 0);
             }
-            if (detections.size() >
+            json output = self->backend_->Infer(*self->current_frame_, options);
+            if (!output.is_array()) {
+                return luaL_error(state, "backend result must be an array");
+            }
+            if (output.size() >
                 static_cast<std::size_t>(self->manifest_.max_detections)) {
-                detections.resize(self->manifest_.max_detections);
+                output.erase(output.begin() + self->manifest_.max_detections,
+                             output.end());
             }
-            lua_createtable(state, static_cast<int>(detections.size()), 0);
-            int index = 1;
-            for (const auto& detection : detections) {
-                lua_createtable(state, 0, 7);
-                lua_pushinteger(state, detection.x1);
-                lua_setfield(state, -2, "x1");
-                lua_pushinteger(state, detection.y1);
-                lua_setfield(state, -2, "y1");
-                lua_pushinteger(state, detection.x2);
-                lua_setfield(state, -2, "x2");
-                lua_pushinteger(state, detection.y2);
-                lua_setfield(state, -2, "y2");
-                lua_pushnumber(state, detection.score);
-                lua_setfield(state, -2, "confidence");
-                lua_pushinteger(state, detection.class_id);
-                lua_setfield(state, -2, "class_id");
-                lua_pushlstring(state, detection.label.data(),
-                                detection.label.size());
-                lua_setfield(state, -2, "label");
-                lua_rawseti(state, -2, index++);
-            }
+            self->JsonToLua(output, 0);
             return 1;
         } catch (const std::exception& error) {
             return luaL_error(state, "%s", error.what());
         }
     }
+
+    static int Detect(lua_State* state) { return Infer(state); }
 
     static int FrameInfo(lua_State* state) {
         auto* self = Self(state);
@@ -185,6 +170,40 @@ private:
         luaL_error(state, "Lua instruction limit exceeded");
     }
 
+    void NormalizeResults(json& result) const {
+        result.erase(
+            std::remove_if(
+                result.begin(), result.end(), [this](const json& item) {
+                    if (!item.is_object()) {
+                        throw std::runtime_error("AI result items must be objects");
+                    }
+                    if (manifest_.class_filter.empty()) return false;
+                    const int class_id = item.value("class_id", 0);
+                    return std::find(manifest_.class_filter.begin(),
+                                     manifest_.class_filter.end(), class_id) ==
+                           manifest_.class_filter.end();
+                }),
+            result.end());
+        for (auto& item : result) {
+            for (const char* key : {"x1", "y1", "x2", "y2"}) {
+                if (!item.contains(key) || !item[key].is_number() ||
+                    !std::isfinite(item[key].get<double>())) {
+                    throw std::runtime_error(std::string("AI result requires finite ") + key);
+                }
+            }
+            const double confidence = item.value("confidence", 0.0);
+            if (!std::isfinite(confidence)) {
+                throw std::runtime_error("AI result confidence must be finite");
+            }
+            item["confidence"] = std::clamp(confidence, 0.0, 1.0);
+            if (!item.contains("class_id")) item["class_id"] = 0;
+            if (!item.contains("label")) item["label"] = "";
+            if (!item["label"].is_string()) {
+                throw std::runtime_error("AI result label must be a string");
+            }
+        }
+    }
+
     void InstallSandbox() {
         for (const char* name : {"os", "io", "package", "debug", "require",
                                  "dofile", "loadfile"}) {
@@ -194,10 +213,12 @@ private:
     }
 
     void InstallAipcModule() {
-        lua_createtable(state_, 0, 4);
+        lua_createtable(state_, 0, 6);
         for (const auto& method :
              std::vector<std::pair<const char*, lua_CFunction>>{
                  {"load_model", LoadModel},
+                 {"infer", Infer},
+                 {"run", Infer},
                  {"detect", Detect},
                  {"frame_info", FrameInfo},
                  {"log", Log}}) {

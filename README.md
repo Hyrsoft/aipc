@@ -79,6 +79,7 @@ flowchart LR
 | H.264 视频编码 | 🧪 | ✅ | 🚧 | 🚧 | RV1106 真机已验证 1920×1080/30 FPS |
 | G711A 音频采集/编码 | 🧪 | ✅ | 🚧 | 🚧 | 已接入 Rust 分发、WebRTC PCMA 和录像伴随音频；尚未复用到 MP4/RTSP 音轨 |
 | Rust worker 监督与冷重启回滚 | ✅ | ✅ | 🚧 | 🚧 | generation、启动超时、异常退出和 last-good 配置 |
+| [RV1106 硬件看门狗自动复位](docs/rv1106_watchdog.md) | 🧪 | ✅ | 🚧 | 🚧 | SDK WDT 节点启用后由 daemon 5 秒喂狗，30 秒无心跳自动复位 |
 | 编码视频 IPC / VideoHub | 🧪 | ✅ | 🚧 | 🚧 | 当前协议面向 Rust daemon，后续需验证跨 SoC 时基和码流差异 |
 | WebSocket 实时预览 | ✅ | ✅ | 🚧 | 🚧 | Vue + jMuxer/MSE |
 | Rust WebRTC 音视频分发 | 🧪 | 🧪 | 🚧 | 🚧 | str0m、H.264 High Profile、PCMA、LAN-only ICE-lite |
@@ -157,8 +158,8 @@ AIPC_SKIP_BUILD=1 ./scripts/deploy-rv1106-adb.sh
 - HTTP/Web UI：`http://<board-ip>:8080`
 - RTSP：`rtsp://<board-ip>:8554/live`
 - WebRTC 媒体：`udp://<board-ip>:10000`（信令复用 HTTP API）
-- 默认部署目录：`/root/aipc-rust`
-- 默认录像目录：`/root/aipc-rust/recordings`
+- 默认部署目录：`/userdata/aipc-rust`
+- 默认录像目录：`/userdata/aipc-rust/recordings`
 
 daemon 当前未启用身份认证，只应暴露在可信局域网中。
 
@@ -173,7 +174,7 @@ Web 控制台的平台名称、板卡名称、控制台标题和项目链接来�
 标签复制到持久化目录；已有同名文件不会被覆盖：
 
 ```text
-/root/aipc-rust/data/ai/
+/userdata/aipc-rust/data/ai/
   models/
   projects/
   deployments/

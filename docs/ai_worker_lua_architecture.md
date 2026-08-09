@@ -238,10 +238,16 @@ data/ai/
   state.json
 ```
 
-manifest 包含项目 ID/名称、入口、算法、模型和标签相对路径、完整 AI input，以及
-threshold、class filter、max detections。ID 和相对路径必须通过 allowlist 校验，
+manifest v2 包含项目 ID/名称、入口、算法、主模型、`files` 资源映射、`options` 参数、
+完整 AI input，以及 threshold、class filter、max detections。ID、资源 role 和相对路径必须通过 allowlist 校验，
 解析后的路径必须位于 `data/ai` 内。活动项目运行的是不可变 deployment snapshot，
 编辑项目不能隐式改变正在运行的脚本。
+
+当前标准算法适配包括 `yolov5`、`yolo11`、`lprnet`、`mlsd`、`ppocr`、`nanotrack`、
+`find_blobs`、`ive_filter`、`ive_ncc`、`npu_clock` 和 `frame_info`。PPOCR 的识别模型/
+字典、NanoTrack 的 search/head 三件套都通过 `files` 显式声明，宿主在 worker 启动前
+检查所有资源。模型后端统一返回带 `x1/y1/x2/y2/confidence/class_id/label/kind` 的
+JSON 对象，算法专属字段由 `annotations` 透传到标准 CloudEvent。
 
 ### 6.3 Lua 契约和沙箱
 
@@ -249,6 +255,7 @@ threshold、class filter、max detections。ID 和相对路径必须通过 allow
 只暴露元数据和由宿主控制的推理句柄，不将裸指针暴露给 Lua。宿主模块 `aipc` 提供：
 
 - `aipc.load_model(relative_path, options)`
+- `aipc.infer(frame, model, options)`（通用 VisionG 后端；`run` 是同义词）
 - `aipc.detect(frame, model, options)`
 - `aipc.frame_info(frame)`
 - `aipc.log(level, message)`
@@ -257,6 +264,10 @@ threshold、class filter、max detections。ID 和相对路径必须通过 allow
 启动进程或访问网络。限制 Lua 返回检测数量、字符串长度、嵌套深度和单帧执行错误
 次数。单帧 Lua 异常产生 `worker_error`；连续错误超过阈值时 AI 进程退出，由 Rust
 执行 last-good 恢复。
+
+对已知会让特定板载 RKNN runtime 复位的模型，manifest 可设置 `options.runtime_guard`；
+daemon 要求人工确认 `runtime_guard_ack=true` 才允许在线部署。这样模型仍可被上传、
+校验和离线集成，但不会因一次误点部署拖垮主媒体进程或整板。
 
 部署顺序为：manifest 校验、Lua 语法校验、模型存在及 hash 校验、创建不可变快照、
 在线重配 AI VPSS、启动候选 AI、等待 ready 和首个成功推理、原子提交 state。
@@ -355,7 +366,7 @@ licenses/lua/
 ```
 
 默认示例项目可随包放入 seed 目录，但部署时只在目标不存在时复制到
-`/root/aipc-rust/data/ai`。现有 data、项目、模型、state、录制和日志不能被包覆盖。
+`/userdata/aipc-rust/data/ai`。现有 data、项目、模型、state、录制和日志不能被包覆盖。
 部署前保留上一版可启动的 bin/lib，失败时恢复它；只停止 package 自身的
 `aipc-daemon`、`media_worker` 和 `ai_worker`。
 

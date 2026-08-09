@@ -82,6 +82,12 @@ void TestAiInputValidation() {
     config.ai_input.channel_id = 1;
     config.ai_input.fit_mode = "invalid";
     Expect(!media_worker::ValidateConfig(config).empty(), "invalid fit mode rejected");
+    config.ai_input.fit_mode = "contain";
+    config.ai_input.width = 320;
+    Expect(!media_worker::ValidateConfig(config).empty(), "unsafe small AI width rejected");
+    config.ai_input.width = 640;
+    config.ai_input.height = 240;
+    Expect(!media_worker::ValidateConfig(config).empty(), "unsafe small AI height rejected");
 }
 
 void TestValidateOnlyCli() {

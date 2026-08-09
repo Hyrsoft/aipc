@@ -6,7 +6,7 @@ function init(config)
 end
 
 function process(frame)
-  return aipc.detect(frame, model)
+  return aipc.infer(frame, model, {})
 end
 
 function shutdown()

@@ -1,8 +1,9 @@
 use crate::ai::{AiFrame, AiHub, encode_ai_frame};
 use crate::ai_results::{
-    AiBoundingBoxV1, AiFrameInfoV1, AiGenerationEventDataV1, AiInferenceInfoV1, AiLifecycleTracker,
-    AiObjectV1, AiResultBus, AiResultBusStatus, AiResultInput, AiTrackEventDataV1,
-    FRAME_RESULT_TYPE, GENERATION_TYPE, TRACK_ENTERED_TYPE, TRACK_EXITED_TYPE, TRACK_UPDATED_TYPE,
+    AiAnnotationV1, AiBoundingBoxV1, AiFrameInfoV1, AiGenerationEventDataV1, AiInferenceInfoV1,
+    AiLifecycleTracker, AiObjectV1, AiResultBus, AiResultBusStatus, AiResultInput,
+    AiTrackEventDataV1, FRAME_RESULT_TYPE, GENERATION_TYPE, TRACK_ENTERED_TYPE, TRACK_EXITED_TYPE,
+    TRACK_UPDATED_TYPE,
 };
 use crate::config::{AiDaemonConfig, AiInputConfig};
 use crate::model::{ServerEvent, now_ms};
@@ -11,7 +12,7 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::os::unix::process::ExitStatusExt;
@@ -33,15 +34,22 @@ const MAX_RESULT_BYTES: usize = 256 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AiProjectManifest {
+    #[serde(default = "default_manifest_schema_version")]
+    pub schema_version: u32,
     pub id: String,
     pub name: String,
     #[serde(default = "default_entry")]
     pub entry: String,
     #[serde(default = "default_algorithm")]
     pub algorithm: String,
+    #[serde(default)]
     pub model: String,
     #[serde(default)]
     pub labels: String,
+    #[serde(default)]
+    pub files: BTreeMap<String, String>,
+    #[serde(default = "default_algorithm_options")]
+    pub options: Value,
     pub input: AiInputConfig,
     #[serde(default = "default_threshold")]
     pub threshold: f32,
@@ -54,15 +62,84 @@ pub struct AiProjectManifest {
 }
 
 impl AiProjectManifest {
+    fn referenced_files(&self) -> Vec<&str> {
+        let mut files = Vec::new();
+        for value in std::iter::once(self.model.as_str())
+            .chain(std::iter::once(self.labels.as_str()))
+            .chain(self.files.values().map(String::as_str))
+        {
+            if !value.is_empty() && !files.contains(&value) {
+                files.push(value);
+            }
+        }
+        files
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            (1..=2).contains(&self.schema_version),
+            "unsupported schema_version"
+        );
         validate_name(&self.id)?;
         validate_name(&self.entry)?;
         anyhow::ensure!(self.entry == "main.lua", "entry must be main.lua in v1");
-        validate_name(&self.model)?;
+        if !self.model.is_empty() {
+            validate_name(&self.model)?;
+        }
         if !self.labels.is_empty() {
             validate_name(&self.labels)?;
         }
-        anyhow::ensure!(self.algorithm == "yolov5", "only yolov5 is supported in v1");
+        anyhow::ensure!(
+            matches!(
+                self.algorithm.as_str(),
+                "yolov5"
+                    | "yolo11"
+                    | "lprnet"
+                    | "mlsd"
+                    | "ppocr"
+                    | "nanotrack"
+                    | "find_blobs"
+                    | "ive_filter"
+                    | "ive_ncc"
+                    | "npu_clock"
+                    | "frame_info"
+            ),
+            "unsupported AI algorithm"
+        );
+        anyhow::ensure!(self.files.len() <= 32, "too many algorithm resource files");
+        for (role, file) in &self.files {
+            validate_name(role)?;
+            validate_name(file)?;
+        }
+        anyhow::ensure!(self.options.is_object(), "options must be an object");
+        if matches!(
+            self.algorithm.as_str(),
+            "yolov5" | "yolo11" | "lprnet" | "mlsd" | "ive_ncc"
+        ) {
+            anyhow::ensure!(!self.model.is_empty(), "algorithm requires model");
+        }
+        if self.algorithm == "ppocr" {
+            anyhow::ensure!(!self.model.is_empty(), "ppocr requires detector model");
+            anyhow::ensure!(
+                self.files.contains_key("recognizer"),
+                "ppocr requires files.recognizer"
+            );
+            anyhow::ensure!(
+                self.files.contains_key("dictionary"),
+                "ppocr requires files.dictionary"
+            );
+        }
+        if self.algorithm == "nanotrack" {
+            anyhow::ensure!(!self.model.is_empty(), "nanotrack requires template model");
+            anyhow::ensure!(
+                self.files.contains_key("search"),
+                "nanotrack requires files.search"
+            );
+            anyhow::ensure!(
+                self.files.contains_key("head"),
+                "nanotrack requires files.head"
+            );
+        }
         anyhow::ensure!(
             (0.0..=1.0).contains(&self.threshold) && (0.0..=1.0).contains(&self.nms_threshold),
             "thresholds must be in [0, 1]"
@@ -83,6 +160,19 @@ impl AiProjectManifest {
         worker.ai_input = self.input.clone();
         let errors = worker.validate();
         anyhow::ensure!(errors.is_empty(), "invalid AI input: {}", errors.join("; "));
+        Ok(())
+    }
+
+    fn validate_runtime_guard(&self) -> anyhow::Result<()> {
+        if let Some(reason) = self.options.get("runtime_guard").and_then(Value::as_str) {
+            anyhow::ensure!(
+                self.options
+                    .get("runtime_guard_ack")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "runtime guard: {reason}; set options.runtime_guard_ack=true only after verifying the board RKNN runtime"
+            );
+        }
         Ok(())
     }
 }
@@ -143,6 +233,7 @@ pub struct AiMetadata {
     pub main_height: u32,
     pub inference_us: u64,
     pub detections: Vec<AiDetection>,
+    pub annotations: Vec<AiAnnotationV1>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,6 +476,47 @@ impl AiManager {
         self.inner.status.write().unwrap().state = AiProcessState::Stopped;
     }
 
+    pub async fn stop_for_maintenance(&self) -> Option<String> {
+        let _transition = self.inner.transition.lock().await;
+        let project = {
+            let state = self.inner.state.lock().await;
+            state
+                .active_project
+                .clone()
+                .or_else(|| state.last_good_project.clone())
+        };
+        self.stop_runtime().await;
+        self.inner.status.write().unwrap().state = AiProcessState::Stopped;
+        project
+    }
+
+    pub async fn start_for_maintenance(&self, project: Option<String>) -> anyhow::Result<()> {
+        let Some(project) = project else {
+            return Ok(());
+        };
+        let _transition = self.inner.transition.lock().await;
+        anyhow::ensure!(self.inner.config.enabled, "AI is disabled");
+        self.validate_project(&project).await?;
+        self.activate(&project, true).await
+    }
+
+    pub async fn restart_for_maintenance(&self) -> anyhow::Result<()> {
+        let project = {
+            let state = self.inner.state.lock().await;
+            state
+                .active_project
+                .clone()
+                .or_else(|| state.last_good_project.clone())
+        };
+        let Some(project) = project else {
+            return Ok(());
+        };
+        let _transition = self.inner.transition.lock().await;
+        anyhow::ensure!(self.inner.config.enabled, "AI is disabled");
+        self.validate_project(&project).await?;
+        self.activate(&project, true).await
+    }
+
     pub fn subscribe_metadata(&self) -> broadcast::Receiver<Arc<AiMetadata>> {
         self.inner.metadata.subscribe()
     }
@@ -423,7 +555,15 @@ impl AiManager {
             if !entry.file_type().await?.is_dir() {
                 continue;
             }
-            if let Ok(document) = self.get_project(&entry.file_name().to_string_lossy()).await {
+            let entry_name = entry.file_name();
+            let id = entry_name.to_string_lossy();
+            // A watchdog reset can interrupt an atomic PUT after the staging
+            // directory has been synced but before it is renamed. Hidden
+            // staging/backup directories are recovery artifacts, not projects.
+            if id.starts_with('.') {
+                continue;
+            }
+            if let Ok(document) = self.get_project(&id).await {
                 projects.push(AiProjectSummary {
                     id: document.manifest.id.clone(),
                     name: document.manifest.name.clone(),
@@ -507,18 +647,12 @@ impl AiManager {
     pub async fn validate_project(&self, id: &str) -> anyhow::Result<Value> {
         let document = self.get_project(id).await?;
         document.manifest.validate()?;
-        anyhow::ensure!(
-            tokio::fs::metadata(self.inner.models.join(&document.manifest.model))
-                .await
-                .is_ok(),
-            "model does not exist"
-        );
-        if !document.manifest.labels.is_empty() {
+        for file in document.manifest.referenced_files() {
             anyhow::ensure!(
-                tokio::fs::metadata(self.inner.models.join(&document.manifest.labels))
+                tokio::fs::metadata(self.inner.models.join(file))
                     .await
                     .is_ok(),
-                "labels do not exist"
+                "AI resource {file} does not exist"
             );
         }
         let output = Command::new(&self.inner.config.worker_path)
@@ -542,6 +676,10 @@ impl AiManager {
         let _transition = self.inner.transition.lock().await;
         anyhow::ensure!(self.inner.config.enabled, "AI is disabled");
         self.validate_project(id).await?;
+        self.get_project(id)
+            .await?
+            .manifest
+            .validate_runtime_guard()?;
         let previous = self.inner.state.lock().await.last_good_project.clone();
         match self.activate(id, false).await {
             Ok(()) => {
@@ -1046,6 +1184,7 @@ impl AiManager {
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow::anyhow!("AI detections must be an array"))?;
         let mut boxes = Vec::new();
+        let mut annotations = Vec::new();
         for detection in raw.iter().take(256) {
             let x1 = number(detection, "x1")?;
             let y1 = number(detection, "y1")?;
@@ -1053,22 +1192,44 @@ impl AiManager {
             let y2 = number(detection, "y2")?;
             let (x1, y1) = map_point(frame, x1, y1);
             let (x2, y2) = map_point(frame, x2, y2);
+            let label: String = detection
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(128)
+                .collect();
+            let confidence = detection
+                .get("confidence")
+                .and_then(Value::as_f64)
+                .unwrap_or_default();
+            let mut data = detection.as_object().cloned().unwrap_or_default();
+            let kind = data
+                .remove("kind")
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "object".into());
+            for key in ["x1", "y1", "x2", "y2", "confidence", "class_id", "label"] {
+                data.remove(key);
+            }
+            annotations.push(AiAnnotationV1 {
+                kind,
+                label: label.clone(),
+                confidence,
+                bbox: AiBoundingBoxV1 {
+                    x: x1.min(x2),
+                    y: y1.min(y2),
+                    width: (x2 - x1).abs(),
+                    height: (y2 - y1).abs(),
+                },
+                data: Value::Object(data),
+            });
             boxes.push(UntrackedDetection {
                 class_id: detection
                     .get("class_id")
                     .and_then(Value::as_i64)
                     .unwrap_or_default(),
-                label: detection
-                    .get("label")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .chars()
-                    .take(128)
-                    .collect(),
-                confidence: detection
-                    .get("confidence")
-                    .and_then(Value::as_f64)
-                    .unwrap_or_default(),
+                label,
+                confidence,
                 x: x1.min(x2),
                 y: y1.min(y2),
                 width: (x2 - x1).abs(),
@@ -1126,6 +1287,7 @@ impl AiManager {
                     },
                 })
                 .collect(),
+            annotations: annotations.clone(),
         });
         let metadata = Arc::new(AiMetadata {
             version: 1,
@@ -1136,6 +1298,7 @@ impl AiManager {
             main_height: frame.main_height,
             inference_us,
             detections,
+            annotations,
         });
         *self.inner.last_metadata.write().unwrap() = Some(metadata.clone());
         {
@@ -1251,9 +1414,8 @@ impl AiManager {
             .flatten()
         {
             if let Ok(document) = self.get_project(&project).await {
-                referenced.insert(document.manifest.model);
-                if !document.manifest.labels.is_empty() {
-                    referenced.insert(document.manifest.labels);
+                for file in document.manifest.referenced_files() {
+                    referenced.insert(file.to_owned());
                 }
             }
         }
@@ -1309,7 +1471,7 @@ impl AiManager {
             .flatten()
         {
             let document = self.get_project(&project).await?;
-            if document.manifest.model == name || document.manifest.labels == name {
+            if document.manifest.referenced_files().contains(&name) {
                 anyhow::bail!("model is referenced by active or last-good project");
             }
         }
@@ -1557,8 +1719,14 @@ async fn write_synced(path: &Path, data: &[u8]) -> anyhow::Result<()> {
 fn default_entry() -> String {
     "main.lua".into()
 }
+fn default_manifest_schema_version() -> u32 {
+    1
+}
 fn default_algorithm() -> String {
     "yolov5".into()
+}
+fn default_algorithm_options() -> Value {
+    json!({})
 }
 fn default_threshold() -> f32 {
     0.25
@@ -1593,6 +1761,7 @@ mod tests {
                 width: 0.2,
                 height: 0.3,
             }],
+            annotations: vec![],
         })
     }
 
@@ -1638,5 +1807,35 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn runtime_guard_requires_explicit_acknowledgement() {
+        let mut manifest = AiProjectManifest {
+            schema_version: 2,
+            id: "guarded-model".into(),
+            name: "Guarded model".into(),
+            entry: "main.lua".into(),
+            algorithm: "yolov5".into(),
+            model: "guarded.rknn".into(),
+            labels: String::new(),
+            files: BTreeMap::new(),
+            options: json!({
+                "runtime_guard": "model/runtime compatibility has not been verified",
+                "runtime_guard_ack": false
+            }),
+            input: AiInputConfig::default(),
+            threshold: 0.25,
+            nms_threshold: 0.45,
+            max_detections: 32,
+            class_filter: Vec::new(),
+        };
+
+        manifest.validate().unwrap();
+        let error = manifest.validate_runtime_guard().unwrap_err().to_string();
+        assert!(error.contains("runtime guard"));
+
+        manifest.options["runtime_guard_ack"] = Value::Bool(true);
+        manifest.validate_runtime_guard().unwrap();
     }
 }

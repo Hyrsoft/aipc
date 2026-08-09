@@ -146,6 +146,8 @@ bool ParseCli(int argc, char* argv[], CliOptions* options, std::string* error) {
             options->no_audio = true;
         } else if (arg == "--validate-only") {
             options->validate_only = true;
+        } else if (arg == "--probe-load") {
+            options->probe_load = true;
         } else {
             *error = "unknown option: " + arg;
             return false;
@@ -297,8 +299,11 @@ std::vector<std::string> ValidateConfig(const WorkerConfig& config) {
     require_range("video.stream_buffer_count", config.video.stream_buffer_count, 1, 16);
     if (config.ai_input.enabled) {
         require_range("ai_input.channel_id", config.ai_input.channel_id, 0, 3);
-        require_range("ai_input.width", config.ai_input.width, 2, 4096);
-        require_range("ai_input.height", config.ai_input.height, 2, 4096);
+        // The RV1106 VPSS driver can hard-lock the SoC instead of returning an
+        // error for small live AI channels. Keep the transport channel in the
+        // validated range and let VisionG resize to the RKNN model dimensions.
+        require_range("ai_input.width", config.ai_input.width, 384, 4096);
+        require_range("ai_input.height", config.ai_input.height, 256, 4096);
         require_range("ai_input.fps", config.ai_input.fps, 1, config.video.fps);
         require_range("ai_input.buffer_count", config.ai_input.buffer_count, 1, 8);
         require_range("ai_input.depth", config.ai_input.depth, 0, 8);
@@ -390,6 +395,7 @@ std::string Usage(const char* program_name) {
            << "  --control-fd <fd>        Daemon media-control descriptor\n"
            << "  --no-audio               Disable AI/AENC pipeline\n"
            << "  --validate-only          Validate config without accessing hardware\n"
+           << "  --probe-load             Exit after the dynamic loader succeeds\n"
            << "  --help                   Show this help\n";
     return output.str();
 }

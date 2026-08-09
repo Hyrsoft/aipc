@@ -106,6 +106,7 @@ struct CliOptions {
     std::optional<int> control_fd;
     bool no_audio = false;
     bool validate_only = false;
+    bool probe_load = false;
     bool help = false;
 };
 

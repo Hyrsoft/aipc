@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "id": "ppocr",
+  "name": "PPOCRv3/v4",
+  "entry": "main.lua",
+  "algorithm": "ppocr",
+  "model": "ppocrv3_det.rknn",
+  "files": {"recognizer": "ppocrv4_rec.rknn", "dictionary": "ppocr_keys_v1.txt"},
+  "input": {"enabled": true, "channel_id": 1, "width": 640, "height": 360, "fps": 5, "pixel_format": "nv12", "fit_mode": "contain", "buffer_count": 2, "depth": 1},
+  "threshold": 0.3,
+  "nms_threshold": 0.0,
+  "max_detections": 16,
+  "class_filter": [],
+  "options": {"box_threshold": 0.5, "use_dilate": true, "rec_fast_max_ratio": 9.0, "rec_fast_enable_fallback": true, "rec_fast_fallback_score_thresh": 0.2, "model_input_format": "rgb", "det_unclip_ratio": 1.6}
+}

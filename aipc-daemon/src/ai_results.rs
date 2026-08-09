@@ -33,6 +33,15 @@ pub struct AiObjectV1 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AiAnnotationV1 {
+    pub kind: String,
+    pub label: String,
+    pub confidence: f64,
+    pub bbox: AiBoundingBoxV1,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AiFrameInfoV1 {
     pub width: u32,
     pub height: u32,
@@ -59,6 +68,7 @@ pub struct AiResultDataV1 {
     pub frame: AiFrameInfoV1,
     pub inference: AiInferenceInfoV1,
     pub objects: Vec<AiObjectV1>,
+    pub annotations: Vec<AiAnnotationV1>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,6 +151,7 @@ pub struct AiResultInput {
     pub frame: AiFrameInfoV1,
     pub inference: AiInferenceInfoV1,
     pub objects: Vec<AiObjectV1>,
+    pub annotations: Vec<AiAnnotationV1>,
 }
 
 impl AiResultInput {
@@ -156,6 +167,7 @@ impl AiResultInput {
             frame: self.frame.clone(),
             inference: self.inference.clone(),
             objects: self.objects.clone(),
+            annotations: self.annotations.clone(),
         }
     }
 }
@@ -683,6 +695,7 @@ mod tests {
                     height: 0.3,
                 },
             }],
+            annotations: vec![],
         }
     }
 

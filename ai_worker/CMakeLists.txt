@@ -62,4 +62,16 @@ if(AIPC_NATIVE_BUILD_TESTS)
             --validate-only
             --mock
     )
+    file(GLOB AIPC_AI_EXAMPLE_MANIFESTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/*/manifest.json")
+    foreach(EXAMPLE_MANIFEST IN LISTS AIPC_AI_EXAMPLE_MANIFESTS)
+        get_filename_component(EXAMPLE_DIR "${EXAMPLE_MANIFEST}" DIRECTORY)
+        get_filename_component(EXAMPLE_NAME "${EXAMPLE_DIR}" NAME)
+        add_test(
+            NAME "ai_worker_lua_${EXAMPLE_NAME}"
+            COMMAND ai_worker
+                --project-dir "${EXAMPLE_DIR}"
+                --models-dir "${EXAMPLE_DIR}"
+                --validate-only
+                --mock)
+    endforeach()
 endif()

@@ -1,5 +1,5 @@
 import { aiResultEventTypes } from './aiResults'
-import type { AboutInfo, AiCloudEvent, AiModelInfo, AiOsdMode, AiProjectDocument, AiProjectSummary, AiStatus, DaemonStatus, LogEntry, PersistentState, RecordingList, RecordingSettings, RecordingStatus, RtspStatus, ServerEvent, WorkerConfig } from './types'
+import type { AboutInfo, AiCloudEvent, AiModelInfo, AiOsdMode, AiProjectDocument, AiProjectSummary, AiStatus, DaemonStatus, DependencyInfo, DependencyList, DependencyVersion, LogEntry, PersistentState, RecordingList, RecordingSettings, RecordingStatus, RtspStatus, ServerEvent, WorkerConfig } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -58,6 +58,18 @@ export const api = {
     `/api/v1/ai/projects/${encodeURIComponent(id)}/deploy`, { method: 'POST' },
   ),
   aiModels: () => request<AiModelInfo[]>('/api/v1/ai/models'),
+  dependencies: () => request<DependencyList>('/api/v1/dependencies'),
+  uploadDependency: async (id: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<DependencyVersion>(`/api/v1/dependencies/${encodeURIComponent(id)}/versions`, { method: 'POST', body: form })
+  },
+  activateDependency: (id: string, sha256: string) => request<DependencyInfo>(`/api/v1/dependencies/${encodeURIComponent(id)}/activate`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sha256 }),
+  }),
+  rollbackDependency: (id: string) => request<DependencyInfo>(`/api/v1/dependencies/${encodeURIComponent(id)}/rollback`, { method: 'POST' }),
+  restoreDependencyFactory: (id: string) => request<DependencyInfo>(`/api/v1/dependencies/${encodeURIComponent(id)}/factory`, { method: 'POST' }),
+  deleteDependencyVersion: (id: string, sha256: string) => request<void>(`/api/v1/dependencies/${encodeURIComponent(id)}/versions/${encodeURIComponent(sha256)}`, { method: 'DELETE' }),
   uploadAiModel: (file: File) => {
     const body = new FormData()
     body.append('file', file)
@@ -91,7 +103,7 @@ export function reduceServerEvent(state: LiveState, event: ServerEvent): LiveSta
 
 export function connectEvents(onEvent: (event: ServerEvent) => void, onConnection: (up: boolean) => void) {
   const source = new EventSource('/api/v1/events')
-  const kinds = ['status', 'worker_event', 'supervisor', 'log', 'lagged']
+  const kinds = ['status', 'worker_event', 'supervisor', 'log', 'lagged', 'dependency_uploaded', 'dependency_activated', 'dependency_rollback']
   for (const kind of kinds) {
     source.addEventListener(kind, (message) => {
       try {
